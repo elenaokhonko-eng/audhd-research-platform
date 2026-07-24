@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from html.parser import HTMLParser
 
 from pypdf import PdfReader
+import httpx
 
 
 @dataclass(slots=True)
@@ -12,6 +13,35 @@ class TextPassage:
     page_start: int | None = None
     page_end: int | None = None
     section: str | None = None
+
+
+@dataclass(slots=True)
+class DownloadedDocument:
+    content: bytes
+    content_type: str
+    final_url: str
+
+
+def download_open_access_document(url: str, max_bytes: int = 25_000_000) -> DownloadedDocument:
+    """Download a declared OA location with a strict size cap; never attempts authentication bypass."""
+    headers = {"User-Agent": "audhd-research-platform/0.1", "Accept": "application/pdf,text/html,application/xhtml+xml"}
+    with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=45) as response:
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "application/octet-stream").split(";", 1)[0].lower()
+        if content_type not in {"application/pdf", "text/html", "application/xhtml+xml"}:
+            raise ValueError(f"Unsupported full-text content type: {content_type}")
+        content = bytearray()
+        for block in response.iter_bytes():
+            content.extend(block)
+            if len(content) > max_bytes:
+                raise ValueError("Full-text document exceeds configured size limit")
+        return DownloadedDocument(bytes(content), content_type, str(response.url))
+
+
+def parse_downloaded_document(document: DownloadedDocument) -> list[TextPassage]:
+    if document.content_type == "application/pdf":
+        return parse_pdf(document.content)
+    return parse_html(document.content.decode("utf-8", errors="replace"))
 
 
 class _VisibleTextParser(HTMLParser):

@@ -59,7 +59,7 @@ if approve:
     gate = selected["stage"]
     response = httpx.post(
         f"{settings.api_base_url}/runs/{selected['id']}/approve/{gate}",
-        json={"snapshot": content.decode("utf-8", errors="replace"), "comment": comment or None},
+        json={"artifact_id": artifact["id"], "comment": comment or None},
         headers=headers,
         timeout=15,
     )

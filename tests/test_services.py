@@ -5,7 +5,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from platform_app.models import Approval, AuditEvent, Base, ResearchRun
+from platform_app.models import Approval, Artifact, AuditEvent, Base, ResearchRun
 from platform_app.repository import ResearchRunRepository, WorkflowConflict
 from platform_app.services.clinical import validate_clinical_observation
 from platform_app.services.literature import PubMedConnector, ScholarlyWork, merge_works
@@ -62,7 +62,7 @@ class ServiceTests(unittest.TestCase):
 class RepositoryTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite+pysqlite:///:memory:")
-        Base.metadata.create_all(self.engine, tables=[ResearchRun.__table__, Approval.__table__, AuditEvent.__table__])
+        Base.metadata.create_all(self.engine, tables=[ResearchRun.__table__, Artifact.__table__, Approval.__table__, AuditEvent.__table__])
         self.session = Session(self.engine)
         self.repository = ResearchRunRepository(self.session)
 

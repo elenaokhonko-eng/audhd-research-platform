@@ -9,6 +9,7 @@ Create accounts only for the environment you are ready to operate. Do not upload
 | LLM provider | Existing Kimi Code account or another OpenAI-compatible provider | CrewAI generation | `OPENAI_API_KEY`, `OPENAI_API_BASE`, `OPENAI_MODEL_NAME` |
 | LangSmith | <https://smith.langchain.com> | Traces and debugging | `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `LANGSMITH_ENDPOINT` |
 | Embedding provider | <https://platform.openai.com> or a compatible embedding service | pgvector embeddings | `EMBEDDING_API_KEY`, `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` |
+| Image provider | <https://platform.openai.com> or a compatible image-generation service | Approved editorial illustrations | `IMAGE_API_KEY`, `IMAGE_BASE_URL`, `IMAGE_MODEL` |
 | Docker Desktop | <https://www.docker.com/products/docker-desktop/> | Local PostgreSQL, Redis, MinIO, API, worker, dashboard | None |
 
 Kimi's coding endpoint may not expose an embedding model. Keep generation and embedding credentials separate.

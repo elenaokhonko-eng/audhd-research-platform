@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     aws_secret_access_key: str | None = None
     trusted_auth_proxy: bool = False
     api_base_url: str = "http://localhost:8000"
+    image_api_key: str | None = None
+    image_base_url: str | None = None
+    image_model: str = "gpt-image-1"
+    max_full_text_bytes: int = 25_000_000
 
 
 @lru_cache

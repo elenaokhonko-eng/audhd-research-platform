@@ -1,16 +1,17 @@
 import json
 import re
+import httpx
 from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from platform_app.models import Artifact, LiteratureChunk, LiteratureDocument, ResearchRun, SourceClaim
+from platform_app.models import Approval, Artifact, LiteratureChunk, LiteratureDocument, ResearchRun, SourceClaim
 from platform_app.repository import ResearchRunRepository
 from platform_app.services.agents import run_agent_stage
 from platform_app.services.artifacts import Citation, render_scientific_pdf
-from platform_app.services.documents import TextPassage, chunk_passages
+from platform_app.services.documents import TextPassage, chunk_passages, download_open_access_document, parse_downloaded_document
 from platform_app.services.literature import CrossrefConnector, OpenAlexConnector, PubMedConnector, merge_works
 from platform_app.services.publishing import ManualSubstackAdapter, build_publication_package
 from platform_app.services.rag import EmbeddingProvider
@@ -66,10 +67,13 @@ class PipelineRunner:
         return artifact
 
     def _latest_text(self, run: ResearchRun, kind: str) -> str:
-        artifact = self.session.scalar(select(Artifact).where(Artifact.run_id == run.id, Artifact.kind == kind).order_by(Artifact.created_at.desc()).limit(1))
+        artifact = self._latest_artifact(run, kind)
         if not artifact:
             raise RuntimeError(f"Required artifact is missing: {kind}")
         return self.storage.get(artifact.object_key).decode("utf-8")
+
+    def _latest_artifact(self, run: ResearchRun, kind: str) -> Artifact | None:
+        return self.session.scalar(select(Artifact).where(Artifact.run_id == run.id, Artifact.kind == kind).order_by(Artifact.created_at.desc()).limit(1))
 
     def _start(self, run: ResearchRun):
         return WorkflowStage.FORMALIZING, {}
@@ -94,17 +98,31 @@ class PipelineRunner:
                 client.close()
         embedder = EmbeddingProvider(self.settings) if self.settings.embedding_api_key else None
         stored = 0
+        full_text_downloads = 0
         for work in works:
             document = self.session.scalar(select(LiteratureDocument).where(LiteratureDocument.doi == work.doi)) if work.doi else None
             if not document:
                 document = LiteratureDocument(title=work.title, doi=work.doi, source_url=work.source_url or "", publication_year=work.publication_year, provenance={"provider": work.source, "external_id": work.external_id, "authors": work.authors, "is_retracted": work.is_retracted}, rights={"full_text_url": work.full_text_url}, verified=bool(work.doi in verified_dois and not work.is_retracted))
                 self.session.add(document)
                 self.session.flush()
-            if work.abstract:
+            passages = []
+            extraction_source = "abstract"
+            if work.full_text_url and full_text_downloads < 10:
+                try:
+                    downloaded = download_open_access_document(work.full_text_url, self.settings.max_full_text_bytes)
+                    passages = chunk_passages(parse_downloaded_document(downloaded))
+                    self._put_artifact(run, f"sources/{document.id}", downloaded.content, downloaded.content_type)
+                    extraction_source = "open_access_full_text"
+                    document.rights = {**document.rights, "downloaded_from": downloaded.final_url, "access_basis": "provider-declared-open-access"}
+                    full_text_downloads += 1
+                except (ValueError, httpx.HTTPError):
+                    passages = []
+            if not passages and work.abstract:
                 passages = chunk_passages([TextPassage(work.abstract)])
+            if passages:
                 vectors = embedder.embed([item.text for item in passages]) if embedder else [None] * len(passages)
                 for passage, vector in zip(passages, vectors):
-                    self.session.add(LiteratureChunk(document_id=document.id, text=passage.text, page_start=passage.page_start, page_end=passage.page_end, embedding=vector, extraction_metadata={"source": "abstract"}))
+                    self.session.add(LiteratureChunk(document_id=document.id, text=passage.text, page_start=passage.page_start, page_end=passage.page_end, embedding=vector, extraction_metadata={"source": extraction_source}))
             stored += 1
         self.session.flush()
         return WorkflowStage.SYNTHESIZING, {"sources": stored}
@@ -177,7 +195,13 @@ class PipelineRunner:
         return WorkflowStage.PUBLISH_REVIEW, {"artifact_id": str(artifact.id), "snapshot_hash": package.snapshot_hash}
 
     def _publish(self, run: ResearchRun):
-        raw = self._latest_text(run, "substack_publication.json")
+        artifact = self._latest_artifact(run, "substack_publication.json")
+        if not artifact:
+            raise RuntimeError("Publication package is missing")
+        approval = self.session.scalar(select(Approval).where(Approval.run_id == run.id, Approval.gate == WorkflowStage.PUBLISH_REVIEW.value, Approval.decision == "approved").order_by(Approval.created_at.desc()).limit(1))
+        if not approval or approval.artifact_id != artifact.id or approval.snapshot_hash != artifact.sha256:
+            raise RuntimeError("Final approval does not match the stored publication package")
+        raw = self.storage.get(artifact.object_key).decode("utf-8")
         data = json.loads(raw)
         package = build_publication_package(data["title"], data["subtitle"], data["markdown"], data["artifact_paths"])
         ManualSubstackAdapter().publish(package, data["snapshot_hash"], self.settings.substack_publish_enabled)

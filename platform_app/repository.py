@@ -58,15 +58,18 @@ class ResearchRunRepository:
         run_id: UUID,
         gate: WorkflowStage,
         reviewer: str,
-        snapshot: str,
+        snapshot: str | bytes,
+        artifact_id: UUID | None = None,
         comment: str | None = None,
     ) -> Approval:
         run = self.get(run_id, lock=True)
         if not run or WorkflowStage(run.stage) != gate or gate not in HUMAN_GATES:
             raise WorkflowConflict("Approval does not match the run's active human gate")
-        snapshot_hash = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
+        snapshot_bytes = snapshot.encode("utf-8") if isinstance(snapshot, str) else snapshot
+        snapshot_hash = hashlib.sha256(snapshot_bytes).hexdigest()
         approval = Approval(
             run_id=run_id,
+            artifact_id=artifact_id,
             gate=gate.value,
             decision="approved",
             reviewer=reviewer,
@@ -74,7 +77,7 @@ class ResearchRunRepository:
             snapshot_hash=snapshot_hash,
         )
         self.session.add(approval)
-        self.audit(run_id, reviewer, "run.approved", {"gate": gate.value, "snapshot_hash": snapshot_hash})
+        self.audit(run_id, reviewer, "run.approved", {"gate": gate.value, "snapshot_hash": snapshot_hash, "artifact_id": str(artifact_id) if artifact_id else None})
         self.session.commit()
         return approval
 

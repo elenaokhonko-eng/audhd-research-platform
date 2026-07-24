@@ -22,7 +22,7 @@ class RunCreate(BaseModel):
 
 
 class ApprovalCreate(BaseModel):
-    snapshot: str = Field(min_length=1)
+    artifact_id: UUID
     comment: str | None = None
 
 
@@ -96,12 +96,21 @@ def approve_run(
 ) -> dict:
     principal.require("reviewer", "admin", "publisher")
     try:
+        artifact = session.get(Artifact, payload.artifact_id)
+        if not artifact or artifact.run_id != run_id:
+            raise HTTPException(status_code=400, detail="Approval artifact does not belong to this research run")
+        snapshot = ArtifactStorage(get_settings()).get(artifact.object_key)
         approval = ResearchRunRepository(session).approve(
-            run_id, gate, principal.email, payload.snapshot, payload.comment
+            run_id, gate, principal.email, snapshot, artifact.id, payload.comment
         )
     except WorkflowConflict as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    return {"id": str(approval.id), "snapshot_hash": approval.snapshot_hash}
+    target = STAGE_ORDER[STAGE_ORDER.index(gate) + 1]
+    ResearchRunRepository(session).advance(run_id, target, principal.email)
+    from platform_app.worker import advance_research_run
+
+    task = advance_research_run.delay(str(run_id))
+    return {"id": str(approval.id), "snapshot_hash": approval.snapshot_hash, "next_stage": target.value, "task_id": task.id}
 
 
 @app.get("/workflow/stages")

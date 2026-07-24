@@ -33,6 +33,7 @@ class Approval(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_runs.id"), index=True)
+    artifact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("artifacts.id"), index=True)
     gate: Mapped[str] = mapped_column(String(80))
     decision: Mapped[str] = mapped_column(String(30))
     reviewer: Mapped[str] = mapped_column(String(200))
