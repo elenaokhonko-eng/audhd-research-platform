@@ -100,6 +100,7 @@ celerybeat.pid
 
 # Environments
 .env
+.streamlit/secrets.toml
 .venv
 .venv-python314-backup/
 env/
@@ -125,4 +126,5 @@ Thumbs.db
 # Output Research Report
 final_research_report.md
 artifacts/
+output/
 tmp/

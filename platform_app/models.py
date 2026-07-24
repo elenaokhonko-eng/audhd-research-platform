@@ -114,3 +114,31 @@ class Concept(Base):
     definition: Mapped[str] = mapped_column(Text)
     ontology: Mapped[str] = mapped_column(String(100))
     external_mappings: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class SourceClaim(Base):
+    __tablename__ = "source_claims"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("research_runs.id"), index=True)
+    document_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("literature_documents.id"), index=True)
+    chunk_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("literature_chunks.id"), index=True)
+    claim_text: Mapped[str] = mapped_column(Text)
+    quotation: Mapped[str | None] = mapped_column(Text)
+    numeric_assertions: Mapped[list] = mapped_column(JSON, default=list)
+    verification_status: Mapped[str] = mapped_column(String(40), default="pending")
+    verification_details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditEvent(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("research_runs.id"), index=True)
+    actor: Mapped[str] = mapped_column(String(300))
+    action: Mapped[str] = mapped_column(String(120), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    previous_hash: Mapped[str | None] = mapped_column(String(64))
+    event_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

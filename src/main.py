@@ -61,6 +61,7 @@ def run():
     print("="*60 + "\n")
 
     try:
+        os.makedirs("artifacts", exist_ok=True)
         # Initialize and kickoff the crew
         crew_instance = ResearchMultiAgentCrew()
         result = crew_instance.crew().kickoff(inputs=inputs)

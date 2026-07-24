@@ -60,6 +60,18 @@ class ResearchMultiAgentCrew():
             allow_delegation=False
         )
 
+    @agent
+    def scientific_reporter(self) -> Agent:
+        return Agent(config=self.agents_config['scientific_reporter'], verbose=True, allow_delegation=False)
+
+    @agent
+    def substack_writer(self) -> Agent:
+        return Agent(config=self.agents_config['substack_writer'], verbose=True, allow_delegation=False)
+
+    @agent
+    def visual_editor(self) -> Agent:
+        return Agent(config=self.agents_config['visual_editor'], verbose=True, allow_delegation=False)
+
     @task
     def formalize_hypothesis_task(self) -> Task:
         return Task(
@@ -95,8 +107,20 @@ class ResearchMultiAgentCrew():
     def verify_final_report_task(self) -> Task:
         return Task(
             config=self.tasks_config['verify_final_report_task'],
-            output_file='final_research_report.md' # Saves the final verified & certified output automatically
+            output_file='artifacts/final_verification.md'
         )
+
+    @task
+    def scientific_report_task(self) -> Task:
+        return Task(config=self.tasks_config['scientific_report_task'], output_file='artifacts/scientific_report.md')
+
+    @task
+    def substack_adaptation_task(self) -> Task:
+        return Task(config=self.tasks_config['substack_adaptation_task'], output_file='artifacts/substack_article.md')
+
+    @task
+    def visual_plan_task(self) -> Task:
+        return Task(config=self.tasks_config['visual_plan_task'], output_file='artifacts/visual_plan.md')
 
     @crew
     def crew(self) -> Crew:
@@ -107,7 +131,10 @@ class ResearchMultiAgentCrew():
                 self.researcher(),
                 self.hallucination_verifier(),
                 self.writer(),
-                self.editor()
+                self.editor(),
+                self.scientific_reporter(),
+                self.substack_writer(),
+                self.visual_editor()
             ],
             tasks=[
                 self.formalize_hypothesis_task(),
@@ -115,7 +142,10 @@ class ResearchMultiAgentCrew():
                 self.verify_research_summary_task(),
                 self.draft_task(),
                 self.review_task(),
-                self.verify_final_report_task()
+                self.scientific_report_task(),
+                self.verify_final_report_task(),
+                self.substack_adaptation_task(),
+                self.visual_plan_task()
             ],
             process=Process.sequential, # Forces tasks to run sequentially with zero leakage
             verbose=True,
