@@ -1,0 +1,85 @@
+# Define tasks for each agent in the workflow
+# These values are parsed by src/crew.py to initialize CrewAI Task objects.
+
+formalize_hypothesis_task:
+  description: >
+    Analyze the raw scientific intuition or query provided on "{topic}".
+    Refine, structure, and formalize it into a high-fidelity scientific hypothesis document.
+    Your analysis must explicitly detail:
+    1. A formal Conceptual Hypothesis.
+    2. Operationalized Variables: mapping names, conceptual definitions, and operational metrics.
+    3. Formulate the Null Hypothesis (H0) and Alternative Hypothesis (H1) explicitly.
+    4. Propose suitable statistical/empirical evaluation models.
+    5. Define concrete Falsifiability Criteria.
+    6. Conduct a preliminary literature gap and ethical/vulnerability check.
+    Socratically prompt for clarifying questions if any critical ambiguities exist.
+  expected_output: >
+    A fully formalized scientific hypothesis analysis, structured with operationalized variables,
+    hypotheses (H0 and H1), falsifiability checklists, and a preliminary gap assessment,
+    ready for user review and feedback.
+  agent: analyst
+
+research_task:
+  description: >
+    Conduct exhaustive, high-quality research on the topic: "{topic}".
+    Identify key subtopics, scientific breakthroughs, historical context, current trends,
+    and outstanding challenges.
+    Synthesize all findings into a highly structured, factual research summary.
+    Ensure you gather specific data, statistics, and cite reputable sources where applicable.
+  expected_output: >
+    A highly organized, comprehensive research summary containing key findings,
+    statistics, structural outlines, and a list of sources.
+  agent: researcher
+
+draft_task:
+  description: >
+    Using the research summary provided by the Senior Research Analyst, draft a
+    comprehensive, deep-dive article or report about "{topic}".
+    The document should be structured logically with a compelling introduction, detailed body
+    sections addressing each key research finding, and a thoughtful conclusion.
+    Format the output in clear, professional Markdown. Do not lose any factual depth or citations.
+  expected_output: >
+    A fully drafted article/report written in beautiful Markdown, structured with logical headers,
+    and ready for editing.
+  agent: writer
+
+review_task:
+  description: >
+    Review and polish the drafted report on "{topic}".
+    Check for:
+    1. Grammatical accuracy, spelling, and professional tone.
+    2. Readability, sentence flow, and transitional clarity.
+    3. Proper Markdown formatting (headers, lists, bold text, links).
+    4. Compliance with professional reporting standards.
+    Make necessary edits and corrections to ensure it is publication-ready, while retaining
+    all the factual insights and references from the research phase.
+  expected_output: >
+    A final, publication-ready article/report in Markdown, perfectly formatted, free of errors,
+    and polished to perfection.
+  agent: editor
+
+verify_research_summary_task:
+  description: >
+    Audit the research summary generated on the topic "{topic}".
+    Apply strict factual grounding guardrails:
+    1. Citation Existence Check: Verify that every referenced study has a valid DOI or index and is a genuine, existing academic paper.
+    2. NLI Textual Grounding Check: Ensure every claim, assertion, and synthesis matches the extracted literature context with zero ungrounded assertions.
+    3. Numerical Alignment Check: Audit and cross-check every statistic, sample size (N), p-value, and effect size against the raw source extracts.
+    4. Quotation Verification: Confirm that direct or indirect quotes are 100% accurate and un-fabricated.
+    Highlight any discrepancies, falsifications, or rounding drifts. If any hallucinated claims are detected, list them explicitly with required corrections.
+  expected_output: >
+    A rigorous grounding validation report, listing verified citations, audited statistics, and a clear "PASS" or "FAIL" verdict for the research summary.
+  agent: hallucination_verifier
+
+verify_final_report_task:
+  description: >
+    Audit the final publication-ready report on the topic "{topic}" for any potential hallucinations.
+    Compare the final output against the audited research summaries.
+    Verify that:
+    1. No statistics, percentages, or statistical markers (like standard deviations or p-values) were altered, exaggerated, or introduced during drafting/editing.
+    2. Every in-text citation correctly matches its bibliographic reference and links to a valid, existing DOI.
+    3. No fictional anecdotes, references, or quotes were introduced during polishing.
+  expected_output: >
+    A factual audit report for the final document, mapping all numbers and quotes directly back to verified sources, with an absolute safety certification.
+  agent: hallucination_verifier
+

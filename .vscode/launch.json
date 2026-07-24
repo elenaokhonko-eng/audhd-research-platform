@@ -1,0 +1,38 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Run Multi-Agent Crew",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            }
+        },
+        {
+            "name": "Python: Debug Crew with Topic",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "${input:researchTopic}"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/src"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "researchTopic",
+            "type": "promptString",
+            "description": "Enter the topic you want the Multi-Agent Crew to research",
+            "default": "Breakthroughs in Fusion Energy 2026"
+        }
+    ]
+}

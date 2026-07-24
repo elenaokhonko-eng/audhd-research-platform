@@ -1,0 +1,39 @@
+workflow:
+  - stage: submitted
+    handler: accept_hypothesis
+  - stage: formalizing_hypothesis
+    handler: formalize_hypothesis
+  - stage: awaiting_hypothesis_approval
+    gate: hypothesis_approval
+  - stage: retrieving_scientific_sources
+    handler: retrieve_literature
+  - stage: synthesizing_and_verifying
+    handler: extract_and_verify_claims
+  - stage: generating_scientific_report
+    handler: generate_scientific_report
+  - stage: rendering_and_reviewing_pdf
+    handler: render_and_verify_pdf
+  - stage: adapting_substack_article
+    handler: adapt_substack_article
+  - stage: generating_visual_assets
+    handler: generate_visual_assets
+  - stage: awaiting_content_approval
+    gate: content_and_visual_approval
+  - stage: creating_substack_draft
+    handler: create_substack_draft
+  - stage: awaiting_publish_approval
+    gate: final_publish_approval
+  - stage: publishing
+    handler: publish_approved_snapshot
+  - stage: published
+    terminal: true
+  - stage: failed
+    terminal: true
+
+policies:
+  require_source_passage_for_scientific_claim: true
+  require_doi_resolution_when_doi_is_claimed: true
+  require_artifact_hash_for_approval: true
+  prohibit_unapproved_publish: true
+  clinical_rag_default_access: deny
+  clinical_free_text_embedding_default: deny
