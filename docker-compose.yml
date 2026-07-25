@@ -1,4 +1,59 @@
 services:
+  api:
+    build: .
+    command: uvicorn platform_app.api:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://audhd:audhd@postgres:5432/audhd
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio-development-only
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+
+  worker:
+    build: .
+    command: celery -A platform_app.worker.celery_app worker --loglevel=INFO
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://audhd:audhd@postgres:5432/audhd
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio-development-only
+    depends_on:
+      - api
+      - minio
+
+  dashboard:
+    build: .
+    command: streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+
+  migrate:
+    build: .
+    command: alembic upgrade head
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://audhd:audhd@postgres:5432/audhd
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: pgvector/pgvector:pg17
     environment:

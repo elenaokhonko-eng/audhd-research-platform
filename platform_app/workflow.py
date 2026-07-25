@@ -26,3 +26,13 @@ HUMAN_GATES = {
 }
 
 STAGE_ORDER = list(WorkflowStage)
+
+NEXT_STAGE = {
+    stage: STAGE_ORDER[index + 1]
+    for index, stage in enumerate(STAGE_ORDER[:-2])
+}
+
+
+def can_advance(current: WorkflowStage, target: WorkflowStage) -> bool:
+    """Only permit the declared next step, retrying a stage, or failure."""
+    return target in {current, NEXT_STAGE.get(current), WorkflowStage.FAILED}

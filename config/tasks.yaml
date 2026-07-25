@@ -83,3 +83,32 @@ verify_final_report_task:
     A factual audit report for the final document, mapping all numbers and quotes directly back to verified sources, with an absolute safety certification.
   agent: hallucination_verifier
 
+scientific_report_task:
+  description: >
+    Write a scientific report about "{topic}" from the verified research synthesis only.
+    Include abstract, research question, methods and source-selection limitations, findings,
+    competing explanations, limitations, implications, future research, and references.
+    Mark evidence identifiers inline and do not add unsupported claims.
+  expected_output: >
+    A complete scientific report in Markdown with traceable citations and an explicit limitations section.
+  agent: scientific_reporter
+
+substack_adaptation_task:
+  description: >
+    Adapt the verified scientific report about "{topic}" for a general Substack audience.
+    Preserve all scientific qualifications and citations. Include a concise summary, accessible
+    narrative, what the evidence does and does not show, practical research implications, and references.
+    Do not introduce new scientific claims.
+  expected_output: >
+    A standalone Substack-compatible Markdown article distinct from the scientific report.
+  agent: substack_writer
+
+visual_plan_task:
+  description: >
+    Produce a visual asset plan for the scientific report and Substack article about "{topic}".
+    Each proposed chart must specify verified source claim IDs, exact values, units, chart type,
+    caption, and alt text. Each editorial image must include a responsible prompt, purpose, caption,
+    alt text, and a statement that it is illustrative rather than clinical evidence.
+  expected_output: >
+    A structured Markdown visual plan with separate chart and editorial-image sections.
+  agent: visual_editor
