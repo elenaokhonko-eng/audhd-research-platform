@@ -1,4 +1,20 @@
-# Research Multi-Agent System (CrewAI)
+# audhd-research-platform
+
+Monorepo for audhdneurobiology.org. Architecture: the platform architecture doc (v3); decisions in `docs/adr/`.
+
+| Path | What | Stage |
+| --- | --- | --- |
+| `apps/web/` | M1 website (Next.js, standalone container on Cloud Run) | 0 |
+| `infra/terraform/` | Every Google Cloud and Cloudflare resource | 0 |
+| `.github/workflows/` | Test, build, deploy (dev on `main`, prod on `v*` tags) | 0 |
+| `ops/scripts/` | Bootstrap and domain scripts for the steps Terraform cannot do alone | 0 |
+| `docs/runbooks/stage-0.md` | **Start here**: how to put the site live | 0 |
+| `src/`, `config/`, `platform_app/`, `app_pages/` | Earlier CrewAI prototype, kept for reference; replaced by Genkit agents from Stage 2 | legacy |
+
+---
+
+## Legacy: CrewAI research prototype
+
 
 A production-grade, modular multi-agent system built using [CrewAI](https://github.com/crewAIPlatform/crewAI) to automate deep-dive academic and market research. This project uses a strictly sequential, five-stage pipeline to gather raw data, verify factual grounding (detect and completely eliminate hallucinations, fake DOIs, or statistical drifts), draft comprehensive articles, and editorially polish and certify reports into ready-to-publish, certified Markdown files.
 
