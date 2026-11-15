@@ -16,6 +16,11 @@ resource "google_cloud_run_v2_service" "this" {
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = var.site_env == "prod"
 
+  # Public website without an allUsers IAM binding. Organisations with domain restricted
+  # sharing (iam.allowedPolicyMemberDomains) refuse allUsers; disabling the invoker check
+  # is Google's supported way to serve a public Cloud Run service there (ADR 0005).
+  invoker_iam_disabled = true
+
   template {
     service_account = var.service_account
 
@@ -64,14 +69,6 @@ resource "google_cloud_run_v2_service" "this" {
       client_version,
     ]
   }
-}
-
-# Public website: anyone may invoke it.
-resource "google_cloud_run_v2_service_iam_member" "public" {
-  name     = google_cloud_run_v2_service.this.name
-  location = google_cloud_run_v2_service.this.location
-  role     = "roles/run.invoker"
-  member   = "allUsers"
 }
 
 output "name" { value = google_cloud_run_v2_service.this.name }
