@@ -1,6 +1,6 @@
 # Stage 0 runbook: audhdneurobiology.org on Cloud Run
 
-Everything below runs in **Google Cloud Shell** (console.cloud.google.com, the `>_` icon top right). Cloud Shell already has `gcloud`, `terraform`, `docker`, `git` and `gh`, and is already logged in as you. Nothing to install on Windows.
+Everything below runs in **Google Cloud Shell** (console.cloud.google.com, the `>_` icon top right). Cloud Shell already has `gcloud`, `docker`, `git` and `gh`, and is already logged in as you. The bootstrap script installs Terraform into `~/bin` the first time. Nothing to install on Windows.
 
 Three steps need a browser, and each is marked **browser**. Everything else is a command.
 

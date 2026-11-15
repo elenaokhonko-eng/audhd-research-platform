@@ -5,6 +5,7 @@
 #   bash ops/scripts/10-domain.sh
 set -euo pipefail
 
+export PATH="$HOME/bin:$PATH"   # Terraform installed by 00-bootstrap.sh
 DOMAIN="${DOMAIN:-audhdneurobiology.org}"
 ROOT="$(git rev-parse --show-toplevel)"
 TFVARS="$ROOT/infra/terraform/terraform.tfvars"

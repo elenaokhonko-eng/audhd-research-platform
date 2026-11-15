@@ -53,6 +53,20 @@ if ! gcloud storage buckets describe "gs://${BUCKET}" >/dev/null 2>&1; then
 fi
 
 say "3/5 Terraform apply"
+# Cloud Shell no longer ships Terraform; its `terraform` is a stub that prints install help.
+# Install the real binary into ~/bin, which Cloud Shell keeps between sessions.
+TF_VERSION="1.13.4"
+export PATH="$HOME/bin:$PATH"
+if ! terraform version 2>/dev/null | grep -q '^Terraform v'; then
+  echo "Installing Terraform ${TF_VERSION} into ~/bin"
+  mkdir -p "$HOME/bin"
+  TMP="$(mktemp -d)"
+  curl -fsSL -o "$TMP/tf.zip" "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+  unzip -o -q "$TMP/tf.zip" -d "$HOME/bin"
+  rm -rf "$TMP"
+  grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
+fi
+terraform version | head -1
 cd "$ROOT/infra/terraform"
 if [[ ! -f terraform.tfvars ]]; then
   cat > terraform.tfvars <<EOF
@@ -70,6 +84,11 @@ REGISTRY="$(terraform output -raw artifact_registry)"
 WIF_PROVIDER="$(terraform output -raw wif_provider)"
 DEPLOYER_SA="$(terraform output -raw deployer_service_account)"
 RUNTIME_SA="$(terraform output -raw web_runtime_service_account)"
+for v in REGISTRY WIF_PROVIDER DEPLOYER_SA RUNTIME_SA; do
+  if [[ -z "${!v}" || "${!v}" == *$'\n'* || "${!v}" == *" "* ]]; then
+    echo "Terraform output $v looks wrong: '${!v}'. Stopping before the image build."; exit 1
+  fi
+done
 
 say "4/5 First image and deploy"
 cd "$ROOT"
