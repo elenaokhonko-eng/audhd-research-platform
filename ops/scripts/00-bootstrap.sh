@@ -96,7 +96,7 @@ TAG="$(git rev-parse --short=12 HEAD)"
 IMAGE="${REGISTRY}/web:${TAG}"
 gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 docker build -t "$IMAGE" apps/web
-docker push "$IMAGE"
+for i in 1 2 3 4 5; do docker push "$IMAGE" && break; echo "push failed, retrying in $((i*10))s"; sleep $((i*10)); [[ $i == 5 ]] && exit 1; done
 for SVC in web-dev web-prod; do
   gcloud run deploy "$SVC" --image "$IMAGE" --region "$REGION" \
     --service-account "$RUNTIME_SA" --quiet
