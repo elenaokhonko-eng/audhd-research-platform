@@ -36,8 +36,25 @@ if [[ -z "${TF_VAR_cloudflare_api_token:-}" ]]; then
   echo "Set TF_VAR_cloudflare_api_token first (Cloudflare > My Profile > API Tokens > Create Token > 'Edit zone DNS' template, zone $DOMAIN)."
   exit 1
 fi
+case "$TF_VAR_cloudflare_api_token" in
+  paste-token-here|YOUR-REAL-TOKEN|*" "*)
+    echo "TF_VAR_cloudflare_api_token still holds the example text, not a real token."
+    echo "Create one in Cloudflare (My Profile > API Tokens > Edit zone DNS) and run:"
+    echo "  export TF_VAR_cloudflare_api_token='<the token Cloudflare shows you>'"
+    exit 1;;
+esac
+if ! curl -fsS -H "Authorization: Bearer ${TF_VAR_cloudflare_api_token}" \
+     "https://api.cloudflare.com/client/v4/user/tokens/verify" >/dev/null 2>&1; then
+  echo "Cloudflare rejected the token. Check you copied all of it, and that it is an API Token (not the Global API Key)."
+  exit 1
+fi
 ZONE_ID="$(curl -fsS -H "Authorization: Bearer ${TF_VAR_cloudflare_api_token}" \
-  "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"][0]["id"])')"
+  "https://api.cloudflare.com/client/v4/zones?name=${DOMAIN}" \
+  | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r[0]["id"] if r else "")')"
+if [[ -z "$ZONE_ID" ]]; then
+  echo "The token works but cannot see the zone ${DOMAIN}. Edit the token: Zone Resources > Include > Specific zone > ${DOMAIN}."
+  exit 1
+fi
 echo "zone id: $ZONE_ID"
 
 say "3/4 Terraform: domain mappings and DNS records"
