@@ -1,0 +1,15 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. The bootstrap script writes this for you.
+project_id         = "audhd-neurobiology-prod"
+region             = "asia-southeast1"
+billing_account_id = "XXXXXX-XXXXXX-XXXXXX"
+alert_email        = "you@example.com"
+budget_amount      = 30
+
+# Step 2 of the runbook turns these on after the domain is verified:
+map_custom_domains    = false
+manage_cloudflare_dns = false
+cloudflare_zone_id    = ""
+# cloudflare_api_token comes from the environment: export TF_VAR_cloudflare_api_token=...
+
+# Step 3, once https://audhdneurobiology.org serves with a certificate:
+check_custom_domain = false

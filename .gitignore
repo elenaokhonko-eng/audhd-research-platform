@@ -126,3 +126,10 @@ Thumbs.db
 final_research_report.md
 artifacts/
 tmp/
+
+# Terraform (state lives in GCS; tfvars may hold ids and are written per machine)
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+.terraform.lock.hcl.bak
