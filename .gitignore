@@ -133,3 +133,22 @@ tmp/
 *.tfstate.*
 terraform.tfvars
 .terraform.lock.hcl.bak
+
+# ---------------------------------------------------------------
+# Private research: never commit. It lives in the sibling folder
+# ../audhd-research-private (see docs/content-model.md). These
+# lines are a backstop if anything is copied in here by mistake;
+# ops/scripts/check-private-content.sh enforces the same rules.
+# ---------------------------------------------------------------
+/series/
+/canon/
+/private/
+/unsorted/
+/standalone/
+/audhd-research-private/
+/audhd-research-publication/
+*.docx
+*.pptx
+*.pptd
+*.zip
+*.bundle

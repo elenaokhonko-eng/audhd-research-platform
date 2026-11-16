@@ -9,6 +9,7 @@ Monorepo for audhdneurobiology.org. Architecture: the platform architecture doc 
 | `.github/workflows/` | Test, build, deploy (dev on `main`, prod on `v*` tags) | 0 |
 | `ops/scripts/` | Bootstrap and domain scripts for the steps Terraform cannot do alone | 0 |
 | `docs/runbooks/stage-0.md` | **Start here**: how to put the site live | 0 |
+| `docs/content-model.md` | Where private research lives (outside this repo) and how code reads it | 0 |
 | `src/`, `config/`, `platform_app/`, `app_pages/` | Earlier CrewAI prototype, kept for reference; replaced by Genkit agents from Stage 2 | legacy |
 
 ---
