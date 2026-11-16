@@ -10,7 +10,7 @@ The owner asked whether each agent group needs a credentials key file. Agents re
 
 ## Decision
 
-No key files. Every service, job and agent team runs as its own service account with the least permissions it needs, all declared in one `identities.tf` per environment. Agent identities can read their inputs and write proposals only. Separate executor identities hold the permission to publish, post or change prices, and act only on proposals marked approved.
+No key files. Every service, job and agent team runs as its own service account with the least permissions it needs, all declared in one `identities.tf` per environment. Agent identities have no direct access to any data store: they read inputs and file proposals through `platform-api`, which checks who is calling. Executors are jobs of the platform, not agents; they hold the permission to publish, post or change prices and act only on an approval that `platform-api` recorded from the owner's signed-in action, after checking a hash of the approved content. Because Firestore permissions are per database, not per collection, separate identities for jobs limit which secrets and outside systems each can reach, not which documents; the audit trail is therefore also kept in a locked log bucket. The production deployer can be assumed only from the protected `production` environment on a version tag.
 
 ## Options Considered
 

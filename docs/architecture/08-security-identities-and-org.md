@@ -2,7 +2,7 @@
 
 **Status:** Proposed for review · 2026-11-16 · Applies from Stage 1
 
-From Stage 1 the platform holds personal data: emails, what people paid for, later what they answered. This page says where things live, who and what can reach them, and how that is proved.
+From Stage 1 the platform holds personal data: emails, what people paid for, later what they answered. This page says where things live, who and what can reach them, and how that is enforced. It also says plainly where enforcement comes from the cloud's permissions and where it comes from the platform's own code.
 
 ## 1. Where the projects live
 
@@ -10,27 +10,27 @@ From Stage 1 the platform holds personal data: emails, what people paid for, lat
 
 ```mermaid
 flowchart TB
-  ORG["Organisation: the existing company domain"] --> FA["Folder: audhd-neurobiology"]
-  ORG --> FO["Folder: other company projects"]
+  ORG["Existing organisation"] --> FA["Folder: audhd-neurobiology"]
+  ORG --> FO["Folder: other work"]
   FA --> PD["Project: audhd-neurobiology-dev<br/>invented data only"]
   FA --> PP["Project: audhd-neurobiology-prod<br/>real members"]
-  BILL["Billing account with startup credits"] -. pays .-> PD
+  BILL["Billing account"] -. pays .-> PD
   BILL -. pays .-> PP
-  subgraph Later["Later: own organisation on audhdneurobiology.org"]
-    ORG2["Organisation: audhdneurobiology.org"] --> PD2["dev"]
+  subgraph Later["Later: the platform's own organisation"]
+    ORG2["Organisation on the platform's domain"] --> PD2["dev"]
     ORG2 --> PP2["prod"]
   end
   PP -. "project move: same id,<br/>no downtime" .-> PP2
 ```
 
-**Now (Stage 1):** a folder under the existing organisation, holding a new dev project and the existing prod project. Access is granted at the folder, so nobody inherits access from elsewhere in the organisation except its administrators.
+**Now (Stage 1):** a folder under the existing organisation, holding a new dev project and the existing prod project. Access is granted at the folder. Administrators of the organisation can still reach it, so who they are is reviewed now.
 
-**Later:** create an organisation for `audhdneurobiology.org` (a free Cloud Identity account on that domain is enough), then move the two projects into it. A project keeps its id, number and resources when it moves; services keep running. The move needs the project-mover role on the source and the project-creator role on the destination, and both organisations must allow the transfer in their policies. A billing account can pay for projects in any organisation, so the credits can keep paying after the move if the programme allows it.
+**Later:** create an organisation on the platform's own domain (a free Cloud Identity account is enough), then move the two projects into it. A project keeps its id, number and resources when it moves; services keep running. The move needs the project-mover role on the source and the project-creator role on the destination, and both organisations must allow the transfer in their policies. A billing account can pay for projects in any organisation, so billing need not change when the projects move.
 
-**Two things to settle before relying on this, neither of them technical:**
+**Two things to settle before personal data is imported, neither of them technical:**
 
-1. **The credit programme's terms.** Whether credits granted to one company may pay for a separate venture is decided by the programme's terms, which could not be retrieved for this review. Ask the programme contact in writing.
-2. **Who operates the platform in law.** The privacy notice must name the organisation responsible for members' data. Projects under the company's organisation, paid by the company, with a Stripe account in another name, is a combination to straighten out before the first invitation goes out. An accountant or lawyer should confirm the structure.
+1. **Billing.** Confirm that the billing arrangement used for these projects is permitted for this platform.
+2. **Who operates the platform in law.** The privacy notice must name the organisation responsible for members' data. An accountant or lawyer should confirm the structure.
 
 Move to the platform's own organisation **before the first external data-use agreement** at the latest. Decision: [ADR 0014](../adr/0014-folder-now-own-organisation-later.md).
 
@@ -40,9 +40,9 @@ Move to the platform's own organisation **before the first external data-use agr
 | --- | --- | --- |
 | Data | Invented people only | Real members |
 | Stripe | Sandbox with test clocks | Live, read-only towards Substack and Payhip objects |
-| Substack | Recorded responses; no session cookie | Official surfaces; private endpoints only where switched on |
-| Deploys | Every merge to `main` | A version tag, approved in the `production` environment |
-| Who can read data | The owner, coding agents through tests | The owner; services listed below |
+| Substack | Synthetic recorded responses; no credentials | Official surfaces; private endpoints only where switched on |
+| Deploys | Every merge to `main` | A version tag, approved by the owner in the protected `production` environment |
+| Who can read data | The owner, coding agents through tests | The owner; the services listed below |
 
 ## 3. Identities: why there is no key file, for any agent group
 
@@ -50,39 +50,47 @@ A key file is a long-lived password saved in a file. Anyone who copies the file 
 
 Instead, every service, job and agent team **runs as its own service account**. Google hands the running code a short-lived token automatically; nothing is stored. GitHub Actions gets the same through Workload Identity Federation. What replaces "a key file per agent group" is a **permissions manifest**: one Terraform file per environment, `identities.tf`, containing every service account and every permission, and nothing else. Reviewing who can do what is reading one file; changing it is a pull request.
 
-| Identity | Runs | May | May not |
+### What the cloud enforces, and what the platform's code enforces
+
+Firestore permissions apply to a whole database, not to single collections. So every identity that can reach Firestore (`platform-api` and the jobs, all running the same reviewed image) can technically read all of Zone 1. Their separate identities limit what differs between them in practice: **which secrets and which outside systems each can reach.** Three rules follow:
+
+1. **Agent teams never touch a data store.** They call `platform-api` endpoints, which check the caller's identity and return only that team's inputs.
+2. **Approval cannot be forged by an agent.** An approval is recorded only by `platform-api`, from the owner's signed-in action, with a hash of the approved content. Executors are jobs of the platform, not agents, and check the hash before acting.
+3. **The audit trail cannot be rewritten by a service.** It is also written to a log bucket with a retention lock.
+
+| Identity | Runs | Can reach | Cannot reach |
 | --- | --- | --- | --- |
-| `web-runtime` | The website | Call `platform-api`; verify sessions | Read Firestore, buckets or secrets |
-| `platform-api` | The API | Read and write Zone 1; publish events; sign download links; read its own secrets | Read the Substack cookie; read research data |
-| `platform-hooks` | Webhook receiver (public) | Publish to the inbound topic; read webhook signing secrets | Read any member data |
-| `job-substack` | Roster check, later feed and sentinel | Read the Substack credentials; write Zone 1 roster data | Stripe, library files |
-| `job-stripe` | Reconcile | Read the Stripe restricted key; write contacts and revenue rows | Substack, library files |
-| `job-index` | Indexing | Read library files and content; call the embedding model; write the search snapshot | Entitlements, Stripe |
-| `job-reporting` | Revenue export | Read Zone 1 commerce facts; write `ops_commerce` | Anything else |
-| `pubsub-push` | Event delivery | Call `platform-api`'s internal endpoint | Anything else |
-| `github-deployer` | CI | Push images; update Cloud Run images | Read data or secrets; change IAM |
-| `model-gateway` (Stage 2) | Gateway | Call models; write its spend table | Any member data |
-| `agents-publishing`, `agents-marketing`, `agents-revenue`, `agents-study`, `agents-synthesis`, `agents-ops` (Stage 2 on) | One per team | Call the gateway; read the tables and topics listed for the team; write proposals | Execute a proposal; read another team's data; read Zone 1 unless the team's task requires it |
-| `executor-substack`, `executor-social`, `executor-store` (Stage 2) | Carry out approved proposals | Publish, post, change a price, **only** for a proposal marked approved | Create proposals |
-| `research-api` (Stage 3) | Zones 2 and 3 | Read and write research data; hold the research key | Read emails or commerce |
+| `web-runtime` | The website | `platform-api` | Any data store, any secret, identity administration |
+| `platform-api` | The API | Firestore; the library bucket (sign download links); the contact key; Stripe keys; email provider key; event bus | Substack credentials; the research key; research data |
+| `platform-hooks` | Webhook receiver (public) | Write-only access to the raw-event bucket; publish to the inbound topic; webhook signing secrets | Reading anything, including what it wrote |
+| `job-stripe` | Stripe reconciliation and the entitlement sweep | Firestore; the read-only Stripe key; the contact key | Substack credentials; the library bucket |
+| `job-substack` | Roster check; from Stage 2 the feed and sentinel | Firestore; Substack credentials; the contact key | Stripe keys; the library bucket |
+| `job-index` | Indexing | The library bucket (read); the embedding model; the search snapshot bucket; Firestore | Stripe and Substack credentials |
+| `job-reporting` | Revenue export | Firestore (read); the read-only Stripe key; BigQuery `ops_commerce` | Substack credentials; buckets |
+| `pubsub-push` | Event delivery | `platform-api`'s internal endpoints | Everything else |
+| `github-deployer` (one per project) | CI | Push images; update Cloud Run images. The prod deployer can be assumed **only** by a workflow in the protected `production` environment on a version tag | Data, secrets, IAM |
+| `model-gateway` (Stage 2) | Gateway | Models; its spend table | Member data |
+| `agents-<team>` (Stage 2 on), one per team | Agent flows | The gateway; that team's `platform-api` endpoints | Any data store; any executor permission |
+| Executor jobs (Stage 2): `job-publish`, `job-social`, `job-store` | Carry out approved proposals | The one outside system each acts on, and Firestore | Creating or approving proposals is not in their code path; the hash check stops a tampered one |
+| `research-api` (Stage 3) | Zones 2 and 3 | Its own database and datasets; the research key | Zone 1, emails, commerce |
 
-The split between **agents** (propose) and **executors** (act on approved proposals) is what makes the human gate real: an agent has no permission to publish even if its prompt is subverted. Decision: [ADR 0015](../adr/0015-one-identity-per-service-agents-propose-executors-act.md).
+Decision: [ADR 0015](../adr/0015-one-identity-per-service-agents-propose-executors-act.md).
 
-## 4. Secrets
+## 4. Keys and secrets
 
-| Secret | Read by | Set by | Rotated |
-| --- | --- | --- | --- |
-| Contact key (derives `contact_id`) | `platform-api`, `job-stripe`, `job-substack` | Generated by Terraform | Never (rotation would change every id); guarded instead |
-| Session signing material | Identity Platform | Managed by Google | Automatic |
-| Stripe restricted key: read-only sync | `job-stripe`, `platform-api` | Owner, from her terminal | Yearly, or on suspicion |
-| Stripe restricted key: create Checkout | `platform-api` | Owner | Yearly |
-| Stripe webhook signing secret | `platform-hooks` | Owner (script) | When the endpoint changes |
-| Payhip API key and webhook path token | `platform-hooks`, `platform-api` | Owner | Yearly |
-| Substack Publisher API key | `job-substack` | Owner | Yearly |
-| Substack session cookie (only if private endpoints are switched on) | `job-substack`, `executor-substack` | Owner | When it expires |
-| Email provider key | `platform-api` | Owner | Yearly |
-| Meta tokens (Stage 2) | `executor-social` | Refresh job | Every 60 days, automatic |
-| Research key (Stage 3) | `research-api` only | Generated by Terraform | Never |
+| Item | Held in | Used by | Set by | Rotation |
+| --- | --- | --- | --- | --- |
+| Contact key (derives `contact_id`) | Cloud KMS, as a MAC key: the key never leaves KMS and is not in Terraform state | `platform-api`, `job-stripe`, `job-substack` | Terraform creates the key ring; KMS generates the key | By key version; each id records its version; a re-key run exists |
+| Research key (Stage 3) | Cloud KMS, MAC key | `research-api` only | As above | As above |
+| Sessions | Identity Platform | `platform-api` | Managed by Google | Automatic |
+| Stripe restricted key: read-only | Secret Manager | `job-stripe`, `job-reporting`, `platform-api` | Owner, from her terminal | Yearly, or on suspicion |
+| Stripe restricted key: create Checkout | Secret Manager | `platform-api` | Owner | Yearly |
+| Stripe webhook signing secret | Secret Manager | `platform-hooks` | Owner (script) | When the endpoint changes |
+| Payhip API key and webhook path token | Secret Manager | `platform-hooks`, `platform-api` | Owner | Yearly |
+| Substack Publisher API key | Secret Manager | `job-substack` | Owner | Yearly |
+| Substack session cookie (only if private endpoints are switched on, Stage 2) | Secret Manager | `job-substack`, `job-publish` | Owner | When it expires, and at once if exposure is suspected |
+| Email provider key | Secret Manager | `platform-api` | Owner | Yearly |
+| Meta tokens (Stage 2) | Secret Manager | `job-social` | Refresh job | Every 60 days, automatic |
 
 Secrets are entered with `gcloud secrets versions add` from the owner's own terminal. They are never pasted into a chat, an issue, a file or a CI variable.
 
@@ -90,33 +98,35 @@ Secrets are entered with `gcloud secrets versions add` from the owner's own term
 
 Two services: `web` and `platform-hooks`. Everything else requires a Google-signed identity.
 
-- `platform-hooks` accepts only provider webhooks. Stripe events are verified by signature and timestamp. Payhip events are verified as far as Payhip allows and cross-checked in Stripe ([03 §4](03-commerce-and-revenue.md)). It can publish to one topic and read nothing.
-- `web` holds the member's session in an http-only, secure cookie. Paid routes are checked on the server on every request; the browser is never trusted with tier decisions.
+- `platform-hooks` accepts only provider webhooks. Stripe events are verified by signature and timestamp. Payhip events are verified as far as Payhip allows and cross-checked in Stripe ([03 §4](03-commerce-and-revenue.md)). It writes the raw event to a bucket it cannot read back and publishes a reference.
+- `web` holds the member's session in an http-only, secure cookie issued by `platform-api`. Paid routes are checked on the server on every request; the browser is never trusted with tier decisions. Requests that change something carry a CSRF token.
 - Rate limits on sign-in, download and search.
+- Queries and email look-ups travel in request bodies, not URLs, so they stay out of request logs.
 
 ## 6. Protecting members' data
 
 | Control | How |
 | --- | --- |
-| Location | Firestore, buckets and BigQuery in Singapore |
+| Location | Firestore, buckets, BigQuery, Pub/Sub message storage, Secret Manager replicas and log buckets are pinned to Singapore. Two services are global and are declared as such in the privacy notice: Identity Platform's sign-in records and the email provider |
 | Encryption | In transit and at rest by default |
-| Least privilege | The table in §3; no human has standing access to production data except the owner |
-| Access logging | Data-access audit logs on Firestore and the library bucket in prod; every admin view of a contact written to the audit log |
+| Least privilege | §3; no human has standing access to production data except the owner |
+| Access logging | Data-access audit logs on Firestore and the library bucket in prod; every admin view of a contact is recorded with a reason; the audit trail is mirrored to a locked log bucket |
 | Break-glass | The owner's direct console access to Firestore is a separate role, granted for a day when needed, and logged |
-| Backups | Firestore point-in-time recovery (7 days) and a daily backup kept 14 days; buckets versioned |
-| Minimisation | Events and logs carry ids only; the log formatter redacts email-shaped text; raw webhook payloads kept 90 days |
-| Deletion | Account deletion removes the member record and links within 30 days; accounting records are kept without the account link |
+| Backups | Firestore point-in-time recovery (7 days) and a daily backup kept 14 days; buckets versioned; a monthly export of members and entitlements to storage the owner controls independently of this project |
+| Minimisation | Events and logs carry ids only; the log formatter redacts email-shaped text; raw webhook payloads are kept 90 days in a restricted bucket; traces carry no prompt or answer text |
+| Deletion and erasure | Account deletion removes the sign-in identity, the member record and its links. Full erasure also removes the person at the source systems, leaves a tombstone so a sync does not re-import them, swaps ids in long-retention tables for random ones, and is replayed after any restore |
 | No trackers | No advertising or behavioural analytics on member pages; page analytics without cookies |
-| Separation | Commerce ids and research ids come from different keys held by different services |
+| Separation | Commerce ids and research ids come from different keys held by different services. Keys are necessary, not sufficient: see [09 §1](09-events-and-data-model.md) |
 
 ## 7. Admin access
 
-One `owner` role in Stage 1, set as a claim on the owner's account by a command, never from the web. `/admin` requires the role and a second factor. Every grant, revoke, replay and data view in admin is written to the audit log with a reason.
+One owner in Stage 1. `platform-api` recognises her from a configured list of account ids **and** a second-factor sign-in; a claim on the session is not enough by itself. `/admin` requires both. Admin and download requests check that the session has not been revoked. Every grant, revoke, replay and data view in admin is recorded with a reason.
 
 ## 8. The public repository
 
-- Private research never enters it: `ops/scripts/check-private-content.sh` runs before every commit and in CI.
-- No real personal data, Stripe ids, provider application ids or subscriber numbers in code, tests or docs. Fixtures use invented people.
+- Private research never enters it: `ops/scripts/check-private-content.sh` runs before every commit and in CI. It checks paths and file types, not wording, so wording is a review responsibility.
+- No real personal data, provider ids, account details, subscriber numbers or prices under discussion in code, tests or docs. Fixtures use invented people.
+- Issues and recorded samples describe outside systems by field names and types, never by real values.
 - CI adds secret scanning (TruffleHog), static analysis (Semgrep) and image scanning (Trivy) in Stage 1.
 - Base images and the model gateway are pinned by digest. Dependency updates arrive as pull requests.
 - Copied code is recorded in `THIRD_PARTY.md` ([ADR 0012](../adr/0012-borrowed-code-provenance.md)).
@@ -125,30 +135,35 @@ One `owner` role in Stage 1, set as a claim on the owner's account by a command,
 
 | Threat | Answer |
 | --- | --- |
-| Someone signs in as a paid member by controlling their email | Sign-in proves control of the mailbox, which is the same assurance Substack itself relies on; second factor for the owner; sign-in alerts for the admin role |
-| Forged webhook grants access | Stripe: signature and timestamp. Payhip: secret path, signature, Stripe cross-check, low value per item |
-| Leaked Substack session cookie | Stored only in Secret Manager; readable by two identities; expiry alarms; cookie can be revoked by signing out of Substack |
-| An agent is tricked by text it reads (a comment, a web page) into acting | Agents cannot act: executors need an approved proposal; agents read comments only as scrubbed themes |
-| Personal data leaks through logs, events or the repo | Id-only events enforced in code; log redaction; guard script; scanners |
+| Someone signs in as a paid member by controlling their email | Sign-in proves control of the mailbox, the same assurance the newsletter itself relies on; second factor for the owner |
+| A member is tricked into linking her account to someone else's | Linking needs a sign-in as the second address and an explicit confirmation that names the requesting account; nothing links from an email click alone or from payment data |
+| Forged webhook grants access | Stripe: signature and timestamp. Payhip: secret path, signature, one-to-one Stripe cross-check, low value per item |
+| A workflow on some branch deploys to production | The prod deployer identity accepts only the protected `production` environment on a version tag, which needs the owner's approval |
+| An agent is steered by text it reads (a comment, a web page) | Readers of outside text have no tools; agents cannot act or approve; executors verify a hash of what the owner approved |
+| Personal data leaks through logs, events, issues or the repository | Id-only events enforced in code; payloads kept off the bus; log redaction; shape-only issues; guard script; scanners |
 | A compromised dependency in the gateway | Digest pinning; signature check; the gateway's identity can only call models |
-| Organisation administrators outside the project | Access granted at the folder; the list of organisation administrators reviewed now; own organisation later |
-| A mistake in a sync mass-downgrades members | Verify-before-expire and the mass-change guard ([02 §4](02-membership-and-entitlements.md)) |
+| A leaked key that derives ids | The key is in Cloud KMS and cannot be exported; use is logged; versions can be rotated |
+| A mistake in a sync mass-downgrades members | Positive evidence before ending anything, verify-before-expire, and the mass-change guard ([02 §4](02-membership-and-entitlements.md)) |
 
-## 10. Before the first invitation goes out
+## 10. Before the first production import
 
-A checklist for the owner, to be confirmed with a professional where marked:
+Importing the subscriber list and the payment records is the moment personal data enters the platform, so the gate is the first import, not the first invitation. A checklist for the owner, to be confirmed with a professional where marked:
 
-- [ ] Privacy notice naming the responsible organisation, purposes, where data is stored, retention, how to withdraw and delete (**confirm**)
-- [ ] Terms of use for the member workspace (**confirm**)
+- [ ] Privacy notice published: who is responsible, purposes, where data is stored, the processors used and where each keeps data, retention, how to withdraw and delete (**confirm**)
+- [ ] Terms of use for the member workspace, including a minimum age (**confirm**)
+- [ ] A short impact assessment for holding payment status and, later, health-related answers (**confirm**)
 - [ ] A named contact for data protection questions
 - [ ] The retention schedule in [09 §6](09-events-and-data-model.md) accepted or adjusted
 - [ ] A one-page incident procedure: who is told, within what time
-- [ ] Position on readers in the EU, UK and US states with health-data laws (**confirm**)
-- [ ] Credit programme terms and operating entity settled (§1)
+- [ ] Position on readers in other jurisdictions with their own data-protection or health-data laws (**confirm**)
+- [ ] Platform emails are transactional only; upgrade invitations go through the newsletter or to members who opted in
+- [ ] Two-step verification switched on for the Google, GitHub, Stripe, Substack, Payhip and DNS accounts
+- [ ] The list of administrators of the Google organisation reviewed
+- [ ] Billing arrangement and operating entity settled (§1)
 - [ ] Backup restore tested once in dev
 
 This list is a working aid, not legal advice.
 
 ## 11. Exit path
 
-Service accounts and permissions are declared in Terraform and map to any cloud's roles. Secrets move to any secret manager. Identity Platform users export with their ids. Nothing depends on the organisation the projects sit in.
+Service accounts and permissions are declared in Terraform and map to any cloud's roles. Secrets move to any secret manager; the KMS keys' role can be taken by any HSM-backed MAC. Identity Platform users export with their ids. Nothing depends on the organisation the projects sit in.

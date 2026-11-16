@@ -77,7 +77,7 @@ A **module** is a unit of responsibility with one owner of its data and one publ
 | M1 | Web platform | Public site, member workspace, admin cockpit | 0, 1 | Real sign-in and tier-aware workspace |
 | M2 | Identity, membership, consent | Members, contacts, entitlements, invites, consent ledger | 1 | Redesigned around an entitlement engine |
 | M3 | Research survey engine | Instruments, sessions, responses | 3 | Unchanged |
-| M4 | Proprietary tests | Ship and Sea, scoring, reports | 3 | Informed by the PMAI and MBTI review |
+| M4 | Proprietary tests | Own type instruments: items, scoring, reports | 3 | Informed by a review of two commercial type instruments |
 | M5 | Research data and de-identification | Zone 2 and Zone 3 datasets, releases | 3, 5 | Designed to be offered as a standalone service later |
 | M6 | Analytics and ML | Psychometrics, pattern search | 5 | Research loop kit borrows from AutoRA |
 | M7 | Evidence graph | Studies, claims, observations, findings | 5, 6 | Five lifecycle labels visible to paid members |
@@ -133,7 +133,7 @@ flowchart LR
   WEB -->|IAM token + member session| API
   STR[Stripe] --> HOOK
   PAY[Payhip] --> HOOK
-  HOOK -->|verified raw event| PS[(Pub/Sub)]
+  HOOK -->|reference to the<br/>stored event| PS[(Pub/Sub)]
   PS -->|push| API
   SCH[Cloud Scheduler] --> JOBS
   API --> FS[(Firestore<br/>Zone 1)]
@@ -149,7 +149,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | `web` | Yes | Pages, sign-in, member workspace, admin screens. The browser talks only to this. | Different language and release rhythm |
 | `platform-api` | No | All business rules: identity, entitlements, commerce, library, content index, admin | One place for rules that must agree with each other |
-| `platform-hooks` | Yes | Receives Stripe and Payhip webhooks, checks the signature, forwards to Pub/Sub. Reads no member data. | The only public entry besides `web`; holds almost no permissions |
+| `platform-hooks` | Yes | Receives Stripe and Payhip webhooks, checks the signature, stores the raw event in a write-only bucket and announces it on Pub/Sub by reference. Reads no member data. | The only public entry besides `web`; holds almost no permissions |
 | Jobs | No | Scheduled work from the same image: `substack-roster-sync`, `reconcile-entitlements`, `stripe-reconcile`, `index-content`, `revenue-export` | Long-running, retried, no request to hold open |
 
 Later stages add: `model-gateway` (Stage 2), agent team services (Stage 2 onwards), `research-api` for Zones 2 and 3 with its own identity (Stage 3). The research service is separate on purpose: the service that knows emails must not be able to read research rows.
@@ -160,8 +160,8 @@ See [ADR 0006](../adr/0006-modular-monolith-for-the-platform-api.md) for why one
 
 Three mechanisms, in order of preference:
 
-1. **Events on the bus** for anything another module only needs to know happened. CloudEvents on Pub/Sub; the list is in [09](09-events-and-data-model.md). Events never carry an email address or a name, only opaque ids.
-2. **A module's public interface** (`public.py`) for a synchronous question inside `platform-api`, for example the library asking "may this member download this item?". Import rules stop a module from reaching into another module's internals.
+1. **A module's public interface** (`public.py`) for anything that must be consistent inside `platform-api`: applying a subscription's state to entitlements, or the library asking "may this member download this item?". Import rules stop a module from reaching into another module's internals.
+2. **Events on the bus** to tell other deployables and later consumers that something happened (notices, reporting, agent teams), and to buffer inbound webhooks. CloudEvents on Pub/Sub; the list is in [09](09-events-and-data-model.md). Events never carry an email address or a name, only opaque ids.
 3. **Ports and adapters** for anything outside the platform: Stripe, Payhip, Substack, the email provider, the embedding model, storage. The module defines the port (a small Python protocol); an adapter implements it. Replacing a vendor is replacing an adapter.
 
 ## 7. Design rules (v4)
@@ -192,4 +192,4 @@ Three mechanisms, in order of preference:
 - **More than 20,000 members or a second developer:** consider splitting `platform-api` along the commerce and library boundary.
 - **Research data collection starts (Stage 3):** `research-api` and Zone 2 come into existence with their own identities; revisit the consent ledger then.
 - **Cloud SQL enters the picture** (only if model budgets or the social scheduler need it): that is the first always-on cost; decide it deliberately.
-- **Leaving the GuideBuoy organisation:** the move is planned in [08](08-security-identities-and-org.md); do it before the first external data-use agreement.
+- **Moving to the platform's own Google Cloud organisation:** the move is planned in [08](08-security-identities-and-org.md); do it before the first external data-use agreement.

@@ -10,7 +10,7 @@ Members must prove control of the email that Substack and Stripe know, with as l
 
 ## Decision
 
-Identity Platform with two methods: an emailed sign-in link and Google. Both yield a verified email. No passwords. The website exchanges the sign-in for an http-only session cookie and is the only caller of `platform-api`; the API verifies the session on each call. The owner's account has a second factor. Entitlements attach only to verified emails.
+Identity Platform with two methods: an emailed sign-in link and Google. Both yield a verified email. No passwords. `platform-api` verifies the sign-in token and issues the http-only session cookie, which the website stores and forwards; the website is the API's only caller and holds no rights to administer identities. The API verifies the session on each call. The owner is recognised from a configured list of account ids plus a second-factor sign-in. Entitlements attach only to verified emails.
 
 ## Options Considered
 

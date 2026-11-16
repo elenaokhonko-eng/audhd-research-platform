@@ -17,7 +17,7 @@
    | **Tool** | Run it in CI or as a developer tool; it is not part of the product. |
 
 3. **Record every Port and Skill** in `THIRD_PARTY.md` at the repository root in the same pull request: source repository, commit, source path, licence, target path, what changed. Keep the source's licence header in the file. This is a build rule ([ADR 0012](../adr/0012-borrowed-code-provenance.md)).
-4. **Licences.** The owner's instruction for now: copy what is useful; licence triage happens if and when a part is open-sourced. The licence column is therefore information, not a gate, with one exception: inside the three **extractable packages** (`packages/substack-desk`, `packages/research-loop`, `packages/consent-deid`) mark any file derived from a source that is unlicensed, non-commercial or copyleft with a first-line comment `# PROVENANCE: <repo> <licence>: rewrite before release`, so the triage is a search, not an audit.
+4. **Licences.** Port code only from sources whose licence permits it (MIT, Apache-2.0, BSD and similar), keeping the notice. From unlicensed, non-commercial or copyleft sources take the idea only: this repository is public, so copying is distribution. The licence column says which is which. Inside the three **extractable packages** (`packages/substack-desk`, `packages/research-loop`, `packages/consent-deid`), if a file's origin needs a second look before release, give it a first-line comment `# PROVENANCE: <repo> <licence>: review before release`.
 5. **Sources live in the owner's forks** at `github.com/elenaokhonko-eng/<repo>` unless a full name is given. Pin the commit you read.
 6. **Never port a credential, a real endpoint response containing personal data, or an API key found in a source repository.**
 
@@ -50,7 +50,7 @@ legacy/crewai-prototype/          the earlier prototype, kept for reference
 | Desk package skeleton: one service layer, recorded samples, behaviour tests | `substack-gateway-oss` | Port | `pyproject.toml` layout; `packages/gateway_core/` (`client/base.py`, `auth.py`, `substack.py`); `packages/gateway_oss/samples/` and the feature tests as the model for `contracts/` | `packages/substack-desk/src/substack_desk/core/`, `contracts/` | MIT |
 | Polite client: rate limit, retry, classifying failures (including "schema drift") | `substack-cli-ts` | Port (TypeScript to Python) | `src/substack-api/rate-limit.ts`, `retry.ts`, `mutation-outcome.ts` | `substack_desk/core/ratelimit.py`, `retry.py`, `outcome.py` | Apache-2.0 |
 | Subscriber look-up through the official Publisher API | `dkships/substack-publisher-mcp` (not a fork; found in research) | Pattern | Endpoint list and response fields; verify against the owner's own dashboard first | `substack_desk/subscribers/publisher_api.py` | Check before reading closely |
-| Subscriber roster through private endpoints | `substack-mcp` | Port (JavaScript to Python) | `src/api/substack/SubstackApi.js`, `SubscriberQuery.js`, `csv.js` | `substack_desk/subscribers/private_api.py`; ships switched off | MIT |
+| Subscriber CSV parsing | `substack-mcp` | Port (JavaScript to Python) | `src/api/substack/csv.js` | `substack_desk/subscribers/csv_import.py` | MIT |
 | Keyword ranking | `rank-bm25` | Dependency | – | `platform_api/content/search.py` | Apache-2.0 |
 | PDF text | `pypdf` | Dependency | – | `platform_api/content/sources/library.py` | BSD |
 | Passage quality metrics for tuning the splitter | `adaptive-chunking` | Port | `src/adaptive_chunking/metrics.py` | `platform_api/content/chunking_metrics.py` (dev-only use) | MIT |
@@ -75,6 +75,7 @@ Nothing is borrowed for the entitlement engine, the webhook pipeline or the Payh
 | Reviewer loops and rubrics | `deepagents`, `elephant-goldfish-model`, `gstack`, `mini-harness` | Port (prompts), Pattern (code) | `middleware/subagents.py`, `rubric.py`; review-loop standards; review and QA prompts; goal mode with a fresh-context reviewer | `agents/shared/review/` | MIT, Apache-2.0, MIT, MIT |
 | Writing checks | `humanizer`, `no-ai-slop` | Skill | `SKILL.md`, `scripts/validate-package.py`; `skills/no-ai-slop/SKILL.md`, `eval.md` as the regression set | `agents/shared/writing-checks/` | MIT |
 | Prompt regression tests; answer-with-sources quality | `promptfoo`, `ragas` | Dependency | Test suites in CI | `agents/**/evals/` | MIT, Apache-2.0 |
+| Subscriber roster through private endpoints (optional, off by default) | `substack-mcp` | Port (JavaScript to Python) | `src/api/substack/SubstackApi.js`, `SubscriberQuery.js` | `substack_desk/subscribers/private_api.py` | MIT |
 | Drafts, publish, schedule, images | `python-substack` (the owner's fork) | Port | `substack/api.py`, `post.py`, `mdrender.py`, `nodes.py`, `mdexport.py` | `substack_desk/posts/` | MIT |
 | Markdown conversion, tables and covers as images, overwrite guard | `substack-cli-publishing` | Port | **Read `docs/api-notes.md` first.** `substack_cli/md2pm.py`, `pm2md.py`, `tables.py`, `covers.py`, `posts.py` (audit guard) | `substack_desk/posts/` | MIT |
 | Audience flag and paywall node | `substack-mcp` | Port | `src/api/substack/document.js`, `src/tools/update_draft.js` | `substack_desk/posts/paywall.py` | MIT |
@@ -145,7 +146,7 @@ Nothing is borrowed for the entitlement engine, the webhook pipeline or the Payh
 | firecrawl, wigolo (self-hosted) | AGPL services; crawl4ai covers the need |
 | Cloud SQL for the gateway | Only if the Stage 2 spike shows the caps cannot be enforced without it |
 | `substack-cli-ts` advanced endpoints | Mostly guesses; only its client utilities are taken |
-| `substack-blog-automation` | Never calls Substack; contains what looks like a live API key (the owner will tell its author) |
+| `substack-blog-automation` | Never calls Substack; nothing to take |
 | `PageLM`, `mirror`, `GenAI_Agents`, Rust `substack-cli` | Non-commercial, layered or missing licences; nothing needed from them |
 
 ## `THIRD_PARTY.md` entry format

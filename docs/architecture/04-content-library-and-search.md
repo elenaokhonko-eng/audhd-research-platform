@@ -39,7 +39,7 @@ access: paid                         # paid | free_members | purchase_only
 file: example-evidence-map-v1.0.pdf
 cover: cover.png
 payhip: { url: "https://payhip.com/b/XXXX", product_key: "XXXX" }
-price_display: "US$9"
+price_display: "US$X"
 citation: "Author (Year). Title. audhdneurobiology.org."
 related_urls: []
 status: published                    # draft | published | retired
@@ -108,9 +108,9 @@ flowchart LR
 
 **Indexing.** The job reads each source through a `ContentSource` adapter, skips anything whose checksum has not changed, splits text into passages of roughly 200 to 400 tokens along headings, and turns each passage into a vector with the embedding model behind the `Embedder` port. It writes metadata to Firestore and one snapshot (passages, vectors, manifest) to a bucket, then moves the "current" pointer and announces `content.index.published`. It runs when something is published and once a night.
 
-**Searching.** `platform-api` keeps the current snapshot in memory. A query is scored two ways: by words (BM25) and by meaning (vector similarity); the two rankings are merged by reciprocal rank fusion, grouped by item, and filtered by access. This needs no search server and no database, which is why it costs nothing while idle. See [ADR 0018](../adr/0018-search-index.md).
+**Searching.** `platform-api` keeps the current snapshot in memory. Passages the reader may not open are set aside first. The rest are scored two ways, by words (BM25) and by meaning (vector similarity); the two rankings are merged by reciprocal rank fusion and grouped by item. This needs no search server and no database, which is why it costs nothing while idle. See [ADR 0018](../adr/0018-search-index.md).
 
-**Access-aware results.** Every passage is marked `public` (abstracts, public pages, free posts) or `gated` (full text of paid items). Gated passages take part in ranking and snippets only for a reader who may open that item. Everyone else still finds the item through its abstract and sees a label: *Paid members* or *Buy*. A free reader never receives a sentence of gated text, including in snippets.
+**Access-aware results.** Every passage is marked `public` (abstracts, public pages, free posts) or `gated` (full text of paid items). Gated passages take part in ranking and snippets only for a reader who may open that item, so gated text can neither appear in a snippet nor influence the order for anyone else. Everyone else still finds the item through its abstract and sees a label: *Paid members* or *Buy*. A free reader never receives a sentence of gated text, including in snippets.
 
 **Filters.** Type, topic, series, evidence status, language, date.
 
@@ -120,7 +120,7 @@ flowchart LR
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /v1/search?q=&type=&topic=&status=&page=` | Results for the calling member or guest |
+| `POST /v1/search` (query and filters in the body) | Results for the calling member or guest. The query stays out of request logs: what a member searches for is health-related. |
 | `GET /v1/library/items`, `GET /v1/library/items/{sku}` | Catalogue and one item, with the caller's access decision |
 | `POST /v1/library/items/{sku}/download` | Signed link, after the entitlement check |
 | `GET /v1/me/library` | Purchases and recently opened |
@@ -129,7 +129,7 @@ flowchart LR
 
 Ask is search plus a written answer with citations, for paid members, with a monthly quota. It reuses this index unchanged: retrieve the passages the member may open, pass them to a model through the model gateway, return an answer where every sentence points to a source, and refuse when the passages do not support an answer. It is switched on in Stage 2, when the gateway exists, and gains the evidence graph in Stage 6. The quota is one number in `config/platform/tiers.yaml`.
 
-Rules for Ask from day one: answers are built only from indexed content; no diagnosis and no treatment advice; exploratory observations are labelled as such ([07](07-research-loop-and-evidence.md)); every answer is logged with its sources for review.
+Rules for Ask from day one: answers are built only from indexed content; no diagnosis and no treatment advice; exploratory observations are labelled as such ([07](07-research-loop-and-evidence.md)); each question and answer is kept with its sources in Zone 1 for 90 days for review, and never in traces or analytics.
 
 ## 5. For search engines and AI answer engines
 

@@ -47,7 +47,7 @@ One private service that every model call passes through. No agent holds a provi
 
 | Need | Tool | Cost |
 | --- | --- | --- |
-| Step-by-step trace of a run | Genkit's built-in telemetry and OpenTelemetry into Cloud Trace and Cloud Logging | Free at this volume |
+| Step-by-step trace of a run | Genkit's built-in telemetry and OpenTelemetry into Cloud Trace and Cloud Logging. Traces record steps, timing and sizes, not the text of prompts or answers. | Free at this volume |
 | Spend by team, task, model | BigQuery `ops_ai.calls` | Free tier |
 | Quality checks on prompts before a change ships | promptfoo test suites in CI | Free |
 | Answer-with-sources quality for Ask | ragas metrics on a fixed question set, run on change | Tokens only |
@@ -56,7 +56,7 @@ Langfuse is not self-hosted: it needs two databases, a cache, a worker and objec
 
 ### 1.3 Approval kit
 
-Every public or irreversible action is a **proposal**: what, why, expected effect, exact content. It waits in the cockpit. The owner approves, edits or declines; the decision and the final content are recorded; only then does the executing adapter run. Agents have no path around it: the service accounts that publish, post, send or change prices belong to the executors, not to the agents.
+Every public or irreversible action is a **proposal**: what, why, expected effect, exact content. It waits in the cockpit. The owner approves, edits or declines; the decision and the final content are recorded; only then does the executing adapter run. Agents have no path around it: the permissions to publish, post, send or change prices belong to executor jobs of the platform, not to agents, and an executor acts only on an approval that `platform-api` recorded from the owner's signed-in action, checking a hash of the approved content first.
 
 ### 1.4 Voice profile
 
@@ -131,10 +131,11 @@ The ops team works through pull requests. It cannot deploy to production or merg
 
 1. Models are reached only through the gateway, naming team and task.
 2. No personal data in a prompt unless the task is about that one person and runs inside Zone 1 (for example, drafting a reply to a member). Research rows and comment text with identity never enter a prompt.
-3. Public or irreversible output is a proposal until approved.
-4. Every claim about health in public text carries a source from the index or the graph, or it does not pass review.
-5. Each team has its own identity and can read only what its table in [08](08-security-identities-and-org.md) lists.
-6. Prompts are files, versioned, changed by pull request, tested in CI.
+3. An agent that reads text written by outsiders (comments, web pages, feeds, issues) has no tools and no network access beyond the gateway. Its output is data for the next step, never instructions. The fixer acts on the platform's own check results, not on issue text written by others.
+4. Public or irreversible output is a proposal until approved.
+5. Every claim about health in public text carries a source from the index or the graph, or it does not pass review.
+6. Each team has its own identity, reaches data only through `platform-api`, and sees only what [08](08-security-identities-and-org.md) lists for it.
+7. Prompts are files, versioned, changed by pull request, tested in CI.
 
 ## 4. Cost
 

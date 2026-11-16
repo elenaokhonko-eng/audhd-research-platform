@@ -22,7 +22,9 @@
 - `platform-hooks` is public through `invoker_iam_disabled = true`; never bind `allUsers` (organisation policy forbids it, ADR 0005).
 - Cloud Run minimum instances: 0.
 - Feature modules (`identity`, `entitlements`, `commerce`, `library`, `content`, `admin`) import each other only through `<module>.public`. `shared` imports no feature module.
-- Commits: author `Elena Okhonko <elenaokhonko-eng@users.noreply.github.com>`; never commit `terraform.tfvars`.
+- Importing `platform_api.main` must not need cloud credentials: cloud clients are created on first use, not at import.
+- Cloud Run checks the caller's identity token for private services and strips its signature before the request reaches the container. Code therefore reads claims from the token and never re-verifies the signature.
+- Commits are authored as the owner's GitHub noreply identity (set in the session); never commit `terraform.tfvars`.
 - The agent never runs `terraform apply`, never deploys to prod and never merges its own pull request.
 
 ## Review Focus
@@ -31,7 +33,7 @@
 2. **A handler that fails**: the request returns 500 and the event is *not* recorded, so the retry runs the handler again. Pinned in Task 4.
 3. **An email hidden deep in an event payload** (inside a list inside a dict): rejected before publishing. Pinned in Task 2.
 4. **A valid Google token from the wrong service account** calling the push endpoint: 403. Pinned in Task 4.
-5. **The public hooks service exposing internal routes**: in `hooks` mode `/v1/*` and `/internal/*` return 404. Pinned in Task 1.
+5. **The public hooks service exposing internal routes**: in `hooks` mode `/v1/*` and `/internal/*` return 404, even when push dependencies are supplied. Pinned in Tasks 1 and 4.
 
 ---
 
@@ -53,7 +55,7 @@ services/platform-api/
 │  │  ├─ bus.py                    EventBus, InMemoryBus, PubSubBus
 │  │  ├─ inbox.py                  Inbox, InMemoryInbox, FirestoreInbox
 │  │  ├─ handlers.py               HandlerRegistry
-│  │  ├─ auth.py                   verify_push_token, PushIdentity
+│  │  ├─ auth.py                   push_identity_from_token, PushIdentity
 │  │  └─ pubsub_push.py            build_push_router
 │  ├─ identity/ entitlements/ commerce/ library/ content/ admin/
 │  │  └─ __init__.py, public.py    empty for now
@@ -147,7 +149,7 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'platform_api'`
 
 - [ ] **Step 3: Write `pyproject.toml`**
 
-Project name `platform-api`, `requires-python = ">=3.12,<3.13"`, src layout, script `platform-cli = "platform_api.cli:main"`. Runtime dependencies: `fastapi`, `uvicorn[standard]`, `pydantic>=2`, `pydantic-settings`, `google-cloud-firestore`, `google-cloud-pubsub`, `google-auth`, `requests`. Dev group: `pytest`, `httpx`, `ruff`, `mypy`, `import-linter`. Configure ruff (line length 100, rules `E,F,I,UP,B,S`), mypy `strict = true` for `platform_api`, pytest marker `integration`.
+Project name `platform-api`, `requires-python = ">=3.12,<3.13"`, src layout, script `platform-cli = "platform_api.cli:main"`. Runtime dependencies: `fastapi`, `uvicorn[standard]`, `pydantic>=2`, `pydantic-settings`, `google-cloud-firestore`, `google-cloud-pubsub`, `google-auth`, `requests`. Dev group: `pytest`, `httpx`, `ruff`, `mypy`, `import-linter`. Configure ruff (line length 100, rules `E,F,I,UP,B,S`, with per-file ignores `S101` and `E501` for `tests/**`), mypy `strict = true` for `platform_api`, pytest marker `integration`. Format with `ruff format` and let `ruff check --fix` order imports before committing; the test code in this plan is written for readability, not to the formatter's line breaks. Run `uv lock` and commit `uv.lock`; the image build installs from it.
 
 - [ ] **Step 4: Implement `Settings`, `create_app` and `shared/logging.py`**
 
@@ -243,7 +245,7 @@ The email check walks `subject` and every string inside `data` (dict values, lis
 - [ ] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_events.py -v`
-Expected: 7 passed
+Expected: 6 passed
 
 - [ ] **Step 5: Commit**
 
@@ -387,14 +389,14 @@ git commit -m "platform-api: event bus port and idempotency inbox"
   - `class HandlerRegistry`: `register(self, type_suffix: str, handler: Handler) -> None`; `handlers_for(self, event_type: str) -> list[Handler]`
   - `@dataclass(frozen=True) class PushIdentity`: `email: str`
   - `class NotAuthorised(Exception)`
-  - `verify_push_token(token: str, *, audience: str, allowed_email: str) -> PushIdentity` using `google.oauth2.id_token.verify_oauth2_token`; raises `NotAuthorised` if the token is invalid, the email is unverified, or the email differs from `allowed_email`
+  - `push_identity_from_token(token: str, *, allowed_email: str) -> PushIdentity`: decodes the token's claims **without verifying the signature** (Cloud Run has already verified it and removed the signature; see Global Constraints) and raises `NotAuthorised("invalid")` if the token cannot be decoded or has no verified email, `NotAuthorised("wrong_identity")` if the email differs from `allowed_email`. The docstring must say why skipping verification is safe here and only here: the service is deployed with Cloud Run IAM required, which Terraform enforces.
   - `build_push_router(*, inbox: Inbox, registry: HandlerRegistry, verify: Callable[[str], PushIdentity]) -> APIRouter` serving `POST /internal/pubsub/platform-events`
 
 Response rules for the endpoint:
 
 | Situation | Status |
 | --- | --- |
-| No bearer token, or `verify` raises `NotAuthorised` because the token is invalid | 401 |
+| No bearer token, or `verify` raises `NotAuthorised("invalid")` | 401 |
 | Token valid but for another service account | 403 |
 | Body is not a Pub/Sub push envelope, or the message is not a valid `DomainEvent` | 204, logged as an error (it can never succeed, so it must not be retried) |
 | Event id already in the inbox | 204, no handler called |
@@ -495,6 +497,12 @@ def test_unknown_type_is_recorded_and_acknowledged(setup):
 def test_malformed_messages_are_acknowledged_not_retried(setup, body):
     c, *_ = setup
     assert c.post(URL, json=body, headers=GOOD).status_code == 204
+
+
+def test_hooks_mode_never_mounts_the_receiver_even_with_dependencies():
+    deps = Deps(bus=None, inbox=InMemoryInbox(), registry=HandlerRegistry(), verify_push=verify)
+    c = TestClient(create_app(Settings(app_mode="hooks"), deps))
+    assert c.post(URL, json={}, headers=GOOD).status_code == 404
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -504,12 +512,12 @@ Expected: FAIL, `ImportError`
 
 - [ ] **Step 3: Implement `handlers.py`, `auth.py`, `pubsub_push.py`; mount the router in `create_app`**
 
-In `main.py`, production wiring builds `Deps` with `PubSubBus`, `FirestoreInbox` and `verify=lambda t: verify_push_token(t, audience=settings.push_audience, allowed_email=settings.push_service_account)`. Order inside the endpoint: authenticate, decode, `inbox.seen`, run handlers, `inbox.record`.
+In `main.py`, production wiring builds `Deps` lazily (clients are created on first use, so importing the module needs no credentials) with `PubSubBus`, `FirestoreInbox` and `verify=lambda t: push_identity_from_token(t, allowed_email=settings.push_service_account)`. Order inside the endpoint: authenticate, decode, `inbox.seen`, run handlers, `inbox.record`. The inbox is a shortcut: handlers added in later slices must themselves be safe to run twice, because one failing handler makes Pub/Sub redeliver the event to all of them.
 
 - [ ] **Step 4: Run all tests**
 
 Run: `uv run pytest -v -m "not integration"`
-Expected: all pass (20 tests)
+Expected: all pass (22 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -553,13 +561,14 @@ def test_skeleton_respects_boundaries():
 
 
 def test_reaching_into_another_module_fails_the_lint():
-    (ROOT / "src/platform_api/entitlements/models.py").touch()
-    PROBE.write_text("from platform_api.entitlements import models  # noqa: F401\n")
+    target = ROOT / "src/platform_api/entitlements/_probe_internal.py"   # never a real file
+    target.touch()
+    PROBE.write_text("from platform_api.entitlements import _probe_internal  # noqa: F401\n")
     try:
         assert lint() != 0
     finally:
         PROBE.unlink()
-        (ROOT / "src/platform_api/entitlements/models.py").unlink()
+        target.unlink()
 
 
 def test_public_interface_is_allowed():
@@ -635,7 +644,7 @@ Triggers: pull requests and pushes to `main` touching `services/platform-api/**`
 
 | Job | When | Does |
 | --- | --- | --- |
-| `test` | always | `uv sync`, `ruff check`, `mypy src`, `lint-imports`, `pytest -m "not integration"`; then `pytest -m integration` with the Firestore emulator as a service container (`gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators`, command `gcloud emulators firestore start --host-port=0.0.0.0:8085`, env `FIRESTORE_EMULATOR_HOST=localhost:8085`) |
+| `test` | always | `uv sync`, `ruff check`, `mypy src`, `lint-imports`, `pytest -m "not integration"`; then start the Firestore emulator in a step (GitHub service containers cannot take a command, so use `docker run -d -p 8085:8085 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators gcloud emulators firestore start --host-port=0.0.0.0:8085`, wait until port 8085 answers) and run `pytest -m integration` with `FIRESTORE_EMULATOR_HOST=localhost:8085` |
 | `deploy-dev` | push to `main`, after `test` | GitHub environment `dev`; authenticate with Workload Identity Federation; build and push the image; `gcloud run deploy platform-api` and `platform-hooks` with `--image`; `gcloud run jobs update platform-selfcheck --image` |
 | `deploy-prod` | tag `v*`, after `test` | GitHub environment `production`; same steps against prod |
 
@@ -673,14 +682,16 @@ Resources per environment:
 | --- | --- |
 | Service accounts | `platform-api`, `platform-hooks`, `job-selfcheck`, `pubsub-push` (each later job gets its own account in the slice that adds it) |
 | Pub/Sub topics | `platform.events`, `platform.events.dlq`, `inbound.webhooks`, `inbound.webhooks.dlq` |
-| Push subscriptions | `platform-events-to-api` → `<api url>/internal/pubsub/platform-events`; OIDC as `pubsub-push`; dead-letter after 5 attempts; retry back-off 10 s to 600 s; message retention 7 days. (`inbound-webhooks-to-api` is added in S1.3.) |
+| Push subscriptions | `platform-events-to-api` → `<api url>/internal/pubsub/platform-events`; OIDC as `pubsub-push`; acknowledgement deadline 60 s; dead-letter after 5 attempts; retry back-off 10 s to 600 s; message retention 7 days. (`inbound-webhooks-to-api`, its own receiver route and the raw-event bucket are added in S1.3.) |
+| Dead-letter handling | One pull subscription per dead-letter topic (`platform-events-dlq-hold`, `inbound-webhooks-dlq-hold`, retention 7 days) so nothing is discarded, and one alert policy per subscription on any undelivered message, notifying `alert_email` |
+| Workload identity | Dev: provider restricted to this repository. Prod: the existing provider additionally maps `attribute.environment` and `attribute.ref`, and the prod `github-deployer` can be impersonated only when `attribute.environment == "production"` and the ref starts with `refs/tags/v` |
 | Firestore | Database `(default)`, native mode, `asia-southeast1`, point-in-time recovery on; delete protection on in prod |
 | Cloud Run services | `platform-api` (private; invokers `pubsub-push`, `web-runtime`; env `PLATFORM_APP_MODE=api`, `PLATFORM_ENV`, `PLATFORM_GCP_PROJECT`, `PLATFORM_PUSH_AUDIENCE`, `PLATFORM_PUSH_SERVICE_ACCOUNT`), `platform-hooks` (public; `PLATFORM_APP_MODE=hooks`) |
 | Cloud Run job | `platform-selfcheck` running `platform-cli job selfcheck` as `job-selfcheck` |
 | IAM | `platform-api`: `roles/datastore.user`, publisher on `platform.events`. `platform-hooks`: publisher on `inbound.webhooks` only. `job-selfcheck`: publisher on `platform.events` only. Pub/Sub service agent: publisher on both dead-letter topics, subscriber on the subscription. `github-deployer`: `roles/run.developer`, registry writer, `roles/iam.serviceAccountUser` on the three runtime accounts |
 | Audit | Data access logs (`DATA_READ`, `DATA_WRITE`) for `datastore.googleapis.com` in prod |
 
-The dev root also contains: enabled APIs, the Artifact Registry repository `platform`, the Workload Identity pool `github` and provider `github-oidc` restricted to this repository, `web-runtime` and `github-deployer` service accounts, and `module "web_dev"` with its domain mapping for `dev.<domain>`. Task 8 removes those two from prod.
+The dev root also contains: enabled APIs, the Artifact Registry repository `platform`, the Workload Identity pool `github` and provider `github-oidc` restricted to this repository, `web-runtime` and `github-deployer` service accounts, and `module "web_dev"` with its domain mapping and DNS record for `dev.<domain>`. Task 8 removes those from prod, and prod is applied **before** dev so the two roots never both claim the `dev` host.
 
 - [ ] **Step 1: Move the prod root without changing state**
 
@@ -719,8 +730,8 @@ git commit -m "infra: one Terraform root per environment; platform services, bus
 - Modify: `infra/terraform/envs/prod/main.tf` and `domain.tf` (remove `module.web_dev` and the `dev` domain mapping), `.github/workflows/web.yml` (use GitHub environments `dev` and `production` with environment-scoped variables)
 
 **Interfaces:**
-- `20-stage1-foundations.sh` is safe to re-run and does, in order: (1) create the folder `audhd-neurobiology` under the organisation if absent and move the prod project into it after an explicit `y/N` prompt; (2) create `audhd-neurobiology-dev` in the folder and link billing; (3) create `gs://audhd-neurobiology-dev-tfstate` with versioning and public-access prevention; (4) `terraform init` and `terraform apply` in `envs/dev`, showing the plan and the real prompt (no `| tail`); (5) build and push the first `platform-api` image to the dev registry and deploy both services and the job; (6) create GitHub environments `dev` and `production` and set the environment variables with `gh variable set --env`; (7) print the next step: apply `envs/prod`.
-- `smoke-platform.sh <project>` does: (a) `curl` `platform-api` `/health` with an identity token, expect `"mode":"api"`; (b) `curl` `platform-hooks` `/health` with no token, expect `"mode":"hooks"`, and `/v1/ping`, expect 404; (c) `gcloud run jobs execute platform-selfcheck --wait`, read the event id from the job's last log line; (d) poll the Firestore REST API for `inbox/<event id>` for up to 60 seconds; (e) print `SMOKE PASSED` or the first failing step and exit non-zero.
+- `20-stage1-foundations.sh` is safe to re-run and does, in order: (1) create the folder `audhd-neurobiology` under the organisation if absent and move the prod project into it after an explicit `y/N` prompt; (2) create `audhd-neurobiology-dev` in the folder and link billing; (3) create `gs://audhd-neurobiology-dev-tfstate` with versioning and public-access prevention; (4) `terraform init` and `terraform apply` in `envs/prod` first, showing the plan and the real prompt (no `| tail`): this removes `web-dev` and the `dev` host from prod and adds the platform resources; (5) the same in `envs/dev`, which creates the dev services and takes over the `dev` host; (6) build and push the first `platform-api` image to each registry and deploy both services and the job; (7) create GitHub environments `dev` and `production` and set `GCP_PROJECT_ID`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOYER_SA`, `RUNTIME_SA` and `REGISTRY` in each with `gh variable set --env`; (8) remind the owner to add herself as required reviewer on the `production` environment. Both applies need `TF_VAR_cloudflare_api_token`. `dev.<domain>` is unavailable between steps 4 and 5 and while its certificate is issued.
+- `smoke-platform.sh <project>` does: (a) `curl` `platform-api` `/health` with an identity token, expect `"mode":"api"`; (b) `curl` `platform-hooks` `/health` with no token, expect `"mode":"hooks"`, and `/v1/ping`, expect 404; (c) `gcloud run jobs execute platform-selfcheck --wait`, read the event id from the job's last log line; (d) poll the Firestore REST API for `inbox/<event id>` for up to 60 seconds; (e) publish the same event a second time with `gcloud pubsub topics publish` and check in the service's logs that the second delivery was acknowledged as a duplicate and no handler ran; (f) print `SMOKE PASSED` or the first failing step and exit non-zero.
 
 - [ ] **Step 1: Write the two scripts**
 
@@ -737,7 +748,7 @@ Remove `module "web_dev"` and the `dev` host from the prod root. In `web.yml`, g
 
 - [ ] **Step 4: Write the runbook**
 
-`docs/runbooks/stage-1-foundations.md`: what the script will create and what it costs (nothing while idle); the exact commands for Cloud Shell; what each prompt means; how to run the smoke test; how to undo (delete the dev project). State plainly that applying `envs/prod` destroys the old `web-dev` service in the prod project and that `dev.<domain>` is served from the dev project afterwards, with a few minutes of certificate provisioning.
+`docs/runbooks/stage-1-foundations.md`: what the script will create and what it costs (nothing while idle); the exact commands for Cloud Shell; what each prompt means; how to run the smoke test; how to undo (delete the dev project). State plainly that applying `envs/prod` destroys the old `web-dev` service in the prod project, that `dev.<domain>` is served from the dev project afterwards with a gap while its certificate is issued, and that production deploys from now on need the owner's approval in the `production` environment.
 
 - [ ] **Step 5: Commit and open the pull request**
 
@@ -750,7 +761,7 @@ Open the pull request. **Stop here.** Applying Terraform and running the scripts
 - [ ] **Step 6 (owner, in Cloud Shell): apply and smoke-test**
 
 Run: `bash ops/scripts/20-stage1-foundations.sh` then `bash ops/scripts/smoke-platform.sh audhd-neurobiology-dev`
-Expected: `SMOKE PASSED`. Then `cd infra/terraform/envs/prod && terraform plan`: the plan adds the platform resources, removes `web-dev` and its domain mapping, and changes nothing else.
+Expected: `SMOKE PASSED` for the dev project, and `terraform plan` reports no changes in both roots afterwards. This step also proves on the real platform that the push receiver accepts Pub/Sub's token after Cloud Run has stripped its signature.
 
 ---
 

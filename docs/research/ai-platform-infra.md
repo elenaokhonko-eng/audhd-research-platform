@@ -3,7 +3,7 @@
 Research date: 2026-11-16. Prices are USD list prices from the page and date named beside them.
 Marks: [unverified] = stated from model knowledge or a secondary source, page not opened in this session. [inference] = my own reasoning or arithmetic from opened pages.
 
-Method limit to read first. The shared web-search budget for this turn ran out after item 6. Items 7 and 8 could not be searched, and direct fetches of Google's Resource Manager, IAM, Cloud Run identity and Google for Startups pages were refused by the fetch permission system. Those two sections are therefore written from model knowledge and marked [unverified]. The blocked URLs are listed at the end so they can be opened by hand.
+Method limit to read first. The shared web-search budget for this turn ran out after item 6. Items 7 and 8 could not be searched, and direct fetches of Google's Resource Manager, IAM, Cloud Run identity and credit-programme pages were refused by the fetch permission system. Those two sections are therefore written from model knowledge and marked [unverified]. The blocked URLs are listed at the end so they can be opened by hand.
 
 ## Decision table
 
@@ -15,7 +15,7 @@ Method limit to read first. The shared web-search budget for this turn ran out a
 | 4. Instagram and Threads posting | Call Meta's official APIs directly from a small Cloud Run job, own Meta app, Standard Access, own accounts only | 0 beyond existing Cloud Run | 60-day tokens must be refreshed. Instagram images must be JPEG at a public URL. Postiz self-hosted needs Postgres, Redis and Temporal on an always-on VM |
 | 5. Her own voice model | Prompt plus retrieval on Gemini Flash now; Gemini Flash supervised tuning as the next step | About 2 to 7; tuning adds a one-off 5 to 30 | LoRA on Cloud Run GPU costs about 3 to 90 a month depending on how requests are batched, plus her time |
 | 6. Vector search, 5,000 chunks | Firestore `findNearest` on the existing database | 0 | Flat index only, 2,048 dimensions maximum, 1,000 results maximum |
-| 7. Organisation and credits | One organisation, a folder per venture, separate projects; keep the credit-bearing billing account for the startup's own product until the programme terms are read | 0 | Organisations cannot nest. Programme terms were not retrievable in this session |
+| 7. Organisation | One organisation, a folder per venture, separate projects; confirm the billing arrangement before linking unrelated projects | 0 | Organisations cannot nest. Programme terms were not retrievable in this session |
 | 8. Agent credentials | One service account per Cloud Run service, per-secret IAM bindings in Secret Manager, Workload Identity Federation for CI | About 0 to 1 | Third-party tokens (Stripe, Meta, Substack cookie) need her own rotation jobs. A Substack cookie cannot be scoped |
 
 ## 1. LiteLLM proxy on Cloud Run
@@ -100,7 +100,7 @@ Plain Postgres on a small VM.
 
 Can BigQuery or Firestore substitute. Not for LiteLLM (Postgres only, see item 1). Not for Postiz either, which needs PostgreSQL 14 or later through Prisma (item 4). For the search index, yes: Firestore vector search removes the need for pgvector (item 6).
 
-Recommendation. If nothing else needs Postgres, do not create one: run LiteLLM from a config file and keep search in Firestore. If virtual keys and budgets are wanted, one db-f1-micro at about 13 to 14 a month is the cheapest managed choice, and it is paid from credits.
+Recommendation. If nothing else needs Postgres, do not create one: run LiteLLM from a config file and keep search in Firestore. If virtual keys and budgets are wanted, one db-f1-micro at about 13 to 14 a month is the cheapest managed choice.
 
 ## 3. LLM observability without a paid SaaS
 
@@ -240,7 +240,7 @@ pgvector [unverified]. Cloud SQL for PostgreSQL supports the `vector` extension.
 
 One-line recommendation. Use Firestore `findNearest` with 768-dimension embeddings: it is already in the stack, needs no new service and is free at this size. Choose pgvector only if the shared Postgres exists anyway and she wants SQL joins or keyword-plus-vector search in one query.
 
-## 7. Resource hierarchy, project migration and credits
+## 7. Resource hierarchy and project migration
 
 Everything in this section is [unverified]: no page could be opened (see Method limit). It reflects Google's documentation as known to the model up to mid-2026.
 
@@ -258,11 +258,7 @@ Migrating projects between organisations later.
 
 Changing a project's billing account. She needs Billing Account User (`roles/billing.user`) on the target billing account and Project Billing Manager (`roles/billing.projectManager`) or Owner on the project. The change is in Billing, Account management, Change billing. Services keep running. Usage before the change stays on the old account, and credits do not move with the project.
 
-Google for Startups Cloud Program credits.
-- Credits are granted to one Cloud Billing account named in the application, and they apply automatically to eligible usage of any project linked to that account.
-- Programme terms: not findable in this session, so no quotation is given. From memory, the terms tie credits to the approved startup's own use, make them non-transferable and non-resellable, exclude uses such as cryptocurrency mining, and set an expiry.
-- Practical reading [inference]: linking an unrelated project to the startup's billing account would spend the credits technically, but whether that is allowed depends on wording that was not opened. If the platform is a product of the same company, it is the company's own use. If it belongs to her personally or to a second entity, read the terms or ask the programme team before linking it.
-- Pages to open by hand: https://cloud.google.com/startup and the programme terms and FAQ linked from it.
+Credit programmes. Whether a credit programme's terms allow a given project is a question for the programme; no terms were reviewed here.
 
 Cloud Identity Free for a second domain.
 - Cloud Identity Free costs nothing and has a default limit of 50 users, which can be raised on request.
@@ -309,4 +305,4 @@ Failed at the site:
 - https://cloud.google.com/blog/products/serverless/cloud-run-gpus-are-now-generally-available (blog error page; cold-start figure taken from the GPU docs and from https://www.infoq.com/news/2025/06/google-cloud-run-nvidia-gpu, which reports "under 5 seconds")
 - https://developers.facebook.com/documentation/instagram-platform/content-publishing.md (the `/docs/` version of the same page was opened)
 
-Never searched, because the search budget ran out: Google for Startups Cloud Program terms, Cloud Identity Free, Workload Identity Federation, Secret Manager rotation and pricing, IAM agent identity, BigQuery vector search, Firestore pricing for vector queries, AlloyDB Omni licensing, the LiteLLM LICENSE file, LiteLLM's own October 2026 incident report, the Unsloth Studio licence, and Compute Engine pricing in asia-southeast1.
+Never searched, because the search budget ran out: credit programme terms, Cloud Identity Free, Workload Identity Federation, Secret Manager rotation and pricing, IAM agent identity, BigQuery vector search, Firestore pricing for vector queries, AlloyDB Omni licensing, the LiteLLM LICENSE file, LiteLLM's own October 2026 incident report, the Unsloth Studio licence, and Compute Engine pricing in asia-southeast1.

@@ -37,9 +37,9 @@ Costs are estimates before any revenue and before credits. The cost section of t
 
 | Stage | Decisions | Actions only the owner can take |
 | --- | --- | --- |
-| 1 | Platform-only price; Ask quota; what happens to founding members at month 7; privacy notice and terms; email sender | Create Stripe restricted keys and the webhook endpoint (script provided); check the Substack dashboard for the Publisher API; export the subscriber CSV; set the Payhip webhook; publish the invitation posts |
-| 2 | Which Desk capabilities to switch on, given Substack's terms; Notes posting time; first cockpit decisions | Refresh the Substack session cookie when asked; connect Instagram and Threads; approve batches |
-| 3 | Ethics route: anonymous collection, independent review first, or wait; first instruments | Obtain the written view on the Human Biomedical Research Act; sign off consent texts |
+| 1 | Prices and quotas; terms of the launch grant; privacy notice and terms; email sender | Create Stripe restricted keys and the webhook endpoint (script provided); check the Substack dashboard for the Publisher API; export the subscriber CSV; set the Payhip webhook; publish the invitation posts |
+| 2 | Which Desk capabilities to switch on; Notes posting time; first cockpit decisions | Refresh the Substack session cookie when asked; connect Instagram and Threads; approve batches |
+| 3 | Ethics route: anonymous collection, independent review first, or wait; first instruments | Obtain written confirmation of which research ethics rules apply; sign off consent texts |
 | 4 | Which fixes may be proposed automatically | Review pull requests |
 | 5 | Evidence weights; what counts as replication | Approve each Finding before members see it |
 | 6 | ResearchPro prices; graph store upgrade | Approve the first release |
@@ -51,7 +51,7 @@ Costs are estimates before any revenue and before credits. The cost section of t
 - **Substack Desk's roster slice is in Stage 1**, the rest in Stage 2. The sentinel exists from Stage 2 and gains automatic fixes in Stage 4.
 - **Ask AuDHD Research** is gated in Stage 1, answers from the library and articles in Stage 2, and adds exploratory observations with labels in Stage 5 and the graph in Stage 6.
 - **Zone 2 does not exist until Stage 3.** Nothing before it stores research answers.
-- **Leaving the GuideBuoy organisation** is scheduled for Stage 7 at the latest and must happen before the first external data-use agreement.
+- **Moving to the platform's own organisation** is scheduled for Stage 7 at the latest and must happen before the first external data-use agreement.
 
 ## What is deliberately late
 

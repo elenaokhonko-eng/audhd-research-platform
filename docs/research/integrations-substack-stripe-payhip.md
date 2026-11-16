@@ -18,7 +18,7 @@ Limits of this pass: the shared web-search budget ran out after about 20 searche
 | 4b | Payhip pre-filled email / redirect | Redirect after purchase: yes (store-wide or per product). Pre-filling buyer email: not documented. Custom `metadata[...]` on a direct checkout link is passed to the webhook | Confirmed by official docs (pre-fill absence: unverified) |
 | 5 | How others verify paid Substack status | Stripe customer records, paid-subscriber CSV plus same Stripe account, Publisher API lookup by email, export diffs, unofficial private API | Reported by third parties |
 | 6 | Leaving Substack later | Stripe subscriptions stay on her account and keep billing; the 10% application fee continues until removed (Substack support, or cleared via API after disconnect). Substack's own "Disconnect Stripe" button cancels and refunds everyone. Apple in-app subscribers cannot be moved | Confirmed by official docs (Stripe, Substack, Ghost) |
-| 7 | Transactional email for about 2,000 recipients | Amazon SES is cheapest (about USD 0.10 per 1,000); Resend and Brevo have usable free tiers with daily caps. All need an authenticated sending domain | Unverified (pricing pages could not be opened) |
+| 7 | Transactional email for a small platform | Amazon SES is cheapest (about USD 0.10 per 1,000); Resend and Brevo have usable free tiers with daily caps. All need an authenticated sending domain | Unverified (pricing pages could not be opened) |
 
 ## 1. Substack: API, webhooks, export, RSS, welcome emails, terms
 
@@ -142,13 +142,13 @@ All figures below are [unverified]: the providers' pricing pages could not be op
 
 Notes: Gmail and Yahoo require SPF or DKIM for every sender and SPF, DKIM and DMARC above about 5,000 messages a day; publish all three anyway. Outbound port 25 is blocked on Google Cloud, so use the provider's HTTPS API from Cloud Run [unverified, model knowledge].
 
-One-line recommendation: lowest cost is Amazon SES (about USD 0.20 to reach 2,000 people); lowest effort at zero cost is Resend's free tier for the steady trickle, with the first 2,000-recipient announcement sent as a normal Substack post rather than through the platform, because every free tier has a daily cap [inference].
+One-line recommendation: lowest cost is Amazon SES (about USD 0.10 per 1,000 messages); lowest effort at zero cost is Resend's free tier for the steady trickle, with the first announcement to the whole list sent as a normal Substack post rather than through the platform, because every free tier has a daily cap [inference].
 
 ## Design consequences
 
 1. **Source of truth for Substack paid status is her own Stripe account.** A member is paid if a subscription created by Substack's application (and carrying the `substack: yes` price metadata) is `active` or `trialing` for a customer whose email matches the member's verified email. Entitlement end is the item-level `current_period_end`.
 2. **Downgrade is event-driven with a daily safety net.** Handle `customer.subscription.created`, `.updated`, `.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded` on an account-scope destination; keep access until period end when `cancel_at_period_end` is set; remove it on `deleted` or a terminal status. Reconcile every night by listing subscriptions, because retries stop after three days and order is not guaranteed. A short grace on `past_due` is a product choice [inference].
-3. **Prove the webhook path first.** One read of recent events with her key shows whether Substack-created subscription events exist in her account log. If they do not, fall back to polling the subscriptions list every few minutes, which is fine at about 40 subscriptions [inference].
+3. **Prove the webhook path first.** One read of recent events with her key shows whether Substack-created subscription events exist in her account log. If they do not, fall back to polling the subscriptions list every few minutes, which is fine at this size [inference].
 4. **Stripe does not see every paid member.** Apple in-app subscribers, comps, gifts (the buyer is the Stripe customer, not the reader) and any lifetime grants need another source. The platform needs a manual "entitlement override with expiry" table fed from Substack.
 5. **What the Substack CSV (or Publisher API, or private API) is needed for:** the free-subscriber allow-list if joining is restricted to subscribers; plan type for the cases in point 4; tags and engagement columns if wanted. Nothing in Stage 1's paid flow for web subscribers depends on it.
 6. **Prefer the Publisher API if her publication has it.** Check the dashboard for a Publisher API option. A lookup by email at sign-in would cover free, comp, gift and Apple-billed members officially. If absent, use a scheduled manual CSV upload (weekly is enough at this size) and keep any private-endpoint automation as a clearly labelled, switchable fallback given the terms.

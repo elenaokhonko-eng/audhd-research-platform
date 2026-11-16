@@ -10,7 +10,7 @@ The owner wants Substack management built inside the platform first and possibly
 
 ## Decision
 
-`packages/substack-desk` is a standalone Python package with no imports from the platform. It reaches the outside through ports (credentials, events, blobs, key-value state, clock) that the platform implements. CI installs and tests it alone. Platform modules depend on a narrow `NewsletterProvider` port. Every capability is a switch in a capability matrix.
+`packages/substack-desk` is a standalone Python package with no imports from the platform. It reaches the outside through ports (credentials, events, blobs, key-value state, clock) that the platform implements. CI installs and tests it alone. Platform modules depend on narrow ports (`SubscriberDirectory` in Stage 1, `NewsletterPublisher` from Stage 2). Every capability is a switch in a capability matrix.
 
 ## Options Considered
 

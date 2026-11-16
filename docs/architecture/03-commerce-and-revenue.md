@@ -12,9 +12,9 @@ This module turns money events into two things: facts the membership module can 
 | **Payhip** | Single PDFs for free members and guests (Stage 1) | Payhip, charging through the same Stripe account (and PayPal if enabled) | Payhip webhook: it is the only machine-readable record of *which* product was bought | 5% on the free plan, plus Stripe's fees; Payhip may also withhold sales tax for some countries inside its fee |
 | **Platform** | Platform-only membership (Stage 1); single PDFs and bundles through a Stripe-native store (Stage 2) | Stripe Checkout, created by the platform | Stripe webhook | Stripe's fees only |
 
-Checked against the live account on 2026-11-16: the account's event log contains `customer.subscription.created`, `customer.subscription.updated`, `invoice.paid` and `invoice.payment_failed` events for subscriptions created by Substack, and no webhook endpoint is registered yet. Registering one endpoint is all that is needed to receive them. See [ADR 0007](../adr/0007-stripe-is-the-source-of-truth-for-paid-status.md).
+Verified in November 2026: the account's event log contains `customer.subscription.created`, `customer.subscription.updated`, `invoice.paid` and `invoice.payment_failed` events for subscriptions created by Substack, so one registered webhook endpoint receives them. See [ADR 0007](../adr/0007-stripe-is-the-source-of-truth-for-paid-status.md).
 
-Channel is decided by one field on each Stripe object: `application` equals Substack's id, Payhip's id, or nothing (the platform's own sale). The ids are configuration, kept outside this repository.
+Channel is decided on each Stripe object: `application` equals Substack's id or Payhip's id, or the object carries the platform's own `origin=platform` metadata, which the platform sets when it creates a Checkout session. Anything else is labelled `unknown` and flagged, never guessed. The ids are configuration, kept outside this repository.
 
 ## 2. Rules for touching Stripe
 
@@ -35,7 +35,7 @@ flowchart LR
   B --> E[Upsert contacts<br/>with channel flags]
   C --> F{application?}
   F -->|Substack| G[commerce.subscription.changed<br/>channel=substack]
-  F -->|none| H[commerce.subscription.changed<br/>channel=platform]
+  F -->|origin=platform| H[commerce.subscription.changed<br/>channel=platform]
   D --> I[revenue_events in BigQuery<br/>classified by channel]
   G --> J[M2 grants or ends<br/>tier:paid entitlements]
   H --> J
@@ -43,6 +43,7 @@ flowchart LR
 
 - **Every Stripe customer becomes a contact**, with the flag of each channel they came through: paid subscriber, past subscriber, Payhip buyer, guest. Only customers with a live subscription or a grant receive `tier:paid`.
 - The first production run is a **dry run that writes a report and nothing else**: how many contacts, how many paid by channel, and the list of anything odd (two customers with one email, a subscription with no email). The owner compares the paid count with the Substack dashboard before the real run.
+- Reconciliation acts only on subscription objects it has fetched, never on a subscription's absence from a list, and the mass-change guard of [02 §4](02-membership-and-entitlements.md) applies.
 - The nightly run repeats the comparison. Stripe retries a failed webhook for three days and does not guarantee order, so reconciliation is what makes the result certain rather than likely.
 
 ### 3.2 Webhooks
@@ -55,28 +56,27 @@ sequenceDiagram
   participant P as Pub/Sub
   participant C as M14 consumer (platform-api)
   participant M as M2 membership
-  participant B as BigQuery
   S->>H: Event (signed)
   H->>H: Verify Stripe signature, reject if older than 5 minutes
-  H->>P: Publish raw event to inbound.webhooks
+  H->>H: Store raw event in the write-only bucket
+  H->>P: Publish a reference (provider, event id)
   H-->>S: 200 within a second
   P->>C: Push
-  C->>C: Create inbound_events record if absent, else stop
-  C->>C: Classify channel by application id
-  C->>M: commerce.subscription.changed or commerce.purchase.recorded
-  M->>M: Grant, renew or end entitlement
-  C->>B: revenue_events row
+  C->>C: Load the stored event, create its inbound_events record if absent, else stop
+  C->>S: Fetch the subscription's current state
+  C->>M: Apply it (in-process call, one transaction with the event marker)
+  M->>P: membership events for notices and reporting
 ```
 
 | Stripe event | Effect |
 | --- | --- |
-| `customer.subscription.created`, `.updated` | Grant or refresh the entitlement to the new period end; mark `grace` on `past_due`; note "ends on" when cancellation at period end is set |
-| `customer.subscription.deleted` | End the entitlement |
-| `invoice.paid` | Revenue row; renewal confirmed |
-| `invoice.payment_failed` | Revenue note; entitlement to `grace` |
-| `charge.refunded`, `charge.dispute.created` | Revenue row; revoke the matching entitlement or purchase |
+| `customer.subscription.created`, `.updated` | Fetch the subscription and apply its current state: grant, refresh, `grace` or end; note "ends on" when cancellation at period end is set |
+| `customer.subscription.deleted` | Fetch and apply: the entitlement ends |
+| `invoice.paid` | Fetch and apply the subscription. The money itself is picked up by the nightly revenue export |
+| `invoice.payment_failed` | Fetch and apply the subscription; its status decides `grace`, never the invoice event |
+| `charge.refunded`, `charge.dispute.closed` | A single-item purchase is revoked on a full refund or a lost dispute. For a subscription payment nothing changes; it is flagged for the owner |
 | `checkout.session.completed` | Platform sale: create the purchase or the platform subscription |
-| `customer.updated` (email changed) | Move the channel flag to the new contact; keep the old one linked |
+| `customer.updated` (email changed) | The subscription's entitlement follows the customer's current email and moves to that contact. Contacts are never linked to each other from payment data. |
 
 The endpoint pins its Stripe API version, so a Stripe upgrade cannot change payload shapes unannounced.
 
@@ -108,16 +108,17 @@ What the design has to respect, because Payhip is simple:
 | Payhip fact | Design answer |
 | --- | --- |
 | The checkout cannot be pre-filled with the buyer's email, and buyers mistype or use another address | The Buy link carries a one-time reference (`metadata[ref]`) that Payhip returns in the webhook; the platform resolves it to the signed-in member. Guests buying on Payhip directly are matched by email and attach when they register. |
-| The webhook "signature" is a constant derived from the API key, not a signature of the message | Treat the webhook as weakly authenticated: an unguessable endpoint path, constant-time comparison of the signature, one record per transaction id, and a **cross-check in Stripe** (a payment by Payhip's application, same amount, same minute) before the purchase is marked verified. PayPal-paid orders cannot be cross-checked and are flagged for a glance. |
+| The webhook "signature" is a constant derived from the API key, not a signature of the message | Treat the webhook as weakly authenticated: an unguessable endpoint path, constant-time comparison of the signature, one record per transaction id, and a **cross-check in Stripe** (a payment by Payhip's application with the same buyer email and amount; each payment can verify one purchase only) before the purchase is marked verified. PayPal-paid orders cannot be cross-checked and are flagged for a glance. The secret path shows up in request logs, so those logs are restricted and the path is rotated. |
 | Three hourly retries, then the event is gone; there is no API to list sales | A weekly reminder to upload Payhip's sales CSV in the admin screen; the importer fills any gap. Payments by Payhip's application seen in Stripe without a matching purchase raise an alert the same day. |
 | Payhip emails the PDF itself | Fine: the buyer has the file at once, and the workspace copy is the permanent, always-current one. |
 | Refund event carries the amount | A full refund revokes the item; a partial refund is flagged for the owner. |
+| A 100% coupon produces a sale with no payment to cross-check | Zero-amount orders wait for one click of approval by the owner. |
 
 Each library item maps to a Payhip product by `product_key` in its manifest ([04](04-content-library-and-search.md)). A sale of an unmapped product is recorded and flagged, never dropped.
 
 ## 5. Stage 1: platform-only membership
 
-A Stripe product "Platform membership" with a monthly and an annual price, bought through Stripe Checkout from the upgrade page. The session carries the member id as `client_reference_id`; the webhook creates a `platform_stripe` entitlement with scope `platform_only`. Cancelling and card changes go through Stripe's hosted customer portal, so the platform builds no billing screens. Stripe Tax is switched on at this point, because this is the first sale the owner makes without a marketplace in between; GST registration thresholds are a question for an accountant.
+A Stripe product "Platform membership" with a monthly and an annual price, bought through Stripe Checkout from the upgrade page. The session carries the member id as `client_reference_id` and the `origin=platform` mark, and its email field is pre-filled and locked to the member's address; the webhook creates a `platform_stripe` entitlement with scope `platform_only`, bound to that member directly. Cancelling and card changes go through Stripe's hosted customer portal, so the platform builds no billing screens. Stripe Tax is switched on at this point, because this is the first sale the owner makes without a marketplace in between; GST registration thresholds are a question for an accountant.
 
 The upgrade page always shows both routes side by side: **Subscribe on Substack** (newsletter and platform) and **Platform only**.
 
@@ -133,7 +134,7 @@ Payhip is the quick start; the store replaces it item by item without a migratio
 
 ## 7. One revenue picture
 
-Everything lands in BigQuery `ops_commerce` ([09 §3](09-events-and-data-model.md)), keyed by contact id, no emails.
+Everything lands in BigQuery `ops_commerce` ([09 §3](09-events-and-data-model.md)), keyed by contact id, no emails. One job, `revenue-export`, loads it each night from Stripe's balance transactions and the recorded purchases; nothing else writes there.
 
 | Question the owner asks | Answered from |
 | --- | --- |
@@ -150,7 +151,7 @@ The cockpit in `/admin` does not copy Substack's dashboard. Each card is a **dec
 
 | Card | Signal | Action when switched on | Executed through |
 | --- | --- | --- | --- |
-| Invite to upgrade | Free members with high engagement or two or more purchases | Upgrade invitation with both routes | Email port; Substack post |
+| Invite to upgrade | Free members with high engagement or two or more purchases | Upgrade invitation with both routes | Substack post; platform email only to members who opted in to it |
 | Win back | Paid readers who cancelled in the last 60 days | Offer, or a one-month complimentary pass | Substack offer (manual link until the Desk capability is verified) |
 | Annual push | Monthly payers for six months or more | Annual-plan offer | Substack offer |
 | Paywall timing | A free article still drawing sign-ups after N days | Move it behind the paywall, or keep it free | Substack Desk post audience |

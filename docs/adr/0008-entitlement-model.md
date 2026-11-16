@@ -10,7 +10,7 @@ Access comes from five sources that start and stop independently: Substack throu
 
 ## Decision
 
-Each grant of access is one `entitlement` record: who (contact), what (`tier:paid` or `item:<sku>`), source, source reference, access scope, validity, status. Effective access is computed as the union of live records. Ids are deterministic so repeated events are harmless. Each source may end only its own records. Three fail-safe rules apply: verify at the source before expiring, never mass-expire on one sync, never grant without a verified event. People are stored as `contacts` with a map of channels, separate from registered `members`.
+Each grant of access is one `entitlement` record: who (contact), what (`tier:paid` or `item:<sku>`), source, source reference, access scope, validity, status. Effective access is computed as the union of live records. Ids are deterministic so repeated events are harmless. Each source may end only its own records. Three fail-safe rules apply: verify at the source before expiring, never mass-expire on one run, never grant without a verified event. A date prompts a re-check and does not end access by itself. The platform applies the source's current state, fetched when an event arrives, not the event's contents. A verified sign-in claims waiting entitlements, and a claim stays with that member. People are stored as `contacts` with a map of channels, separate from registered `members`.
 
 ## Options Considered
 

@@ -13,7 +13,7 @@ Schemas are written when the first flow needs them. This page fixes the Stage 1 
 | **Zone 2: pseudonymous research** | Survey and test responses keyed by `research_id` | BigQuery dataset `raw_pseudo` | `research-api`, analytics jobs | Stage 3 |
 | **Zone 3: de-identified releases** | Versioned datasets, every cell k ≥ 5 | BigQuery `release_vN`, Cloud Storage | Licence holders, by agreement | Stage 5 |
 
-Two keys keep the zones apart. `contact_id` is derived from the email with the *contact key*. `research_id` is derived from the member id with the *research key*. They are different secrets held by different services, so a person who can read commerce data cannot find the same person in research data, and the reverse.
+Two keys keep the zones apart. `contact_id` is derived from the email with the *contact key*. `research_id` is derived, separately for each study, with the *research key*. Both are MAC keys inside Cloud KMS: the key material never leaves KMS, is not in Terraform state, and each key can be used only by the services named in [08](08-security-identities-and-org.md). The keys are necessary, not sufficient: the Stage 3 design must also show that the research service never receives an email or a member session (it works from a participant handle issued by the identity module), and that no request or trace id crosses from Zone 1 into Zone 2.
 
 ```mermaid
 flowchart LR
@@ -62,7 +62,8 @@ erDiagram
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `contact_id` | string | HMAC-SHA256 of the lower-cased, trimmed email with the contact key, first 32 hex characters |
+| `contact_id` | string | HMAC-SHA256 of the lower-cased, trimmed email, computed by the contact key in Cloud KMS; first 32 hex characters |
+| `key_version` | string | Which version of the contact key made the id, so the key can be rotated with a re-key run |
 | `email` | string | As first seen. Dots and plus-tags are not rewritten |
 | `channels.substack` | map | `type` (`free`, `paid`, `comp`, `gift`, `group_seat`, `founding`, `lifetime`), `plan_interval`, `since`, `activity_rating`, `last_seen_in_roster` |
 | `channels.stripe` | map | `customer_ids[]`, `has_substack_subscription`, `has_platform_subscription` |
@@ -76,11 +77,11 @@ The `channels` map is the preserved flag: it records every channel a person came
 
 ### `members/{uid}` (M2)
 
-`uid` (Identity Platform), `primary_contact_id`, `linked_contact_ids[]`, `email`, `display_name`, `locale`, `role` (`member`, `owner`), `terms_accepted` (`version`, `at`), `status` (`active`, `deletion_requested`), `created_at`, `last_seen_at`. No tier is stored here.
+`uid` (Identity Platform), `primary_contact_id`, `linked_contact_ids[]`, `email`, `display_name`, `locale`, `terms_accepted` (`version`, `at`), `status` (`active`, `deletion_requested`), `created_at`, `last_seen_at`. No tier and no role are stored here: the tier is derived, and the owner is a configured list of account ids.
 
 ### `entitlements/{entitlement_id}` (M2)
 
-Fields as in [02 §3](02-membership-and-entitlements.md). `entitlement_id = sha256(source ":" source_ref ":" grant)[:32]`. Indexed by `contact_id` and by (`status`, `valid_until`).
+Fields as in [02 §3](02-membership-and-entitlements.md). `entitlement_id = sha256(source ":" source_ref ":" contact_id ":" grant)[:32]`. Indexed by `contact_id` and by (`status`, `valid_until`).
 
 ### `purchases/{purchase_id}` (M14)
 
@@ -90,9 +91,9 @@ Fields as in [02 §3](02-membership-and-entitlements.md). `entitlement_id = sha2
 
 `sku`, `title`, `kind` (`meta_review`, `evidence_map`, `clinician_one_pager`, `guide`, `worksheet`), `series`, `abstract`, `topics[]`, `audience[]`, `evidence_status`, `version`, `language`, `pages`, `published_at`, `updated_at`, `access` (`paid`, `free_members`, `purchase_only`), `price_display`, `payhip` (`url`, `product_key`), `stripe_price_id` (Stage 2), `file` (`bucket`, `object`, `sha256`, `bytes`), `cover_object`, `citation`, `related_urls[]`, `status` (`draft`, `published`, `retired`).
 
-### `content_items/{content_id}` and `content_chunks/{chunk_id}` (M12)
+### `content_items/{content_id}` (M12)
 
-One `content_item` per thing a reader can find: a library item, a site page, a Substack post, a news item. `type`, `title`, `summary`, `url`, `source` (`library`, `site`, `substack`, `news`), `access` (`public`, `members`, `paid`, `item:<sku>`), `topics[]`, `published_at`, `language`, `checksum`. Chunks carry `content_id`, `seq`, `text`, `visibility` (`public`, `gated`) and are exported to the search snapshot ([04](04-content-library-and-search.md)).
+One `content_item` per thing a reader can find: a library item, a site page, a Substack post, a news item. `type`, `title`, `summary`, `url`, `source` (`library`, `site`, `substack`, `news`), `access` (`public`, `members`, `paid`, `item:<sku>`), `topics[]`, `published_at`, `language`, `checksum`. Passages are not stored in Firestore: they exist only in the search snapshot ([04](04-content-library-and-search.md)), each with `content_id`, `seq`, `text` and `visibility` (`public`, `gated`).
 
 ### Supporting collections
 
@@ -126,7 +127,7 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 
 | Topic | Carries | Dead-letter |
 | --- | --- | --- |
-| `inbound.webhooks` | Verified raw provider events from `platform-hooks` | `inbound.webhooks.dlq` after 5 attempts |
+| `inbound.webhooks` | References to verified provider events. The payload itself, which contains emails, is stored by `platform-hooks` in a restricted bucket and never travels on the bus. | `inbound.webhooks.dlq` after 5 attempts |
 | `platform.events` | Every domain event below | `platform.events.dlq` after 5 attempts |
 
 ### Stage 1 events
@@ -136,7 +137,7 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 | `commerce.provider_event.received` | hooks | M14 | `provider`, `provider_event_id`, `payload_ref` |
 | `commerce.purchase.recorded` | M14 | M2, M12 | `purchase_id`, `contact_id`, `skus[]` |
 | `commerce.purchase.refunded` | M14 | M2 | `purchase_id`, `contact_id`, `skus[]` |
-| `commerce.subscription.changed` | M14 | M2 | `contact_id`, `channel`, `status`, `plan_interval`, `current_period_end` |
+| `commerce.subscription.changed` | M14 | Reporting, notices. Entitlements are not driven by this event: M14 applies the fetched state to M2 in-process | `contact_id`, `channel`, `source_ref`, `status`, `plan_interval`, `current_period_end`, `provider_time` |
 | `membership.entitlement.granted` | M2 | M14 (reporting) | `entitlement_id`, `contact_id`, `grant`, `source`, `access_scope` |
 | `membership.entitlement.ended` | M2 | M14 | `entitlement_id`, `contact_id`, `status`, `reason` |
 | `membership.tier.changed` | M2 | notifications, M14 | `contact_id`, `from`, `to`, `reason` |
@@ -150,21 +151,22 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 
 ### Later events (names reserved)
 
-`response.recorded`, `test.scored`, `test.claimed`, `consent.changed` (Stage 3) · `substack.post.published`, `substack.note.published`, `substack.comment.created`, `community.signal.raised`, `social.post.published`, `revenue.insight.raised`, `promo.proposed`, `promo.approved` (Stage 2) · `ops.check.failed`, `ops.incident.opened` (Stage 4) · `pattern.detected`, `finding.candidate`, `gap.identified`, `survey.draft.proposed` (Stage 5).
+`response.recorded`, `test.scored`, `test.claimed`, `consent.changed` (Stage 3) · `substack.post.published`, `substack.note.published`, `substack.note.engaged`, `substack.comment.created`, `substack.stats.snapshotted`, `substack.restack.created`, `substack.mention.created`, `substack.message.received`, `substack.recommendation.changed`, `substack.credential.expired`, `community.signal.raised`, `social.post.published`, `revenue.insight.raised`, `promo.proposed`, `promo.approved` (Stage 2) · `ops.check.failed`, `ops.incident.opened` (Stage 4) · `pattern.detected`, `finding.candidate`, `gap.identified`, `survey.draft.proposed` (Stage 5).
 
 ### Delivery rules
 
-- **At least once.** Every consumer records the event id before acting and skips a repeat.
-- **Order is not guaranteed.** Handlers compare timestamps: a Stripe event older than the entitlement's last update is recorded and ignored.
-- **A handler that fails returns an error**, Pub/Sub retries with back-off, and after five attempts the message goes to the dead-letter topic and an alert fires. The admin screen lists dead letters and can replay them.
+- **At least once.** A handler must give the same result when run twice. State changes use deterministic ids and are written together with their event marker in one Firestore transaction; an email is sent once per event and template; warehouse rows carry the event id as their insert id. The inbox is a shortcut on top of that, not the guarantee.
+- **Order is not guaranteed.** Handlers apply the source's current state, fetched at handling time, not the contents of the event.
+- **A handler that fails returns an error.** Pub/Sub retries with back-off (acknowledgement deadline 60 seconds); after five attempts the message goes to the dead-letter topic. Each dead-letter topic has its own subscription, so nothing is discarded, and an alert fires on any backlog. The admin screen lists dead letters and can replay them.
+- **Inside `platform-api`, modules call each other directly** for changes that must be consistent. The bus tells other deployables and later consumers that something happened.
 
 ## 5. Ids
 
 | Id | Made from | Lives in |
 | --- | --- | --- |
 | `uid` | Identity Platform | Zone 1 |
-| `contact_id` | HMAC(contact key, email) | Zones 1 and 1b, events |
-| `research_id` | HMAC(research key, uid) | Zone 2 only (Stage 3) |
+| `contact_id` | MAC by the contact key in Cloud KMS over the email | Zones 1 and 1b, events |
+| `research_id` | MAC by the research key in Cloud KMS over a participant handle and the study id; one per study | Zone 2 only (Stage 3) |
 | `test_id` | Random, checksummed, shown to guests | Zone 2 and the guest's own file (Stage 3) |
 | `sku` | Human-readable slug, never reused | Library, purchases, entitlements |
 | `entitlement_id`, `purchase_id` | Deterministic hash of the source reference | Zone 1 |
