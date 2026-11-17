@@ -1,3 +1,5 @@
+> **Legacy document.** This describes the 2026 CrewAI prototype kept under the top-level `src/`, `config/` and `platform_app/` folders. It is not the platform's architecture. The current design is in [`docs/architecture/`](architecture/README.md).
+
 # AuDHD research and publishing platform architecture
 
 ## Product boundary

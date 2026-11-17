@@ -1,6 +1,6 @@
 # audhd-research-platform
 
-Monorepo for audhdneurobiology.org. Architecture: the platform architecture doc (v3); decisions in `docs/adr/`.
+Monorepo for audhdneurobiology.org. Architecture v4 (proposed): [`docs/architecture/`](docs/architecture/README.md); decisions in `docs/adr/`; plans in `docs/plans/`. Coding agents start with [`CLAUDE.md`](CLAUDE.md).
 
 | Path | What | Stage |
 | --- | --- | --- |
@@ -10,6 +10,10 @@ Monorepo for audhdneurobiology.org. Architecture: the platform architecture doc 
 | `ops/scripts/` | Bootstrap and domain scripts for the steps Terraform cannot do alone | 0 |
 | `docs/runbooks/stage-0.md` | **Start here**: how to put the site live | 0 |
 | `docs/content-model.md` | Where private research lives (outside this repo) and how code reads it | 0 |
+| `docs/architecture/` | Architecture v4: ten pages with diagrams, borrow map | design |
+| `docs/plans/`, `docs/superpowers/plans/` | Roadmap, Stage 1 plan, task-by-task slice plans | design |
+| `docs/research/` | Research briefs behind the design | design |
+| `THIRD_PARTY.md` | Origin of every borrowed file | 1 |
 | `src/`, `config/`, `platform_app/`, `app_pages/` | Earlier CrewAI prototype, kept for reference; replaced by Genkit agents from Stage 2 | legacy |
 
 ---
