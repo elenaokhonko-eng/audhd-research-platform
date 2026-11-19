@@ -37,6 +37,10 @@ describe("isSameOrigin", () => {
   it("accepts same-origin fetch metadata when Origin is absent", () =>
     expect(isSameOrigin(req({ "sec-fetch-site": "same-origin" }), ORIGIN)).toBe(true));
   it("refuses when both are absent", () => expect(isSameOrigin(req({}), ORIGIN)).toBe(false));
+  it("refuses everything when the site origin is not set", () => {
+    expect(isSameOrigin(req({ origin: "" }), "")).toBe(false);
+    expect(isSameOrigin(req({ "sec-fetch-site": "same-origin" }), "")).toBe(false);
+  });
 });
 
 describe("session cookie", () => {
@@ -90,6 +94,20 @@ describe("POST /api/session", () => {
     const res = await post({ id_token: "fake-token:ana", campaign: null });
     expect(res.status).toBe(503);
     expect(res.headers.get("set-cookie")).toBeNull();
+    const retry = await post({ id_token: "fake-token:ana", campaign: null });
+    expect(retry.status).toBe(200);
+    expect(retry.headers.get("set-cookie")).toContain("session=fake-session:ana");
+  });
+  it("answers 403 with no cookie when neither Origin nor Sec-Fetch-Site is sent", async () => {
+    const res = await post({ id_token: "fake-token:ana", campaign: null }, {});
+    expect(res.status).toBe(403);
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+  it("answers 403 when SITE_ORIGIN is not set", async () => {
+    delete process.env.SITE_ORIGIN;
+    const res = await post({ id_token: "fake-token:ana", campaign: null }, { origin: "" });
+    expect(res.status).toBe(403);
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
   it("never puts the token in the answer", async () => {
     const res = await post({ id_token: "nonsense-token-value", campaign: null });
@@ -105,5 +123,12 @@ describe("DELETE /api/session", () => {
     );
     expect(res.status).toBe(204);
     expect(res.headers.get("set-cookie")).toContain("session=;");
+  });
+  it("refuses another origin and does not clear the cookie", async () => {
+    const res = await DELETE(
+      new Request(`${ORIGIN}/api/session`, { method: "DELETE", headers: { origin: "https://evil.example", cookie: "session=fake-session:bo" } }),
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 });
