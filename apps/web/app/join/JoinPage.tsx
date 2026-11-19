@@ -9,7 +9,7 @@ import { Header } from "../components/Header";
 import { JoinScreen } from "./JoinScreen";
 
 const closedCampaign = (slug: string | null): Campaign => ({
-  slug: slug ?? "",
+  slug,
   audience: "public",
   state: "closed",
   copy: { headline: "Opening soon", body: "Sign-in opens soon. Come back later.", cta: "" },

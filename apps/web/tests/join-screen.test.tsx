@@ -93,3 +93,36 @@ describe("JoinScreen", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
 });
+
+describe("JoinScreen accessibility", () => {
+  it("announces the confirmation in the live region and moves focus to it", async () => {
+    const { user } = setup();
+    await user.type(screen.getByLabelText("Email address"), "ana@example.org");
+    await user.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    const live = await screen.findByRole("status");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toHaveTextContent("Check your inbox.");
+    expect(live).toHaveFocus();
+  });
+
+  it("returns focus to the email field after Use a different email", async () => {
+    const { user } = setup();
+    await user.type(screen.getByLabelText("Email address"), "ana@example.org");
+    await user.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    await user.click(await screen.findByRole("button", { name: "Use a different email" }));
+    expect(screen.getByLabelText("Email address")).toHaveFocus();
+    expect(screen.getByLabelText("Email address")).toHaveValue("");
+  });
+
+  it("marks the field invalid, links the message and focuses the field", async () => {
+    const { user } = setup();
+    await user.type(screen.getByLabelText("Email address"), "ana");
+    await user.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    const field = screen.getByLabelText("Email address");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveFocus();
+    const id = field.getAttribute("aria-describedby");
+    expect(id).toBeTruthy();
+    expect(document.getElementById(id as string)).toHaveTextContent("Check the email address.");
+  });
+});

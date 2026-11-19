@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AuthError,
   createFakeAuthClient,
@@ -65,6 +65,17 @@ export function JoinScreen({
   const [phase, setPhase] = useState<Phase>("idle");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const liveRef = useRef<HTMLDivElement>(null);
+  const focusTarget = useRef<"input" | "live" | null>(null);
+
+  useEffect(() => {
+    const target = focusTarget.current;
+    focusTarget.current = null;
+    if (target === "input") inputRef.current?.focus();
+    if (target === "live") liveRef.current?.focus();
+  });
 
   if (campaign.state !== "open") {
     return (
@@ -82,9 +93,12 @@ export function JoinScreen({
     const address = email.trim();
     if (!address.includes("@")) {
       setMessage("Check the email address.");
+      setInvalid(true);
+      inputRef.current?.focus();
       return;
     }
     setMessage("");
+    setInvalid(false);
     setBusy(true);
     try {
       try {
@@ -93,9 +107,16 @@ export function JoinScreen({
         // Private mode: not storing the address must not stop the link being sent.
       }
       await client.sendEmailLink(address, continueUrl(siteOrigin, slug));
+      focusTarget.current = "live";
       setPhase("sent");
     } catch (error) {
-      setMessage(toAuthError(error).code === "invalid_email" ? "Check the email address." : "Something went wrong. Try again.");
+      if (toAuthError(error).code === "invalid_email") {
+        setMessage("Check the email address.");
+        setInvalid(true);
+        focusTarget.current = "input";
+      } else {
+        setMessage("Something went wrong. Try again.");
+      }
     } finally {
       setBusy(false);
     }
@@ -122,6 +143,8 @@ export function JoinScreen({
   const reset = () => {
     setEmail("");
     setMessage("");
+    setInvalid(false);
+    focusTarget.current = "input";
     setPhase("idle");
   };
 
@@ -136,9 +159,6 @@ export function JoinScreen({
         <>
           {phase === "sent" ? (
             <div>
-              <p>Check your inbox.</p>
-              {senderHint ? <p>The email comes from {senderHint}.</p> : null}
-              <p>If it is not there after a minute, look in the spam folder or use Continue with Google.</p>
               <button className="button button-secondary" disabled={busy} onClick={reset} type="button">
                 Use a different email
               </button>
@@ -148,10 +168,13 @@ export function JoinScreen({
               <label htmlFor="join-email">Email address</label>
               <input
                 autoComplete="email"
+                aria-describedby={invalid ? "join-status" : undefined}
+                aria-invalid={invalid ? "true" : undefined}
                 id="join-email"
                 inputMode="email"
                 name="email"
                 onChange={(event) => setEmail(event.target.value)}
+                ref={inputRef}
                 type="email"
                 value={email}
               />
@@ -169,7 +192,16 @@ export function JoinScreen({
           </div>
         </>
       )}
-      <p aria-live="polite" role="status">{message}</p>
+      <div aria-live="polite" id="join-status" ref={liveRef} role="status" tabIndex={-1}>
+        {phase === "sent" ? (
+          <>
+            <p>Check your inbox.</p>
+            {senderHint ? <p>The email comes from {senderHint}.</p> : null}
+            <p>If it is not there after a minute, look in the spam folder or use Continue with Google.</p>
+          </>
+        ) : null}
+        {message ? <p>{message}</p> : null}
+      </div>
       <p>
         <Link href="/terms">Terms</Link> · <Link href="/privacy">Privacy notice</Link>
       </p>
