@@ -67,6 +67,7 @@ module "platform_api" {
     PLATFORM_PUSH_AUDIENCE        = local.platform_api_base_url
     PLATFORM_PUSH_SERVICE_ACCOUNT = google_service_account.pubsub_push.email
     PLATFORM_CONTACT_KEY          = module.contact_key.key_version_name
+    PLATFORM_LIBRARY_BUCKET       = module.library.name
   })
   depends_on = [google_project_service.enabled]
 }

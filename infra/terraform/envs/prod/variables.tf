@@ -67,3 +67,9 @@ variable "check_custom_domain" {
   type        = bool
   default     = false
 }
+
+variable "owner_member" {
+  description = "IAM member of the owner, e.g. user:name@example.org. Set via TF_VAR_owner_member; never written to a file."
+  type        = string
+  sensitive   = true
+}

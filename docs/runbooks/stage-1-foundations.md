@@ -43,6 +43,8 @@ git fetch origin && git checkout integration/stage-1 && git pull
 bash ops/scripts/20-stage1-foundations.sh
 ```
 
+The script sets `export TF_VAR_owner_member="user:$(gcloud config get-value account)"` for you, so Terraform can let your account add files to the upload buckets without your address being written into the repository. If you run `terraform plan` by hand later (the "No changes" check at the end), run that same line first in the same shell.
+
 ## What each prompt means
 
 | Prompt | Answer |

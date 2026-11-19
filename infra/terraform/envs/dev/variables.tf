@@ -50,3 +50,9 @@ variable "cloudflare_zone_id" {
   type        = string
   default     = ""
 }
+
+variable "owner_member" {
+  description = "IAM member of the owner, e.g. user:name@example.org. Set via TF_VAR_owner_member; never written to a file."
+  type        = string
+  sensitive   = true
+}

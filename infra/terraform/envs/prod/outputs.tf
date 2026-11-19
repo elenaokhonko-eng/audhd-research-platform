@@ -54,3 +54,15 @@ output "contact_key_name" {
   description = "Version 1 of the contact key (PLATFORM_CONTACT_KEY of platform-api)"
   value       = module.contact_key.key_version_name
 }
+
+output "library_bucket" {
+  value = module.library.name
+}
+
+output "library_staging_bucket" {
+  value = module.library_staging.name
+}
+
+output "roster_inbox_bucket" {
+  value = module.roster_inbox.name
+}

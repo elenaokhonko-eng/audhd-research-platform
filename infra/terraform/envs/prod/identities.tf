@@ -192,3 +192,40 @@ resource "google_service_account_iam_member" "github_impersonates_deployer" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.prod_release/true"
 }
+
+# ---------------------------------------------------------------- buckets
+# platform-api reads the library and copies published files into it, and reads what waits in
+# staging. The import job's access to roster_inbox is bound in Wave 2.
+resource "google_storage_bucket_iam_member" "platform_api_reads" {
+  for_each = {
+    library         = module.library.name
+    library_staging = module.library_staging.name
+  }
+  bucket = each.value
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.platform_api.email}"
+}
+
+resource "google_storage_bucket_iam_member" "platform_api_writes_library" {
+  bucket = module.library.name
+  role   = "roles/storage.objectCreator"
+  member = "serviceAccount:${google_service_account.platform_api.email}"
+}
+
+# The owner may add files to the two inbox buckets (not read or delete them).
+resource "google_storage_bucket_iam_member" "owner_writes_inboxes" {
+  for_each = {
+    library_staging = module.library_staging.name
+    roster_inbox    = module.roster_inbox.name
+  }
+  bucket = each.value
+  role   = "roles/storage.objectCreator"
+  member = var.owner_member
+}
+
+# platform-api signs download links as itself, without a key file.
+resource "google_service_account_iam_member" "platform_api_signs_as_itself" {
+  service_account_id = google_service_account.platform_api.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.platform_api.email}"
+}

@@ -95,6 +95,10 @@ if [[ -z "$TF_VAR_cloudflare_api_token" || "$TF_VAR_cloudflare_api_token" == *" 
   stop "The Cloudflare token is empty or contains a space. Create one (Cloudflare > My Profile > API Tokens > 'Edit zone DNS', zone $DOMAIN) and re-run."
 fi
 
+# The owner's own account may add files to the inbox buckets (read by Terraform, never printed).
+TF_VAR_owner_member="user:$(gcloud config get-value account 2>/dev/null)"
+export TF_VAR_owner_member
+
 # ---------------------------------------------------------------- 1. folder
 say "1/8 Folder ${FOLDER_NAME}"
 ORG_ID="${ORG_ID:-$(gcloud projects get-ancestors "$PROD_PROJECT" --format='value(id,type)' | awk '$2 == "organization" { print $1 }')}"

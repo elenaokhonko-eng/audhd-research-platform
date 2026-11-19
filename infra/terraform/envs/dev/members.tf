@@ -15,3 +15,33 @@ module "contact_key" {
   region     = var.region
   depends_on = [google_project_service.enabled]
 }
+
+# Private buckets (no public access). Who reads and writes them is bound in identities.tf.
+# library: the published files members download; versioned, kept for good.
+module "library" {
+  source     = "../../modules/private_bucket"
+  name       = "${var.project_id}-library"
+  project_id = var.project_id
+  versioning = true
+  depends_on = [google_project_service.enabled]
+}
+
+# library_staging: where a file waits between upload and publication; emptied after 7 days.
+module "library_staging" {
+  source            = "../../modules/private_bucket"
+  name              = "${var.project_id}-library-staging"
+  project_id        = var.project_id
+  delete_after_days = 7
+  force_destroy     = true
+  depends_on        = [google_project_service.enabled]
+}
+
+# roster_inbox: where the owner drops a roster file for import; emptied after 7 days.
+module "roster_inbox" {
+  source            = "../../modules/private_bucket"
+  name              = "${var.project_id}-roster-inbox"
+  project_id        = var.project_id
+  delete_after_days = 7
+  force_destroy     = true
+  depends_on        = [google_project_service.enabled]
+}
