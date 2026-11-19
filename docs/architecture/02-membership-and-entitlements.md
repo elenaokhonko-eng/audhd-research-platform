@@ -1,6 +1,6 @@
 # 02 · Membership and entitlements (M2)
 
-**Status:** Proposed for review · 2026-11-16 · Stage 1
+**Status:** Proposed for review · 2026-11-16 · Stage 1 · campaigns and launch grants added 2026-11-19 ([launch design](../superpowers/specs/2026-11-19-launch-invites-grants-promotions-design.md))
 
 The question this module answers, thousands of times a day: **what may this person open right now, and why?** The answer must follow Substack and Stripe automatically, in both directions.
 
@@ -74,7 +74,7 @@ Data licences (quarterly or annual agreements) are not a self-service tier. They
 | `substack_roster` | Substack's own subscriber record shows a paid type with no Stripe subscription behind it: complimentary, gift, group seat, lifetime, or billed by Apple through the iOS app | A roster check gives positive evidence that the person is no longer paid (Rule 3) | At sign-in and daily, or weekly when fed by CSV (see §4a) |
 | `platform_stripe` | A subscription bought through the platform's own Stripe Checkout | Stripe reports it ended | Seconds |
 | `payhip` | A Payhip sale contains a product mapped to a library item | Refund | Seconds |
-| `grant` | The owner grants access, or a migration does (a launch grant) | `valid_until` passes, or the owner revokes it | Daily sweep |
+| `grant` | The owner grants access, or a campaign's grant policy does (a launch grant, §6) | `valid_until` passes, or the owner revokes it | Ended from its date at once; the stored status is updated by the daily sweep |
 
 ## 4. The rules
 
@@ -156,7 +156,7 @@ sequenceDiagram
   W-->>U: Paid workspace: Research, Guides, Ask
 ```
 
-No code to paste, no "prove you are a subscriber" step. The same email is the link.
+No code to paste, no "prove you are a subscriber" step. The same email is the link. The invite link itself carries no rights: it is a campaign address (`/join/{slug}`) that selects wording and is counted ([ADR 0021](../adr/0021-one-join-link-recognition-by-verified-email.md)).
 
 ### 5.2 A paid member does not renew
 
@@ -189,16 +189,17 @@ sequenceDiagram
 | Refund or lost dispute | A single-item purchase is revoked on a full refund. A subscription refund changes nothing by itself: access follows the subscription's status. |
 | Upgrades from free to paid on Substack | Stripe event arrives; the workspace changes on the next page load. No action by the member. |
 | Pays platform-only, later also subscribes on Substack | Two entitlements, two scopes. Access is paid; the admin view flags the double payment so the owner can offer a refund. |
-| A launch grant for existing paid subscribers | A migration can create a `grant` entitlement, `tier:paid`, valid for a set period from launch. It only matters if they cancel Substack inside that window. |
+| A launch grant for existing paid subscribers | A campaign's grant policy creates a `grant` entitlement, `tier:paid`, for a set number of months, at the first sign-in of a member who holds a live Substack-paid entitlement and meets the policy (for example: paying since before the announcement). One per contact per campaign; created only from verified facts. Whether it is a guarantee on top of included access or a free period before a separate membership is the owner's commercial decision; the engine is the same for both. |
 | Member asks to delete the account | The sign-in identity, the member record and its links are deleted. The person may still be a subscriber or a past buyer, so the contact and purchase records remain as business records. A request for full erasure goes further: the owner removes the person at the source (Substack, Stripe), the contact becomes a tombstone holding only its keyed hash (so the next sync does not re-import it), and ids in long-retention tables are replaced by random ones. Deletions are replayed after any restore from backup. |
 | Owner needs to help someone | Admin inspector: search by email, see contact, entitlements, the events that created them, and grant or revoke with a written reason. |
 
 ## 6. Bringing people in
 
-1. **Import first, invite second.** Stage 1 imports every Stripe customer and the Substack roster as contacts, each with its channel flags: `substack_paid`, `substack_free`, `payhip_buyer`, `platform_paid`. Only contacts with a live paid subscription or grant receive `tier:paid`.
+1. **Paid status first, invitations second.** Before anyone is invited, the read-only Stripe reconcile and one roster import create contacts and entitlements for paying readers. Free subscribers are not imported for the launch: anyone can register as free, so their addresses are not needed in advance. The full roster with every channel flag (`substack_paid`, `substack_free`, `payhip_buyer`, `platform_paid`) follows in S1.4. Only contacts with a live paid subscription or grant receive `tier:paid`.
 2. **Invitations travel through Substack.** A paid-only Substack post invites paid subscribers; a free post invites the rest. The same link goes into Substack's welcome emails (Substack keeps separate, editable templates for free, paid and founding subscribers), so every future subscriber is invited the day they subscribe. Readers arrive, enter the email they already use, and are recognised. The platform's first email to anyone is the sign-in link they asked for themselves. This avoids cold email from a new sending domain and keeps the consent position simple.
-3. **Waves.** Wave 0: the owner and test accounts. Wave 1: current paid subscribers. Wave 2: free subscribers. Each wave has an invite code in the link so sign-ups can be counted per wave.
-4. **Two upgrade routes for free members**, always shown side by side: *Subscribe on Substack* (newsletter and platform) and *Platform only* (Stripe Checkout). The route taken is stored as `access_scope`.
+3. **Campaigns.** An invitation is a campaign: a slug in the link (`/join/{slug}`), an audience, a time window and, optionally, a grant policy. Wave 0 is the owner and test accounts; then a campaign for current paid subscribers; then one for free subscribers. Arrivals, recognitions and grants are counted per campaign. The slug authorises nothing: grant policies of every open campaign apply to any member who meets them, whichever link they used.
+4. **Upgrade routes for free members.** The upgrade page shows every route that exists: *Subscribe on Substack* (newsletter and platform), with the active promotion when there is one ([03 §5a](03-commerce-and-revenue.md)), and *Platform only* (Stripe Checkout) once that product is built. The route taken is stored as `access_scope`.
+5. **Layers with switches.** Join, library and promotions each have a switch in runtime configuration, so each can open when its exit test has passed and close at once if something is wrong.
 
 ## 7. Messages the platform sends
 
@@ -229,6 +230,8 @@ Called by `web` only. The browser never calls `platform-api`.
 | `POST /v1/admin/entitlements`, `POST /v1/admin/entitlements/{id}/revoke` | Owner grant and revoke, reason required |
 | `GET /v1/admin/segments` | Counts by channel flag, tier, scope |
 
+The launch track adds the public campaign route, `POST /v1/me/refresh-access`, `GET /v1/me/upgrade-options`, terms acceptance, support requests and the admin routes for campaigns, promotions and the layer switches. All routes with their shapes are on the [contracts page](../contracts/stage-1-launch.md). At launch the admin routes are called by `platform-cli` with the owner's Google identity; the admin screens come later.
+
 Inside `platform-api`, other modules ask one function: `entitlements.public.access_for(member_uid) -> Access` and `can_open(member_uid, sku) -> Decision`.
 
 ## 9. What is deliberately not here
@@ -239,4 +242,4 @@ Inside `platform-api`, other modules ask one function: `entitlements.public.acce
 
 ## 10. Exit path
 
-Members and entitlements are plain documents with a documented shape ([09](09-events-and-data-model.md)); they export to any SQL database as three tables. Identity Platform speaks OpenID Connect, so Clerk, Auth0 or Keycloak can replace it by changing the sign-in adapter in `web` and the token check in `platform-api`. Decisions: [ADR 0007](../adr/0007-stripe-is-the-source-of-truth-for-paid-status.md), [ADR 0008](../adr/0008-entitlement-model.md), [ADR 0020](../adr/0020-sign-in-with-identity-platform.md).
+Members and entitlements are plain documents with a documented shape ([09](09-events-and-data-model.md)); they export to any SQL database as three tables. Identity Platform speaks OpenID Connect, so Clerk, Auth0 or Keycloak can replace it by changing the sign-in adapter in `web` and the token check in `platform-api`. Decisions: [ADR 0007](../adr/0007-stripe-is-the-source-of-truth-for-paid-status.md), [ADR 0008](../adr/0008-entitlement-model.md), [ADR 0020](../adr/0020-sign-in-with-identity-platform.md), [ADR 0021](../adr/0021-one-join-link-recognition-by-verified-email.md), [ADR 0022](../adr/0022-campaigns-grants-and-promotions-as-configuration.md).

@@ -25,6 +25,8 @@ Channel is decided on each Stripe object: `application` equals Substack's id or 
 
 ## 3. Stage 1: importing and listening
 
+The launch track builds the reconcile job first and runs it on a schedule, more often while a campaign is open and on a member's request; the webhook path of §3.2 is added afterwards without changing it ([ADR 0022](../adr/0022-campaigns-grants-and-promotions-as-configuration.md)). The launch track's key reads customers and subscriptions only; the other read scopes of rule 2 arrive with the revenue export. Only the job's identity can read the key.
+
 ### 3.1 Backfill (once, then nightly as reconciliation)
 
 ```mermaid
@@ -120,7 +122,21 @@ Each library item maps to a Payhip product by `product_key` in its manifest ([04
 
 A Stripe product "Platform membership" with a monthly and an annual price, bought through Stripe Checkout from the upgrade page. The session carries the member id as `client_reference_id` and the `origin=platform` mark, and its email field is pre-filled and locked to the member's address; the webhook creates a `platform_stripe` entitlement with scope `platform_only`, bound to that member directly. Cancelling and card changes go through Stripe's hosted customer portal, so the platform builds no billing screens. Stripe Tax is switched on at this point, because this is the first sale the owner makes without a marketplace in between; GST registration thresholds are a question for an accountant.
 
-The upgrade page always shows both routes side by side: **Subscribe on Substack** (newsletter and platform) and **Platform only**.
+The upgrade page shows every route that exists: **Subscribe on Substack** (newsletter and platform) and, once this product is built, **Platform only**. It is built after the launch track unless the owner decides that a Substack subscription does not include the platform.
+
+### 5a. Promotions
+
+A **promotion** is a time-boxed offer shown on the upgrade page and, as a banner, on the public site. It is a record, written from private configuration: a window, an audience, display text and a **channel** that says where the money changes hands.
+
+| Channel | Who takes the payment and enforces the terms | What the platform does | When |
+| --- | --- | --- | --- |
+| `substack_offer` | Substack, through a special offer the owner creates in Substack's settings (a percentage or a free trial, how long the reduced price lasts, an end date, shown to everyone or only through its link) | Shows the offer inside its window, links to it, and counts Substack-paid entitlements that start inside the window for contacts who were not paid at its start | Launch track |
+| `platform_checkout` | Stripe, through a coupon restricted to the platform's annual price | Applies the coupon on the server when it creates the Checkout Session; nothing for the member to type; counts exactly | With platform-only membership |
+
+- No percentage, price or date is in code or in this repository.
+- The window in the record is set to the offer's own end, the page states the end, and one switch hides every promotion at once.
+- A promotion never changes an entitlement. Access changes only when the source reports a paid subscription.
+- Seasonal promotions proposed by the Revenue team (Stage 2) become these same records after the owner approves them.
 
 ## 6. Stage 2: the Stripe-native store
 
