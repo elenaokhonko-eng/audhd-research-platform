@@ -1,9 +1,9 @@
-import { cookies } from "next/headers";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { identityConfig } from "@/lib/identity/config";
 import { getPlatformApi } from "@/lib/platform-api/client";
 import type { Campaign } from "@/lib/platform-api/types";
-import { SESSION_COOKIE } from "@/lib/session";
+import { readSessionCookie } from "@/lib/session";
 import { Footer } from "../components/Footer";
 import { Header } from "../components/Header";
 import { JoinScreen } from "./JoinScreen";
@@ -17,7 +17,7 @@ const closedCampaign = (slug: string | null): Campaign => ({
 
 export async function JoinPage({ slug }: { slug: string | null }) {
   const api = getPlatformApi();
-  const session = (await cookies()).get(SESSION_COOKIE)?.value ?? null;
+  const session = readSessionCookie((await headers()).get("cookie")); // the same parser as the API routes
 
   let signedIn = false;
   if (session) {

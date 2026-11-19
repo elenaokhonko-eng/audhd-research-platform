@@ -104,6 +104,11 @@ export function JoinScreen({
     try {
       const token = await client.signInWithGoogle();
       const { next } = await postSession(token, slug);
+      try {
+        localStorage.removeItem("signin.email"); // signed in: an address kept for an emailed link is not needed
+      } catch {
+        // Storage unavailable: nothing to remove.
+      }
       navigate(next);
     } catch (error) {
       if (error instanceof AuthError && error.code === "popup_closed") {

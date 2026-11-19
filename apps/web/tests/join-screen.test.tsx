@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { JoinScreen, continueUrl } from "@/app/join/JoinScreen";
 import { AuthError, type AuthClient } from "@/lib/identity/auth-client";
+import { SessionError } from "@/lib/identity/session-client";
 import type { Campaign } from "@/lib/platform-api/types";
 
 const open: Campaign = { slug: "founding", audience: "substack_paid", state: "open", copy: { headline: "Welcome, subscribers", body: "Sign in with the email you use for the newsletter.", cta: "Sign in" } };
@@ -64,6 +65,24 @@ describe("JoinScreen", () => {
     await user.click(screen.getByRole("button", { name: "Continue with Google" }));
     expect(postSession).toHaveBeenCalledWith("fake-token:bo", "founding");
     expect(navigate).toHaveBeenCalledWith("/welcome");
+  });
+
+  it("forgets an address stored for an emailed link once Google sign-in completes", async () => {
+    const { navigate, user } = setup();
+    await user.type(screen.getByLabelText("Email address"), "ana@example.org");
+    await user.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    expect(localStorage.getItem("signin.email")).toBe("ana@example.org");
+    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
+    expect(navigate).toHaveBeenCalledWith("/welcome");
+    expect(localStorage.getItem("signin.email")).toBeNull();
+  });
+
+  it("keeps the general message when the service refuses the Google token", async () => {
+    const postSession = vi.fn().mockRejectedValue(new SessionError(401));
+    const { navigate, user } = setup({ postSession });
+    await user.click(screen.getByRole("button", { name: "Continue with Google" }));
+    expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("stays quiet when the Google window is closed", async () => {

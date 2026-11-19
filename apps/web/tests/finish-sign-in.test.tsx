@@ -5,6 +5,7 @@ import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FinishSignIn, slugFromHref } from "@/app/auth/finish/FinishSignIn";
 import { createFakeAuthClient } from "@/lib/identity/auth-client";
+import { SessionError } from "@/lib/identity/session-client";
 
 const LINK = "https://dev.example.org/auth/finish?c=founding&oobCode=ok&mode=signIn";
 const setup = (href: string, postSession = vi.fn().mockResolvedValue({ next: "/welcome" })) => {
@@ -100,6 +101,32 @@ describe("FinishSignIn", () => {
     expect(postSession).toHaveBeenNthCalledWith(2, "fake-token:ana", "founding");
   });
 
+  it("retries with the same token when the service answered 503", async () => {
+    localStorage.setItem("signin.email", "ana@example.org");
+    const postSession = vi.fn().mockRejectedValueOnce(new SessionError(503)).mockResolvedValueOnce({ next: "/welcome" });
+    const { navigate, user } = setup(LINK, postSession);
+    await user.click(await screen.findByRole("button", { name: "Try again" }));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
+  });
+
+  it.each([401, 400])("sends a token the service refuses with %s to a new link instead of retrying", async (status) => {
+    localStorage.setItem("signin.email", "ana@example.org");
+    const postSession = vi.fn().mockRejectedValue(new SessionError(status));
+    setup(LINK, postSession);
+    expect(await screen.findByText("This link has expired or was already used.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Send me a new link" })).toHaveAttribute("href", "/join/founding");
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+    expect(screen.queryByText("We could not reach the service. Try again.")).toBeNull();
+    expect(localStorage.getItem("signin.email")).toBeNull();
+    expect(screen.getByRole("status")).toHaveFocus();
+  });
+
+  it("offers the plain join page when a refused token has no campaign", async () => {
+    localStorage.setItem("signin.email", "ana@example.org");
+    setup("https://dev.example.org/auth/finish?oobCode=ok", vi.fn().mockRejectedValue(new SessionError(401)));
+    expect(await screen.findByRole("link", { name: "Send me a new link" })).toHaveAttribute("href", "/join");
+  });
+
   it("completes the link only once under StrictMode", async () => {
     localStorage.setItem("signin.email", "ana@example.org");
     const authClient = createFakeAuthClient();
@@ -120,6 +147,12 @@ describe("FinishSignIn", () => {
     setup("https://dev.example.org/auth/finish");
     expect(screen.getByText("This page finishes a sign-in link.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Start again" })).toHaveAttribute("href", "/join");
+  });
+
+  it("keeps the campaign in Start again after the code was removed from the address", () => {
+    setup("https://dev.example.org/auth/finish?c=founding");
+    expect(screen.getByText("This page finishes a sign-in link.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Start again" })).toHaveAttribute("href", "/join/founding");
   });
 
   it("shows no form when sign-in is not set up", () => {

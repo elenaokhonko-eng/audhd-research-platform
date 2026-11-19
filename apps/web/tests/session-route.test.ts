@@ -37,6 +37,10 @@ describe("isSameOrigin", () => {
   it("accepts same-origin fetch metadata when Origin is absent", () =>
     expect(isSameOrigin(req({ "sec-fetch-site": "same-origin" }), ORIGIN)).toBe(true));
   it("refuses when both are absent", () => expect(isSameOrigin(req({}), ORIGIN)).toBe(false));
+  it("accepts the site's own origin when the setting ends with a slash", () =>
+    expect(isSameOrigin(req({ origin: ORIGIN }), `${ORIGIN}/`)).toBe(true));
+  it("refuses everything when the site origin is only a slash", () =>
+    expect(isSameOrigin(req({ "sec-fetch-site": "same-origin" }), "/")).toBe(false));
   it("refuses everything when the site origin is not set", () => {
     expect(isSameOrigin(req({ origin: "" }), "")).toBe(false);
     expect(isSameOrigin(req({ "sec-fetch-site": "same-origin" }), "")).toBe(false);
@@ -57,6 +61,9 @@ describe("session cookie", () => {
   it("is read back from a cookie header", () => {
     expect(readSessionCookie("a=1; session=abc; b=2")).toBe("abc");
     expect(readSessionCookie(null)).toBeNull();
+  });
+  it("takes the first session cookie when the header carries two", () => {
+    expect(readSessionCookie("session=first; a=1; session=second")).toBe("first");
   });
 });
 

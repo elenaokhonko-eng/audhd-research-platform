@@ -1,10 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TermsStep } from "@/app/welcome/TermsStep";
 import { NotRecognised } from "@/app/welcome/NotRecognised";
 import { FakePlatformApi } from "@/lib/platform-api/fake";
-import { welcomeView } from "@/lib/welcome";
+import { ApiError } from "@/lib/platform-api/errors";
+import { welcomeState, welcomeView } from "@/lib/welcome";
+import { WelcomeBody } from "@/app/welcome/WelcomeBody";
+import { SignOutButton } from "@/app/welcome/SignOutButton";
 
 const meOf = async (name: string, accept = true) => {
   const api = new FakePlatformApi();
@@ -113,6 +116,61 @@ describe("NotRecognised", () => {
     render(<NotRecognised send={vi.fn()} signOut={signOut} go={go} />);
     await userEvent.click(screen.getByRole("button", { name: "Sign in with another email" }));
     expect(signOut).toHaveBeenCalledOnce();
+    expect(go).toHaveBeenCalledWith("/join");
+  });
+});
+
+describe("welcomeState", () => {
+  it("passes the member to the view", async () => {
+    const me = await meOf("bo");
+    expect(await welcomeState(() => Promise.resolve(me), null)).toEqual({ kind: "free", checking: false });
+  });
+  it("sends an unauthenticated visitor to sign in", async () =>
+    expect(await welcomeState(() => Promise.reject(new ApiError(401, "unauthenticated", "x")), null)).toEqual({ kind: "signin" }));
+  it.each([
+    new ApiError(503, "unavailable", "x"),
+    new ApiError(403, "forbidden", "x"),
+    new TypeError("network"),
+  ])("says the service could not be reached for %s", async (error) =>
+    expect(await welcomeState(() => Promise.reject(error), null)).toEqual({ kind: "unavailable" }));
+});
+
+describe("WelcomeBody", () => {
+  it("offers a retry when the service could not be reached", () => {
+    render(<WelcomeBody view={{ kind: "unavailable" }} />);
+    expect(screen.getByRole("heading", { name: "We could not reach the service. Try again." })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute("href", "/welcome");
+  });
+  it.each([
+    { kind: "terms" as const },
+    { kind: "paid" as const, grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: true },
+    { kind: "free" as const, checking: false },
+  ])("offers Sign out in the $kind view", (view) => {
+    render(<WelcomeBody view={view} />);
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  });
+  it("shows the guarantee date in the paid view", () => {
+    render(<WelcomeBody view={{ kind: "paid", grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: false }} />);
+    expect(screen.getByText("Your access is guaranteed until 31 January 2027.")).toBeInTheDocument();
+  });
+});
+
+describe("SignOutButton", () => {
+  beforeEach(() => localStorage.clear());
+  it("signs out, forgets the stored address and goes to /join", async () => {
+    localStorage.setItem("signin.email", "ana@example.org");
+    const go = vi.fn();
+    const signOut = vi.fn().mockResolvedValue(undefined);
+    render(<SignOutButton signOut={signOut} go={go} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(signOut).toHaveBeenCalledOnce();
+    expect(go).toHaveBeenCalledWith("/join");
+    expect(localStorage.getItem("signin.email")).toBeNull();
+  });
+  it("goes to /join even when the sign-out fails", async () => {
+    const go = vi.fn();
+    render(<SignOutButton signOut={vi.fn().mockRejectedValue(new Error("x"))} go={go} />);
+    await userEvent.click(screen.getByRole("button", { name: "Sign out" }));
     expect(go).toHaveBeenCalledWith("/join");
   });
 });

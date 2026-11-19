@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { defaultSignOut, leaveToJoin } from "@/lib/identity/sign-out";
 
 class SendError extends Error {
   constructor(readonly status: number) {
@@ -17,10 +18,6 @@ async function defaultSend(note: string): Promise<void> {
   if (!res.ok) throw new SendError(res.status);
 }
 
-async function defaultSignOut(): Promise<void> {
-  await fetch("/api/session", { method: "DELETE" });
-}
-
 export function NotRecognised({
   send = defaultSend,
   signOut = defaultSignOut,
@@ -35,14 +32,7 @@ export function NotRecognised({
   const [message, setMessage] = useState("");
   const [done, setDone] = useState(false);
 
-  const another = async () => {
-    try {
-      await signOut();
-    } catch {
-      // Go to the sign-in page either way.
-    }
-    go("/join");
-  };
+  const another = () => leaveToJoin(signOut, go);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();

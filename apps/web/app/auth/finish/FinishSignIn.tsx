@@ -7,6 +7,7 @@ import type { IdentityConfig } from "@/lib/identity/config";
 import {
   buildAuthClient,
   defaultPostSession,
+  isRetryable,
   type PostSession,
 } from "@/lib/identity/session-client";
 import { cleanSlug } from "@/lib/slug";
@@ -28,6 +29,14 @@ export function slugFromHref(href: string): string | null {
     return inner ? cleanSlug(new URL(inner).searchParams.get("c")) : null;
   } catch {
     return null;
+  }
+}
+
+function forgetEmail(): void {
+  try {
+    localStorage.removeItem("signin.email");
+  } catch {
+    // Storage unavailable: nothing to remove.
   }
 }
 
@@ -84,16 +93,19 @@ export function FinishSignIn({
     setPhase("working");
     try {
       const { next } = await postSession(token, slug);
-      try {
-        localStorage.removeItem("signin.email");
-      } catch {
-        // Nothing to forget if storage is unavailable.
-      }
+      forgetEmail();
       navigate(next);
-    } catch {
+    } catch (error) {
       focusTarget.current = "live";
-      setPhase("retry");
       setBusy(false);
+      if (isRetryable(error)) {
+        setPhase("retry");
+      } else {
+        // The token was refused: sending it again cannot work, so offer a new link.
+        tokenRef.current = null;
+        forgetEmail();
+        setPhase("expired");
+      }
     }
   };
 
@@ -110,11 +122,7 @@ export function FinishSignIn({
       const code = toAuthError(error).code;
       setBusy(false);
       if (code === "link_expired" || code === "link_used") {
-        try {
-          localStorage.removeItem("signin.email");
-        } catch {
-          // Storage unavailable: nothing to remove.
-        }
+        forgetEmail();
         focusTarget.current = "live";
         setPhase("expired");
       } else {
@@ -174,7 +182,7 @@ export function FinishSignIn({
       <>
         <p>This page finishes a sign-in link.</p>
         <p>
-          <Link href="/join">Start again</Link>
+          <Link href={slug ? `/join/${slug}` : "/join"}>Start again</Link>
         </p>
       </>
     );
