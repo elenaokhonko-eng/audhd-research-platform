@@ -63,7 +63,13 @@ module "web_dev" {
   site_env        = "dev"
   max_instances   = 2
   service_account = google_service_account.web_runtime.email
-  depends_on      = [google_project_service.enabled]
+  env = {
+    IDENTITY_API_KEY     = nonsensitive(module.identity.api_key) # public browser value
+    IDENTITY_AUTH_DOMAIN = module.identity.auth_domain
+    PLATFORM_API_URL     = module.platform_api.uri
+    SITE_ORIGIN          = "https://dev.${var.domain}"
+  }
+  depends_on = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------- dev.<domain>

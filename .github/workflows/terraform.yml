@@ -5,10 +5,10 @@ name: terraform
 
 on:
   pull_request:
-    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
   push:
     branches: [main, "integration/**"]
-    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
 
 permissions:
   contents: read
@@ -22,6 +22,23 @@ jobs:
         with:
           terraform_version: 1.13.4
       - run: terraform fmt -check -recursive infra/terraform
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+      - name: terraform test in every module that has tests
+        run: |
+          set -eu
+          for t in infra/terraform/modules/*/tests; do
+            [ -d "$t" ] || continue
+            m=$(dirname "$t")
+            echo "== $m"
+            (cd "$m" && terraform init -backend=false -input=false && terraform test)
+          done
 
   validate:
     runs-on: ubuntu-latest
