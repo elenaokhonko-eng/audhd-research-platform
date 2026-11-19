@@ -102,7 +102,7 @@ export function getPlatformApi(env?: Record<string, string | undefined>): Platfo
 | `bo` | `tier: "free"`; no reasons |
 | `ed` | `tier: "free"`; no reasons (he pays with another address) |
 | `fay` | `tier: "paid"`; reason `launch_grant` only |
-| `hal` | `tier: "paid"`; reason `substack_subscription` only |
+| `hal` | `tier: "free"`; one reason with grant `status:substack_paid`, label `substack_status`, status `active`, `plan_interval: "month"` (the fake models the setting under which a monthly plan does not include the platform; contracts 0.4) |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -791,6 +791,7 @@ git commit -m "web: finish page for the emailed sign-in link"
 export type WelcomeView =
   | { kind: "terms" }
   | { kind: "paid"; grantUntil: string | null; includedWhilePaying: boolean }
+  | { kind: "other_plan"; planInterval: "month" | "year" }
   | { kind: "free"; checking: boolean };
 export function welcomeView(me: { member: Member; access: Access }, check: string | null): WelcomeView;
 // app/api/terms/route.ts
@@ -799,7 +800,7 @@ export async function POST(request: Request): Promise<Response>;     // no body
 export async function POST(request: Request): Promise<Response>;     // body { note: string }
 ```
 
-- `welcomeView`: `terms` when `member.terms.accepted` is false. Otherwise `paid` when `access.tier` is `paid`: `grantUntil` is the latest `valid_until` among reasons with label `launch_grant` and status `active`, or null; `includedWhilePaying` is true when a reason with label `substack_subscription` has status `active` or `grace`. Otherwise `free`, with `checking` true only when `check` is `"started"`.
+- `welcomeView`: `terms` when `member.terms.accepted` is false. Otherwise `paid` when `access.tier` is `paid`: `grantUntil` is the latest `valid_until` among reasons with label `launch_grant` and status `active`, or null; `includedWhilePaying` is true when a reason with label `substack_subscription` has status `active` or `grace`. Otherwise `other_plan` when `access.tier` is `free` and a reason has label `substack_status`, status `active` or `grace` and a non-null `plan_interval`; `planInterval` is that value. Otherwise `free`, with `checking` true only when `check` is `"started"`.
 - `POST /api/terms`: same-origin check (403); no session cookie (401); reads `me`, then calls `acceptTerms` with `member.terms.required.terms_version` and `.privacy_version`; 200 `{ "ok": true }`; 503 when the service cannot be reached.
 - `POST /api/support`: same-origin; session required; `note` trimmed and cut to 500 characters; sends kind `paid_not_recognised`; 200 `{ "ok": true }`; when the service answers `terms_required`, 409 `{ "error": "terms_required" }` and `NotRecognised` shows "Accept the terms first." The note is not logged. The route's tests sign the person in and accept the terms inside each test; they do not rely on an earlier test, and one test checks the 409.
 - `app/welcome/page.tsx` (server): no session cookie → redirect to `/join`; `me` fails with `unauthenticated` → redirect to `/join`; otherwise render by view:
@@ -808,6 +809,7 @@ export async function POST(request: Request): Promise<Response>;     // body { n
 | --- | --- |
 | `terms` | Heading "Before you start". A check box labelled "I have read and accept the terms and the privacy notice", with both words linked. The button "Continue", disabled until the box is ticked; it posts to `/api/terms` and reloads the page |
 | `paid` | Heading "You are recognised as a paid subscriber." When `includedWhilePaying`: "Your membership is included for as long as your subscription is active." When `grantUntil` is set: "Your access is guaranteed until {date}." with the date written as day, month name and year. A link "Open your workspace" to `/member` |
+| `other_plan` | Heading "You are on the monthly plan." (or "the annual plan", from `planInterval`). The sentences "Full access to the platform comes with the annual plan." (shown when `planInterval` is `month`) and "Until you change your plan, you have the free workspace." A link "See how to change your plan" to `/upgrade` (built in Wave 2; it shows the `substack_change_plan` route). A link "Open your workspace" to `/member`. No `NotRecognised` block: this reader was recognised |
 | `free` | Heading "You are in as a free member." When `checking`: "We are checking your subscription. This can take a minute." and a link "Check again" to `/welcome`. A link "See how to upgrade" to `/upgrade` (built in Wave 2). Then `NotRecognised` |
 
 - `NotRecognised`: heading "Paying on Substack already?"; the sentence "Sign in with the email address your newsletter arrives at."; a link "Sign in with another email" that posts `DELETE /api/session` and goes to `/join`; a labelled text area "Tell us what happened" (limit 500 characters) and the button "Send", which posts to `/api/support` and then shows "Thank you. We will look at it."
@@ -841,8 +843,8 @@ describe("welcomeView", () => {
   });
   it("shows fay as paid through the grant alone", async () =>
     expect(welcomeView(await meOf("fay"), null)).toMatchObject({ kind: "paid", includedWhilePaying: false }));
-  it("shows hal as paid with no guarantee date", async () =>
-    expect(welcomeView(await meOf("hal"), null)).toEqual({ kind: "paid", grantUntil: null, includedWhilePaying: true }));
+  it("shows hal as a paying reader whose plan does not include the platform", async () =>
+    expect(welcomeView(await meOf("hal"), null)).toEqual({ kind: "other_plan", planInterval: "month" }));
   it("shows bo as free, checking only when a check was started", async () => {
     expect(welcomeView(await meOf("bo"), null)).toEqual({ kind: "free", checking: false });
     expect(welcomeView(await meOf("bo"), "started")).toEqual({ kind: "free", checking: true });

@@ -1,6 +1,6 @@
 # Contracts for the Stage 1 launch track
 
-**Status:** In force · version 0.3 · 2026-11-20 (0.2 was approved by merge on 2026-11-19; 0.3 records the owner's decisions: grant policies by plan interval, Substack plans recorded per interval, sign-in email from the platform's own domain)
+**Status:** In force · version 0.4 · 2026-11-20 (0.2 was approved by merge on 2026-11-19; 0.3 records the owner's decisions: grant policies by plan interval, Substack plans recorded per interval, sign-in email from the platform's own domain; 0.4 adds `plan_interval` to `Reason`, the route kind `substack_change_plan`, `config/launch.substack_account_url` and the place of the legal texts)
 **Design:** [launch track](../superpowers/specs/2026-11-19-launch-invites-grants-promotions-design.md) · [02](../architecture/02-membership-and-entitlements.md) · [09](../architecture/09-events-and-data-model.md)
 
 A **contract** here is a name and a shape that two lanes of the build both rely on: an HTTP route, a Python function in a module's `public.py`, a Firestore document, an event, a setting. Lanes build against this page in parallel. **Changing anything on it is a pull request of its own, owned by the integrator, merged before the code that needs it.** Once the code exists, the Pydantic models are the source of truth and this page is regenerated from them.
@@ -69,7 +69,10 @@ Admin routes (called by `platform-cli`):
 // Reason: why the member holds something, in terms a person can read
 {"grant": "tier:paid", "source": "substack_stripe" /* substack_roster | platform_stripe | payhip | grant */,
  "label": "substack_subscription" /* substack_status | launch_grant | owner_grant | purchase | platform_subscription */,
- "access_scope": "substack+platform", "status": "active", "valid_until": "…", "campaign": null}
+ "access_scope": "substack+platform", "status": "active", "valid_until": "…", "campaign": null,
+ "plan_interval": null /* "month" or "year" when the source is a Substack subscription, else null */}
+// A reader whose plan does not include the platform has tier "free" and one Reason with grant "status:substack_paid",
+// label "substack_status" and the plan_interval of the plan they pay for. web uses it to say which plan they are on.
 
 // Join: what happened at this sign-in
 {"campaign": "<slug or null>", "recognition": "paid" /* or "free" */,
@@ -77,7 +80,9 @@ Admin routes (called by `platform-cli`):
  "grant": {"created": true, "valid_until": "…"} /* or null */}
 
 // Route and Promotion
-{"kind": "substack" /* or "platform_only" */, "available": true, "url": "…"}
+{"kind": "substack" /* or "platform_only", or "substack_change_plan": the member already pays Substack on a plan that
+   does not include the platform; url is config/launch.substack_account_url, where they change the plan themselves */,
+ "available": true, "url": "…"}
 {"id": "…", "channel": "substack_offer", "plan_interval": "year", "starts_at": "…", "ends_at": "…",
  "url": "…", "display": {"badge": "…", "headline": "…", "body": "…"}}
 
@@ -139,7 +144,7 @@ class SubscriberRecord(BaseModel):
 
 class DirectoryListing(BaseModel):
     records: list[SubscriberRecord]
-    complete: bool                   # false when the file is truncated or a header is missing: nothing is applied
+    complete: bool                   # false when the file is truncated: nothing is applied. A missing required column raises ExportHeaderError, which names it
     rejected_rows: int
     exported_at: datetime            # used as started_at for a row that has no date of its own
 
@@ -157,7 +162,7 @@ class FileDirectory:                 # reads Substack's export file
 | `campaigns/{slug}` (replaces `invite_waves`; the slug is the id and never changes) | `audience`, `opens_at`, `closes_at`, `is_default`, `grant` (`grant`, `months`, `starts`, `fixed_until`, `requires_live_source[]`, `paid_since_before`, `plan_intervals[]` or null) or null, `copy` (`headline`, `body`, `cta`), `counts` (`arrivals`, `recognised_paid`, `grants_created`), `updated_at`, `updated_by` |
 | `promotions/{promotion_id}` | `channel`, `audience[]`, `plan_interval`, `starts_at`, `ends_at`, `substack_offer_url`, `stripe_coupon_id` (later), `display`, `counts` (`upgrades_in_window`), `updated_at`, `updated_by` |
 | `support_requests/{auto}` | `member_uid`, `kind`, `note`, `status` (`open`, `done`), `created_at`. Zone 1; the note is never copied into an event or a log |
-| `config/launch` | `join_open`, `library_open`, `promotions_open` (booleans), `reconcile_max_age_seconds`, `required_terms_version`, `required_privacy_version` |
+| `config/launch` | `join_open`, `library_open`, `promotions_open` (booleans), `reconcile_max_age_seconds`, `required_terms_version`, `required_privacy_version`, `substack_account_url` (the page of the publication where a subscriber changes their plan) |
 | `members/{uid}` gains | `joined_via` (campaign slug), `terms_accepted.privacy_version` |
 | `contacts/{contact_id}` changes | `invite` becomes `{campaign, state}`; `channels.substack.last_seen_in_roster` is written by every roster import |
 | `entitlements/{entitlement_id}` clarifies | `valid_from` is the source's `started_at`. For an owner grant or a launch grant it is the moment of the grant. `plan_interval` (`month`, `year` or null) is stored from the source state. A grant whose name starts with `status:` unlocks no section and no item; it is listed in `reasons` so the Account page can explain it |
@@ -238,6 +243,8 @@ Invented people at `example.org`, in `services/platform-api/tests/fixtures/peopl
 | `ed` | Pays with one address, signs in with another | The not-recognised route |
 | `fay` | Was paid, cancelled; holds a launch grant | Grant keeps access; ends on its date; `membership.tier.changed` when it does |
 | `gus` | Paid by card and also listed as paid in the roster file | The roster import creates nothing for him |
-| `hal` | Paid by card, monthly, `started_at` before the cut-off | No launch grant when the policy sets `plan_intervals` to annual only; paid or free workspace according to `PLATFORM_SUBSTACK_GRANT_MONTH` |
+| `hal` | Paid by card, monthly, `started_at` before the cut-off | No launch grant when the policy sets `plan_intervals` to annual only; paid or free workspace according to `PLATFORM_SUBSTACK_GRANT_MONTH`; with `status:substack_paid`, the monthly-plan message and the `substack_change_plan` route |
+
+**Legal texts.** The terms of use and the privacy notice are Markdown files in this repository, `apps/web/content/legal/terms.md` and `privacy.md`, each with front matter `version` (a date, `YYYY-MM-DD`) and `effective_from`. `web` renders them at `/terms` and `/privacy`. `config/launch.required_terms_version` and `required_privacy_version` name the versions a member must have accepted; the owner changes them with `platform-cli` after a new text is merged. The integrator drafts the texts; the owner approves them by merging.
 
 A recorded Stripe subscription list (sandbox data, ids replaced) lives in `services/platform-api/tests/recorded/stripe/`. Tests never call Stripe or Substack.

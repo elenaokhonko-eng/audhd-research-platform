@@ -157,7 +157,7 @@ Web lanes build against a mock of `platform-api` generated from the contracts pa
 | L6 Desk | [package skeleton](../superpowers/plans/2026-11-20-lane-desk-package-skeleton.md) | 1 to 3 | When one of the three is waiting at a gate |
 | L0 Integrator | [S1.0 plan](../superpowers/plans/2026-11-16-stage-1-slice-0-platform-skeleton.md) | 9 | After Core and Infra have landed |
 
-Wave 2 plans (identity and entitlements for Core, the reconcile for Commerce, the library, the workspace pages, jobs and alerts) are written by the integrator while Wave 1 runs, against the code Wave 1 produces. The export-file adapter (D2) is planned when the owner has supplied the export's header line.
+Wave 2 plans (identity and entitlements for Core, the reconcile for Commerce, the library, the workspace pages, jobs and alerts) are written by the integrator while Wave 1 runs, against the code Wave 1 produces. The export-file adapter (D2) has its plan: [export file adapter](../superpowers/plans/2026-11-20-lane-desk-export-file-adapter.md), written on 2026-11-20 from the header line the owner supplied; the Desk lane runs it after the package skeleton.
 
 ## 6. After the launch: the rest of Stage 1
 
