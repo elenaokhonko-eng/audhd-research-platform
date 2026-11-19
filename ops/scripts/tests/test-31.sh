@@ -24,4 +24,9 @@ grep -q "secret-value-123" <<<"$out" && fail "secret printed"
 : > "$STUB_LOG"; out="$(STUB_STATUS=404 bash "$script" example-dev --dry-run <<<"$answers")"
 grep -q "secret-value-123" <<<"$out" && fail "secret printed in dry run"
 grep -q "^POST" "$STUB_LOG" && fail "dry run must not POST"
+# 4. Reading the provider is refused (403): stops, changes nothing, prints no secret.
+: > "$STUB_LOG"; set +e; out="$(STUB_STATUS=403 bash "$script" example-dev <<<"$answers" 2>&1)"; code=$?; set -e
+[ "$code" -ne 0 ] || fail "403 on read should stop with a non-zero exit"
+grep -qE "^(POST|PATCH)" "$STUB_LOG" && fail "must not write after a refused read"
+grep -q "secret-value-123" <<<"$out" && fail "secret printed after 403"
 echo "test-31 passed"

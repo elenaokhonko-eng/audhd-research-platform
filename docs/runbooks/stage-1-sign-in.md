@@ -26,7 +26,15 @@ A domain may carry **only one** `v=spf1` record. If the answer contains one that
 export TF_VAR_auth_email_spf_includes='["_spf.firebasemail.com","<other include host>"]'
 ```
 
-Then apply. It worked when Terraform ends with `Apply complete!` and a plan run straight afterwards says no changes.
+Then apply again by re-running the foundations script:
+
+```bash
+bash ops/scripts/20-stage1-foundations.sh
+```
+
+Export the extra `TF_VAR_...` in the **same shell** first (a new Cloud Shell tab forgets it). The script is safe to re-run: finished steps are skipped. It applies **both** roots, prod first and then dev, shows each plan and asks you to type `yes` before changing anything (it also asks again whether to move the prod project into the folder; answer as before). It sets `TF_VAR_owner_member` itself and asks for the Cloudflare token if it is not set. Read the plan: it should show only the change you expect.
+
+It worked when Terraform ends with `Apply complete!` and a plan run straight afterwards says no changes.
 
 ## 3. Start the sending domain's verification
 
@@ -54,13 +62,21 @@ bash ops/scripts/30-auth-email-domain.sh audhd-neurobiology-prod audhdneurobiolo
 
 This is the one place where a screen is needed. Firebase's documentation gives the path as: Firebase console, Security, Authentication, Templates, the edit icon of any template, "customize domain". Opening the project in the Firebase console for the first time adds Firebase to it; that is expected and free.
 
-If the screen looks different, look for this: it lists the domain and **two CNAME records and two TXT records** to add to DNS. Compare them with the zone in Cloudflare (`terraform output auth_email_domain`). If the DKIM (CNAME) targets differ from ours, set them and apply again:
+If the screen looks different, look for this: it lists the domain and **two CNAME records and two TXT records** to add to DNS. Compare them with the zone in Cloudflare (`terraform -chdir=infra/terraform/envs/dev output auth_email_domain`, and `envs/prod` for prod). If the DKIM (CNAME) targets differ from ours, set them (in the same shell) and apply again:
 
 ```bash
 export TF_VAR_auth_email_dkim_targets='{"firebase1":"<first target>","firebase2":"<second target>"}'
 ```
 
-It is a map from the record's selector (`firebase1`, `firebase2`) to the host it points to. Then press the verify button in the console and re-run step 3's command; it should print `APPLIED`.
+It is a map from the record's selector (`firebase1`, `firebase2`) to the host it points to. Apply again:
+
+```bash
+bash ops/scripts/20-stage1-foundations.sh
+```
+
+Export the extra `TF_VAR_...` in the **same shell** first (a new Cloud Shell tab forgets it). The script is safe to re-run: finished steps are skipped. It applies **both** roots, prod first and then dev, shows each plan and asks you to type `yes` before changing anything (it also asks again whether to move the prod project into the folder; answer as before). It sets `TF_VAR_owner_member` itself and asks for the Cloudflare token if it is not set. Read the plan: it should show only the change you expect.
+
+Then press the verify button in the console and re-run step 3's command; it should print `APPLIED`.
 
 ## 5. Create the Google sign-in client
 
@@ -70,13 +86,19 @@ There is no command for this part; use the console. APIs & Services, Credentials
   ```bash
   terraform -chdir=infra/terraform/envs/dev output -raw identity_auth_domain
   ```
-  (the same with `envs/prod` for prod).
+  For prod: `terraform -chdir=infra/terraform/envs/prod output -raw identity_auth_domain`, with the site's origin `https://audhdneurobiology.org`.
 - **Authorised JavaScript origins:** the origin of the site, for example `https://dev.audhdneurobiology.org` for dev.
 
 Then store the client:
 
 ```bash
 bash ops/scripts/31-google-sign-in.sh audhd-neurobiology-dev
+```
+
+For prod, make its own client (its own redirect URI) and run:
+
+```bash
+bash ops/scripts/31-google-sign-in.sh audhd-neurobiology-prod
 ```
 
 Paste the client id, then the secret (nothing shows as you type). It worked when it prints `GOOGLE SIGN-IN ENABLED for audhd-neurobiology-dev` and the last six characters of the client id. The secret is never printed, never written to a file and never enters Terraform state. Use `--dry-run` first if you want to see what it would send.
@@ -91,9 +113,17 @@ Once the first test email shows the sender address, set it and apply again so th
 export TF_VAR_signin_sender_hint='<the sender address shown>'
 ```
 
+Then apply again, in the same shell:
+
+```bash
+bash ops/scripts/20-stage1-foundations.sh
+```
+
+The notes in step 2 apply (both roots, plan shown, you type `yes`).
+
 ## 7. Undo
 
-Stop using the custom sending domain, then turn the provider off:
+Stop using the custom sending domain, then turn the provider off. Shown for dev; for prod use project `audhd-neurobiology-prod` and the domain `audhdneurobiology.org` in both commands.
 
 ```bash
 TOKEN="$(gcloud auth print-access-token)"
@@ -105,3 +135,5 @@ curl -sS -X PATCH -H "Authorization: Bearer $TOKEN" -H "x-goog-user-project: aud
   -H 'content-type: application/json' -d '{"enabled":false}' \
   "https://identitytoolkit.googleapis.com/admin/v2/projects/audhd-neurobiology-dev/defaultSupportedIdpConfigs/google.com?updateMask=enabled"
 ```
+
+If Google refuses the CANCEL request, undo it in the console instead: the same screen as step 4 (Firebase console, Authentication, Templates, edit icon, "customize domain").
