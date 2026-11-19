@@ -67,3 +67,35 @@ def test_unknown_job_exits_with_status_2_and_lists_known_names(
 ) -> None:
     assert cli.main(["job", "no-such-job"]) == 2
     assert "selfcheck" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path", ["/v1/x", "/internal/x"])
+def test_hooks_mode_refuses_a_route_outside_health_and_hooks(
+    monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    from platform_api.commerce import http as commerce_http
+
+    monkeypatch.setattr(commerce_http, "hooks_router", _probe_router(path))
+    with pytest.raises(RuntimeError, match=path):
+        create_app(Settings(app_mode="hooks"))
+
+
+def test_job_logs_go_out_as_redacted_json(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    restore_root_logger: None,
+) -> None:
+    import json
+    import logging
+
+    from platform_api.commerce import jobs as commerce_jobs
+
+    def noisy(settings: Settings) -> int:
+        logging.getLogger("job").warning("saw ana@example.org")
+        return 0
+
+    monkeypatch.setattr(commerce_jobs, "JOBS", {"noisy": noisy})
+    assert cli.main(["job", "noisy"]) == 0
+    data = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert data["severity"] == "WARNING"
+    assert "[email]" in data["message"] and "ana@example.org" not in data["message"]

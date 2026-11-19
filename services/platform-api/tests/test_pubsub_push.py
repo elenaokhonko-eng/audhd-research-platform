@@ -135,12 +135,12 @@ def test_handler_error_response_does_not_leak_exception_text(setup):
 
 def test_malformed_message_log_carries_no_payload(setup, caplog):
     c, *_ = setup
-    payload = base64.b64encode(b'{"who": "ada@example.org"}').decode()
+    payload = base64.b64encode(b'{"who": "ana@example.org"}').decode()
     with caplog.at_level("ERROR"):
         r = c.post(URL, json={"message": {"data": payload}}, headers=GOOD)
     assert r.status_code == 204
     assert any(rec.levelname == "ERROR" for rec in caplog.records)
-    assert "ada@example.org" not in caplog.text
+    assert "ana@example.org" not in caplog.text
     assert payload not in caplog.text
 
 
@@ -214,3 +214,22 @@ def test_identity_empty_allowed_email_never_matches():
     with pytest.raises(NotAuthorised) as e:
         push_identity_from_token(t, allowed_email="")
     assert e.value.reason == "wrong_identity"
+
+
+def test_handlers_run_off_the_event_loop(setup):
+    import asyncio
+
+    c, registry, _inbox, _calls = setup
+    off_loop: list[bool] = []
+
+    def handler(e):
+        try:
+            asyncio.get_running_loop()
+            off_loop.append(False)
+        except RuntimeError:
+            off_loop.append(True)
+
+    registry.register("x.y.happened", handler)
+    body = envelope(new_event("x.y.happened", "s", {}, event_id="e-thread"))
+    assert c.post(URL, json=body, headers=GOOD).status_code == 204
+    assert off_loop == [True]

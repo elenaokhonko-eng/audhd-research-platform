@@ -1,8 +1,11 @@
 import json
+from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from platform_api.shared.bus import InMemoryBus, PubSubBus
-from platform_api.shared.events import new_event
+from platform_api.shared.events import DomainEvent, PersonalDataInEvent, new_event
 
 
 class FakeFuture:
@@ -41,3 +44,30 @@ def test_pubsub_bus_publishes_json_with_ce_attributes() -> None:
         "ce-type": "org.audhdneurobiology.x.y.happened",
         "ce-subject": "s-1",
     }
+
+
+def _event_with_email() -> DomainEvent:
+    return DomainEvent(
+        specversion="1.0",
+        id="e1",
+        type="org.audhdneurobiology.x.y.happened",
+        source="s",
+        subject="c_1",
+        time=datetime(2026, 11, 16, tzinfo=UTC),
+        datacontenttype="application/json",
+        data={"who": "ana@example.org"},
+    )
+
+
+def test_in_memory_bus_refuses_a_directly_built_event_with_an_email() -> None:
+    bus = InMemoryBus()
+    with pytest.raises(PersonalDataInEvent):
+        bus.publish(_event_with_email())
+    assert bus.published == []
+
+
+def test_pubsub_bus_refuses_a_directly_built_event_with_an_email() -> None:
+    pub: Any = FakePublisher()
+    with pytest.raises(PersonalDataInEvent):
+        PubSubBus(pub, "proj", "t").publish(_event_with_email())
+    assert pub.calls == []

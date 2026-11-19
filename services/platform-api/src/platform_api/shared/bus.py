@@ -4,7 +4,7 @@ from typing import Protocol
 
 from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
 
-from platform_api.shared.events import DomainEvent
+from platform_api.shared.events import DomainEvent, assert_no_personal_data
 
 
 class EventBus(Protocol):
@@ -18,6 +18,7 @@ class InMemoryBus:
         self.published: list[DomainEvent] = []
 
     def publish(self, event: DomainEvent) -> str:
+        assert_no_personal_data(event)
         self.published.append(event)
         return f"mem-{len(self.published)}"
 
@@ -28,6 +29,7 @@ class PubSubBus:
         self._topic_path = publisher.topic_path(project, topic)
 
     def publish(self, event: DomainEvent) -> str:
+        assert_no_personal_data(event)
         future = self._publisher.publish(
             self._topic_path,
             event.model_dump_json().encode("utf-8"),

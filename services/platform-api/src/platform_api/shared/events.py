@@ -42,9 +42,15 @@ def _contains_email(value: object) -> bool:
         return _EMAIL.search(value) is not None
     if isinstance(value, dict):
         return any(_contains_email(k) or _contains_email(v) for k, v in value.items())
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return any(_contains_email(v) for v in value)
     return False
+
+
+def assert_no_personal_data(event: DomainEvent) -> None:
+    """Raise PersonalDataInEvent if any field of the serialised event looks like an email."""
+    if _contains_email(event.model_dump(mode="json")):
+        raise PersonalDataInEvent("events carry ids only, not email addresses")
 
 
 def new_event(
@@ -57,11 +63,13 @@ def new_event(
 ) -> DomainEvent:
     if not type_suffix or type_suffix.startswith(EVENT_PREFIX):
         raise ValueError("type_suffix must be non-empty and must not repeat the prefix")
-    if _contains_email(subject) or _contains_email(data):
-        raise PersonalDataInEvent("events carry ids only, not email addresses")
-    return DomainEvent(
+    if event_id is None:
+        event_id = uuid.uuid4().hex
+    elif not event_id:
+        raise ValueError("event_id must not be empty")
+    event = DomainEvent(
         specversion="1.0",
-        id=event_id or uuid.uuid4().hex,
+        id=event_id,
         type=EVENT_PREFIX + type_suffix,
         source=EVENT_SOURCE,
         subject=subject,
@@ -69,3 +77,5 @@ def new_event(
         datacontenttype="application/json",
         data=data,
     )
+    assert_no_personal_data(event)
+    return event

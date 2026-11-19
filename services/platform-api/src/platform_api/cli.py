@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 
 from platform_api.modules import FEATURE_MODULES
 from platform_api.settings import Settings
+from platform_api.shared.logging import configure_logging
 
 JobTable = dict[str, Callable[[Settings], int]]
 
@@ -44,7 +45,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         known = ", ".join(sorted(registry))
         print(f"unknown job {args.name!r}; known jobs: {known}", file=sys.stderr)
         return 2
-    return job(Settings())
+    settings = Settings()
+    configure_logging(settings.service_name)
+    return job(settings)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from platform_api.shared.auth import NotAuthorised, PushIdentity
 from platform_api.shared.events import DomainEvent
@@ -34,6 +35,19 @@ def _decode_event(body: Any) -> DomainEvent | None:
         return DomainEvent.model_validate_json(raw)
     except (KeyError, TypeError, ValueError, binascii.Error, ValidationError):
         return None
+
+
+def _process(inbox: Inbox, registry: HandlerRegistry, event: DomainEvent) -> int:
+    if inbox.seen(event.id):
+        return 204
+    try:
+        for handler in registry.handlers_for(event.type):
+            handler(event)
+    except Exception:
+        log.exception("Handler failed for event %s of type %s", event.id, event.type)
+        return 500
+    inbox.record(event.id, event_type=event.type, received_at=datetime.now(UTC))
+    return 204
 
 
 def build_push_router(
@@ -65,15 +79,8 @@ def build_push_router(
             log.error("Dropped a push message that is not a valid platform event")
             return Response(status_code=204)
 
-        if inbox.seen(event.id):
-            return Response(status_code=204)
-        try:
-            for handler in registry.handlers_for(event.type):
-                handler(event)
-        except Exception:
-            log.exception("Handler failed for event %s of type %s", event.id, event.type)
-            return Response(status_code=500)
-        inbox.record(event.id, event_type=event.type, received_at=datetime.now(UTC))
-        return Response(status_code=204)
+        # Firestore and handlers block; keep them off the event loop.
+        status = await run_in_threadpool(_process, inbox, registry, event)
+        return Response(status_code=status)
 
     return router

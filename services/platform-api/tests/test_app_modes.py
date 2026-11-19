@@ -40,6 +40,7 @@ def test_importing_main_needs_no_cloud_credentials():
 
     env = {k: v for k, v in os.environ.items() if not k.startswith(("GOOGLE_", "PLATFORM_"))}
     env["PLATFORM_ENV"] = "local"
+    env["GOOGLE_APPLICATION_CREDENTIALS"] = "/nonexistent"
     result = subprocess.run(
         [sys.executable, "-c", "import platform_api.main"],
         env=env,

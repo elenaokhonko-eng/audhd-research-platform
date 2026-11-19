@@ -1,8 +1,14 @@
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import BaseModel
 
 from platform_api.shared.events import EVENT_SOURCE, PersonalDataInEvent, new_event
+
+
+class _Holder(BaseModel):
+    note: str
+
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 
@@ -34,12 +40,24 @@ def test_event_id_defaults_to_a_fresh_uuid() -> None:
     [
         ("someone@example.org", {}),
         ("c_1", {"email": "someone@example.org"}),
-        ("c_1", {"items": [{"note": "write to Some.One+tag@Example.co.uk please"}]}),
+        ("c_1", {"items": [{"note": "write to Some.One+tag@Mail.Example.org please"}]}),
+        ("c_1", {"holder": _Holder(note="ana@example.org")}),
+        ("c_1", {"set": frozenset({"ana@example.org"})}),
     ],
 )
 def test_email_anywhere_in_the_event_is_rejected(subject: str, data: dict) -> None:  # type: ignore[type-arg]
     with pytest.raises(PersonalDataInEvent):
         new_event("x.y.happened", subject, data)
+
+
+def test_event_id_that_looks_like_an_email_is_rejected() -> None:
+    with pytest.raises(PersonalDataInEvent):
+        new_event("x.y.happened", "s", {}, event_id="ana@example.org")
+
+
+def test_an_empty_event_id_is_refused() -> None:
+    with pytest.raises(ValueError):
+        new_event("x.y.happened", "s", {}, event_id="")
 
 
 def test_type_suffix_must_not_repeat_the_prefix_or_be_empty() -> None:

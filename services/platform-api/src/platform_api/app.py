@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
 
@@ -23,6 +23,25 @@ class Deps:
     inbox: Inbox | None = None
     registry: HandlerRegistry | None = None
     verify_push: Callable[[str], PushIdentity] | None = None
+
+
+def _route_paths(router: Any, prefix: str = "") -> Iterator[str]:
+    """Every path a router serves, following routers included inside it."""
+    for route in router.routes:
+        original = getattr(route, "original_router", None)
+        if original is not None:
+            inner = prefix + route.include_context.prefix
+            yield from _route_paths(original, inner)
+        else:
+            yield prefix + getattr(route, "path", "")
+
+
+def _require_hooks_paths(router: Any) -> None:
+    for path in _route_paths(router):
+        if not path.startswith("/hooks/"):
+            raise RuntimeError(
+                f"hooks mode may serve only /health and /hooks/*, but a route is at {path!r}"
+            )
 
 
 def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
@@ -66,6 +85,9 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
     attr = "router" if settings.app_mode == "api" else "hooks_router"
     for name in FEATURE_MODULES:
         http = importlib.import_module(f"platform_api.{name}.http")
-        app.include_router(getattr(http, attr))
+        router = getattr(http, attr)
+        if settings.app_mode == "hooks":
+            _require_hooks_paths(router)
+        app.include_router(router)
 
     return app
