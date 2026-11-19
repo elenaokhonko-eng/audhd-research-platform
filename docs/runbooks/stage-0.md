@@ -9,9 +9,9 @@ Three steps need a browser, and each is marked **browser**. Everything else is a
 | Piece | Where |
 | --- | --- |
 | Website, production | `web-prod` on Cloud Run → https://audhdneurobiology.org and https://www.audhdneurobiology.org |
-| Website, preview for testing | `web-dev` on Cloud Run → https://dev.audhdneurobiology.org (not indexed by search engines) |
+| Website, preview for testing | `web-dev` on Cloud Run → https://dev.audhdneurobiology.org (not indexed by search engines). Since Stage 1 it runs in the dev project: [stage-1-foundations.md](stage-1-foundations.md) |
 | Images | Artifact Registry `asia-southeast1-docker.pkg.dev/<project>/platform/web:<commit>` |
-| Deploys | Push to `main` → dev. Push a tag `v0.1.0` → prod, after you approve in GitHub |
+| Deploys | Superseded by [stage-1-foundations.md](stage-1-foundations.md): pushes to `integration/stage-1` deploy dev once `DEPLOY_DEV_ENABLED` is set (Gate 1). Push a tag `v0.1.0` → prod, after you approve in GitHub |
 | Health | `/api/healthz`, checked every 5 minutes; email alert if it fails for 5 minutes |
 | Budget | Monthly budget, emails at 50 %, 90 %, 100 % |
 | Code for all of it | `infra/terraform/`, `.github/workflows/`, `ops/scripts/` |
@@ -78,11 +78,11 @@ From now on a prod deploy waits for your click in GitHub.
 
 | I want to | Do |
 | --- | --- |
-| Change the site and preview it | Commit to `main` (or merge a PR). Two minutes later it is on dev.audhdneurobiology.org |
+| Change the site and preview it | Since Stage 1: merge into `integration/stage-1` once dev deploys are switched on ([stage-1-foundations.md](stage-1-foundations.md)). Two minutes later it is on dev.audhdneurobiology.org |
 | Publish to the real site | `git tag v0.1.1 && git push origin v0.1.1`, then approve the run in GitHub → Actions |
 | Roll back prod | `gcloud run services update-traffic web-prod --region asia-southeast1 --to-revisions=PREVIOUS_REVISION=100` (list with `gcloud run revisions list --service web-prod --region asia-southeast1`) |
 | See logs | `gcloud run services logs read web-prod --region asia-southeast1 --limit 50` |
-| Check drift | `cd infra/terraform && terraform plan` should say *No changes* |
+| Check drift | `cd infra/terraform/envs/prod && terraform plan` should say *No changes* |
 
 ## Site is down
 

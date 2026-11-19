@@ -6,9 +6,10 @@
 # What it does
 #   1. creates the project and links billing
 #   2. creates the Terraform state bucket
-#   3. runs Terraform (APIs, registry, web-dev, web-prod, GitHub identity, uptime check, budget)
-#   4. builds the website image and deploys it to web-dev and web-prod
+#   3. runs Terraform (APIs, registry, web-prod, GitHub identity, uptime check, budget)
+#   4. builds the website image and deploys it to web-prod
 #   5. sets the GitHub repository variables the deploy workflow reads
+# Since Stage 1 the preview site web-dev lives in its own project: ops/scripts/20-stage1-foundations.sh.
 set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-audhd-neurobiology-prod}"
@@ -67,7 +68,12 @@ if ! terraform version 2>/dev/null | grep -q '^Terraform v'; then
   grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 terraform version | head -1
-cd "$ROOT/infra/terraform"
+cd "$ROOT/infra/terraform/envs/prod"
+# The production root moved from infra/terraform to infra/terraform/envs/prod (Stage 1).
+# Carry over a terraform.tfvars written before the move; the state bucket is unchanged.
+if [[ ! -f terraform.tfvars && -f "$ROOT/infra/terraform/terraform.tfvars" ]]; then
+  mv "$ROOT/infra/terraform/terraform.tfvars" terraform.tfvars
+fi
 if [[ ! -f terraform.tfvars ]]; then
   cat > terraform.tfvars <<EOF
 project_id         = "${PROJECT_ID}"
@@ -97,10 +103,8 @@ IMAGE="${REGISTRY}/web:${TAG}"
 gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 docker build -t "$IMAGE" apps/web
 for i in 1 2 3 4 5; do docker push "$IMAGE" && break; echo "push failed, retrying in $((i*10))s"; sleep $((i*10)); [[ $i == 5 ]] && exit 1; done
-for SVC in web-dev web-prod; do
-  gcloud run deploy "$SVC" --image "$IMAGE" --region "$REGION" \
-    --service-account "$RUNTIME_SA" --quiet
-done
+gcloud run deploy web-prod --image "$IMAGE" --region "$REGION" \
+  --service-account "$RUNTIME_SA" --quiet
 
 say "5/5 GitHub repository variables"
 if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
@@ -114,8 +118,7 @@ else
   echo "gh is not logged in. Run 'gh auth login', then re-run this script (steps 1-4 are skipped when done)."
 fi
 
-cd "$ROOT/infra/terraform"
+cd "$ROOT/infra/terraform/envs/prod"
 say "Done"
-echo "dev:  $(terraform output -raw web_dev_url)"
 echo "prod: $(terraform output -raw web_prod_url)"
-echo "Next: bash ops/scripts/10-domain.sh"
+echo "Next: bash ops/scripts/10-domain.sh, then bash ops/scripts/20-stage1-foundations.sh"

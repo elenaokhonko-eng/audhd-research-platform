@@ -1,0 +1,3 @@
+
+# import-linter probe files made by tests/test_boundaries.py
+src/platform_api/*/_probe_*.py

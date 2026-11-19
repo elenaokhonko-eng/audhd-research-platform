@@ -1,0 +1,34 @@
+[importlinter]
+root_package = platform_api
+
+[importlinter:contract:feature-modules-independent]
+name = Feature modules use each other only through public
+type = independence
+unmatched_ignore_imports_alerting = none
+modules =
+    platform_api.identity
+    platform_api.entitlements
+    platform_api.commerce
+    platform_api.library
+    platform_api.content
+    platform_api.admin
+ignore_imports =
+    platform_api.** -> platform_api.identity.public
+    platform_api.** -> platform_api.entitlements.public
+    platform_api.** -> platform_api.commerce.public
+    platform_api.** -> platform_api.library.public
+    platform_api.** -> platform_api.content.public
+    platform_api.** -> platform_api.admin.public
+
+[importlinter:contract:shared-imports-no-feature-module]
+name = Shared code imports no feature module
+type = forbidden
+source_modules =
+    platform_api.shared
+forbidden_modules =
+    platform_api.identity
+    platform_api.entitlements
+    platform_api.commerce
+    platform_api.library
+    platform_api.content
+    platform_api.admin

@@ -1,5 +1,5 @@
 variable "project_id" {
-  description = "Google Cloud project id, e.g. audhd-neurobiology-prod"
+  description = "Google Cloud project id, e.g. audhd-neurobiology-dev"
   type        = string
 }
 
@@ -9,19 +9,8 @@ variable "region" {
   default     = "asia-southeast1"
 }
 
-variable "billing_account_id" {
-  description = "Billing account id (XXXXXX-XXXXXX-XXXXXX) for the budget alert"
-  type        = string
-}
-
-variable "budget_amount" {
-  description = "Monthly budget in the billing account's own currency; alerts at 50%, 90%, 100%"
-  type        = number
-  default     = 30
-}
-
 variable "alert_email" {
-  description = "Where uptime and budget alerts go"
+  description = "Where dead-letter alerts go"
   type        = string
 }
 
@@ -38,7 +27,7 @@ variable "domain" {
 }
 
 variable "map_custom_domains" {
-  description = "Create Cloud Run domain mappings. Needs the domain verified in Search Console by the identity running Terraform."
+  description = "Create the Cloud Run domain mapping for dev.<domain>. Needs the domain verified in Search Console by the identity running Terraform."
   type        = bool
   default     = false
 }
@@ -62,8 +51,26 @@ variable "cloudflare_zone_id" {
   default     = ""
 }
 
-variable "check_custom_domain" {
-  description = "Point the production uptime check at https://<domain> instead of the run.app URL. Turn on once the certificate is issued."
-  type        = bool
-  default     = false
+variable "owner_member" {
+  description = "IAM member of the owner, e.g. user:name@example.org. Set via TF_VAR_owner_member; never written to a file."
+  type        = string
+  sensitive   = true
+}
+
+variable "auth_email_spf_includes" {
+  description = "Hosts in the one SPF record of the sign-in email domain. Add any includes the domain already carries (dig +short TXT <domain>)."
+  type        = list(string)
+  default     = ["_spf.firebasemail.com"]
+}
+
+variable "auth_email_dkim_targets" {
+  description = "Override of the two DKIM CNAME targets (selector to host), if the console's customize-domain screen differs from the computed pattern. Null computes them."
+  type        = map(string)
+  default     = null
+}
+
+variable "signin_sender_hint" {
+  description = "Sender address the sign-in email shows, once the first test email reveals it. Given to the web service as SIGNIN_SENDER_HINT."
+  type        = string
+  default     = ""
 }

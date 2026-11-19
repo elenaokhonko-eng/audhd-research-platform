@@ -1,28 +1,67 @@
 # Format and validate Terraform on every pull request. Applying stays a human step
 # (ops/scripts, run by the owner) until the ops team's drift agent arrives in Stage 2.
+# One root per environment: infra/terraform/envs/dev and infra/terraform/envs/prod.
 name: terraform
 
 on:
   pull_request:
-    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
   push:
-    branches: [main]
-    paths: ["infra/terraform/**"]
+    branches: [main, "integration/**"]
+    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
 
 permissions:
   contents: read
 
 jobs:
-  validate:
+  fmt:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/terraform
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.4
-      - run: terraform fmt -check -recursive
+      - run: terraform fmt -check -recursive infra/terraform
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -S warning: the older scripts carry one style-level note (SC2016) that is intentional.
+      - run: shellcheck -S warning ops/scripts/*.sh ops/scripts/tests/*.sh
+      - run: bash ops/scripts/tests/test-30.sh
+      - run: bash ops/scripts/tests/test-31.sh
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
+      - name: terraform test in every module that has tests
+        run: |
+          set -eu
+          for t in infra/terraform/modules/*/tests; do
+            [ -d "$t" ] || continue
+            m=$(dirname "$t")
+            echo "== $m"
+            (cd "$m" && terraform init -backend=false -input=false && terraform test)
+          done
+
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [envs/dev, envs/prod]
+    defaults:
+      run:
+        working-directory: infra/terraform/${{ matrix.root }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
       - run: terraform init -backend=false -input=false
       - run: terraform validate

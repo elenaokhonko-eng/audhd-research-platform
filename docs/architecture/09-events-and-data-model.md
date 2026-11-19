@@ -151,6 +151,7 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 | `commerce.promotion.upgrade_counted` | M14 | reporting | `promotion_id`, `contact_id`, `channel`, `source_ref` |
 | `content.item.downloaded` | M12 | reporting | `member_uid`, `sku`, `version` |
 | `substack.roster.synced` | M15 | M2 | `run_id`, counts, `guard` |
+| `platform.selfcheck.ran` | selfcheck job (shared) | none; read by the deploy smoke test only | `check` |
 | `substack.subscriber.changed` | M15 | M2 | `contact_id`, `type`, `plan_interval` |
 | `substack.contract.drifted` | M15 | M13 (later), alert | `endpoint`, `expected`, `observed` |
 | `content.item.published` | M12 | M12 index job | `content_id`, `source`, `access` |

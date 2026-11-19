@@ -6,3 +6,6 @@ out/
 .env.*
 !.env.example
 *.log
+# The root .gitignore ignores lib/ for the Python prototype; the website source lives here.
+!lib/
+tsconfig.tsbuildinfo
