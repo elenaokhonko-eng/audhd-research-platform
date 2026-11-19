@@ -1,8 +1,9 @@
 # M1 website: test on every pull request. Deploy to the dev project on every push to
-# integration/stage-1 once the owner has switched dev deploys on (Gate 1), and to prod when a
-# v* tag is pushed and the owner approves. Each deploy job reads GCP_PROJECT_ID, GCP_REGION,
-# WIF_PROVIDER, DEPLOYER_SA, RUNTIME_SA and REGISTRY from its GitHub environment (dev or
-# production), which ops/scripts/20-stage1-foundations.sh fills from Terraform's outputs.
+# integration/stage-1, or a manual run (workflow_dispatch) on that branch, once the owner has
+# switched dev deploys on (Gate 1), and to prod when a v* tag is pushed and the owner
+# approves. Each deploy job reads GCP_PROJECT_ID, GCP_REGION, WIF_PROVIDER, DEPLOYER_SA,
+# RUNTIME_SA and REGISTRY from its GitHub environment (dev or production), which
+# ops/scripts/20-stage1-foundations.sh fills from Terraform's outputs.
 name: web
 
 on:
@@ -49,11 +50,12 @@ jobs:
           done
 
   # Only integration/stage-1 deploys to dev, so the daily promotion to main does not deploy a
-  # second time. DEPLOY_DEV_ENABLED is a variable of the environment dev, which a job-level
-  # condition cannot see (the environment's variables are available to steps only), so the
-  # check is the first step and every later step depends on it.
+  # second time. A manual run on that branch redeploys without a new commit. DEPLOY_DEV_ENABLED
+  # is a variable of the environment dev, which a job-level condition cannot see (the
+  # environment's variables are available to steps only), so the check is the first step and
+  # every later step depends on it.
   deploy-dev:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/integration/stage-1'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/integration/stage-1'
     needs: build-test
     runs-on: ubuntu-latest
     environment: dev

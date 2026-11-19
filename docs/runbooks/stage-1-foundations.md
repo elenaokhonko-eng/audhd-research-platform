@@ -32,7 +32,7 @@ You need, in Cloud Shell:
 - `gcloud` logged in as you, and `gh` logged in to GitHub (`gh auth status`; if not, `gh auth login`).
 - Terraform in `~/bin` (installed by `00-bootstrap.sh`) and `infra/terraform/envs/prod/terraform.tfvars` from Stage 0.
 - Your Cloudflare API token from Stage 0 (Zone:DNS:Edit on `audhdneurobiology.org`). Both applies need it, because `dev.audhdneurobiology.org` moves from one project to the other. If you no longer have it, create a new one: Cloudflare → My Profile → API Tokens → Create Token → template *Edit zone DNS*.
-- On the organisation: the roles *Folder Creator* and *Project Creator*, and *Project Mover* to move the prod project. An organisation administrator can grant them, for example:
+- On the organisation: the roles *Folder Creator* and *Project Creator* (which also lets you move a project into the new folder), and *Project Mover* to move the prod project out of its current parent (granted on the prod project itself is enough). An organisation administrator can grant them, for example:
   `gcloud organizations add-iam-policy-binding ORG_ID --member="user:YOUR_ACCOUNT" --role=roles/resourcemanager.folderCreator`
 
 ## Run it (about 20 minutes, plus certificate time)
@@ -49,12 +49,14 @@ bash ops/scripts/20-stage1-foundations.sh
 | --- | --- |
 | `Cloudflare API token:` | Paste the token and press Enter. Nothing is shown while you paste; it is kept in this shell session only and never written to a file. It is skipped if `TF_VAR_cloudflare_api_token` is already set. |
 | `Move audhd-neurobiology-prod into the folder audhd-neurobiology now? [y/N]` | `y` moves the prod project into the folder. The project keeps its id, number, services and data; nothing restarts. Anything other than `y` skips the move and the script continues; re-run later to move it. |
-| Terraform, first time: `Do you want to perform these actions?` (envs/prod) | Read the plan. Expect it to **destroy** `web-dev`, the mapping `dev.audhdneurobiology.org` and the `dev` CNAME record, and to **create** the platform resources listed above. Nothing for `web-prod`, `audhdneurobiology.org` or `www` should be destroyed. Type `yes` to apply; anything else cancels and the script stops. |
+| Terraform, first time: `Do you want to perform these actions?` (envs/prod) | Read the plan. Expect it to **destroy** `web-dev`, the mapping `dev.audhdneurobiology.org` and the `dev` CNAME record, and to **create** the platform resources listed above. Nothing for `web-prod`, `audhdneurobiology.org` or `www` should be destroyed. Type `yes` to apply; anything else cancels, nothing changes, and the script stops: re-run it when you are ready. |
 | Terraform, second time (envs/dev) | Expect only **creates**, in the dev project. Type `yes`. |
 
 The script also asks Google to create Pub/Sub's service agent in each project before each apply (`gcloud beta services identity create --service=pubsub.googleapis.com`). Google normally creates that agent a little after the API is switched on, and Terraform's first apply would fail if it granted roles to an agent that does not exist yet.
 
-Step 6 builds the first `platform-api` image and deploys it to both projects. If the service's code has not been merged yet (no `services/platform-api/Dockerfile`), the script says so and skips this step; the services keep Google's placeholder image until the first CI deploy or a later re-run of the script.
+Step 6 first builds the website (`apps/web`) and deploys it to `web-dev` in the dev project, with the dev website identity `web-runtime`, so the preview site shows the real site rather than Google's placeholder page. This does not depend on the platform service. Each re-run of the script deploys the commit you have checked out.
+
+Step 6 then builds the first `platform-api` image and deploys it to both projects. If the service's code has not been merged yet (no `services/platform-api/Dockerfile`), the script says so and skips this part; `platform-api`, `platform-hooks` and `platform-selfcheck` keep Google's placeholder image. They get the real image once Core's service code and the platform-api image (S1.0 Task 6) have been merged: re-run the script then. The platform-api CI deploy arrives with S1.0 Task 6 as well; until it does, no workflow deploys platform-api. The script's last message tells you which case you are in.
 
 At the end it prints whether the `production` environment has a required reviewer. If it has none, make yourself the reviewer (GitHub → repository → Settings → Environments → production → Required reviewers), or:
 
@@ -76,7 +78,7 @@ gh api -X PUT repos/elenaokhonko-eng/audhd-research-platform/environments/produc
 
 ## Check it: the smoke test
 
-Once the real `platform-api` image is deployed (step 6, or the first CI deploy):
+The smoke test needs the real `platform-api` image. It runs only after Core's service code and the platform-api image (S1.0 Task 6) have landed and step 6 of a re-run, or the platform-api CI deploy that arrives with S1.0 Task 6, has deployed it. With the placeholder image, step a fails.
 
 ```bash
 bash ops/scripts/smoke-platform.sh audhd-neurobiology-dev
@@ -106,6 +108,14 @@ Until you do this, pushes to `integration/stage-1` deploy nothing. When you are 
 ```bash
 gh variable set DEPLOY_DEV_ENABLED --env dev --body true
 ```
+
+From then on every push to `integration/stage-1` that changes `apps/web` deploys the website to `web-dev` in the dev project. To deploy it without a new commit, run the workflow by hand on that branch:
+
+```bash
+gh workflow run web.yml --ref integration/stage-1
+```
+
+A manual run on any other branch tests the site but deploys nothing. Only jobs in the GitHub environment `dev` can use the dev deploy identity.
 
 To switch them off again: `gh variable delete DEPLOY_DEV_ENABLED --env dev`.
 
