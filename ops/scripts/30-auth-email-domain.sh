@@ -6,7 +6,8 @@
 #   bash ops/scripts/30-auth-email-domain.sh audhd-neurobiology-dev auth.dev.audhdneurobiology.org
 # Safe to re-run: it reads the current setting first and changes nothing when it already matches.
 # --dry-run prints each change it would send (method, URL, body) and sends only the read.
-# Exit codes: 0 applied (or already), 1 failure, 2 wrong usage, 3 DNS not verified yet.
+# Exit codes: 0 applied or already applied (with --dry-run: verified, would apply), 1 failure,
+# 2 wrong usage, 3 not verified yet (including a verification Google checked and FAILED).
 # This script never prints the access token.
 set -euo pipefail
 
@@ -75,7 +76,10 @@ if [[ "$(field customDomain)" == "$domain" && "$(field useCustomDomain)" == "tru
 fi
 
 say "2/3 Verification of $domain"
-if [[ "$(field pendingCustomDomain)" != "$domain" ]]; then
+# Ask (again) when this domain was never requested, or when Google's last check of it failed or
+# did not start: a new VERIFY makes Google look at the DNS records once more.
+state="$(field customDomainState)"
+if [[ "$(field pendingCustomDomain)" != "$domain" || "$state" == "FAILED" || "$state" == "NOT_STARTED" ]]; then
   post_verify VERIFY
   read_config
 fi
@@ -86,18 +90,22 @@ echo "Verification requested at: $(field domainVerificationRequestTime || true)"
 if [[ "$state" != "$VERIFIED_STATE" ]]; then
   say "NOT VERIFIED YET"
   if [[ "$state" == "FAILED" ]]; then
-    echo "Google checked and verification FAILED: the DNS records it found do not match. Do not just wait; compare the records below with the zone and correct them."
+    echo "Google checked and verification FAILED: the DNS records it found do not match. This run asked Google to check again, but do not just wait; compare the records below with the zone and correct them."
   fi
   cat <<RECORDS
 Google has not confirmed the DNS records of $domain yet. DNS changes can take from a few minutes
-up to a few hours. Compare these with what Terraform created (terraform output auth_email_domain,
-and the DNS zone in Cloudflare):
-  TXT    $domain                          v=spf1 include:_spf.firebasemail.com ~all
+up to a few hours. Compare these with the DNS zone in Cloudflare (dashboard, zone of the domain,
+DNS > Records), where Terraform created them:
+  TXT    $domain                          one v=spf1 record containing include:_spf.firebasemail.com
+                                          (and any other includes you set); it ends in ~all
   TXT    $domain                          firebase=$project
-  CNAME  firebase1._domainkey.$domain     (value shown by Terraform)
-  CNAME  firebase2._domainkey.$domain     (value shown by Terraform)
+  CNAME  firebase1._domainkey.$domain     target: see the zone in Cloudflare
+  CNAME  firebase2._domainkey.$domain     target: see the zone in Cloudflare
 Also present, not needed for verification: TXT _dmarc.$domain
-The domain may carry only one v=spf1 record; if the zone shows two, merge them.
+The domain may carry only one v=spf1 record; if the zone shows two, merge them
+(docs/runbooks/stage-1-sign-in.md, "Before you run anything").
+Terraform shows the sending domain with:
+  terraform -chdir=infra/terraform/envs/<env> output auth_email_domain   (<env> is dev or prod)
 When they match, wait a little and run again:
   bash ops/scripts/30-auth-email-domain.sh $project $domain
 RECORDS
@@ -111,8 +119,8 @@ if [[ "$dry" -eq 1 ]]; then
   exit 0
 fi
 read_config
-if [[ "$(field customDomain)" == "$domain" ]]; then
+if [[ "$(field customDomain)" == "$domain" && "$(field useCustomDomain)" == "true" ]]; then
   echo "APPLIED: sign-in emails now come from $domain."
 else
-  stop "The apply request was accepted but the settings do not show $domain yet. Re-run this script in a minute; it is safe to repeat."
+  stop "The apply request was accepted but the settings do not show $domain in use yet (customDomain $domain with useCustomDomain true). Re-run this script in a minute; it is safe to repeat."
 fi

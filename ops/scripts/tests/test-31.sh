@@ -29,4 +29,9 @@ grep -q "^POST" "$STUB_LOG" && fail "dry run must not POST"
 [ "$code" -ne 0 ] || fail "403 on read should stop with a non-zero exit"
 grep -qE "^(POST|PATCH)" "$STUB_LOG" && fail "must not write after a refused read"
 grep -q "secret-value-123" <<<"$out" && fail "secret printed after 403"
+# 5. Input ends before the client id: stops with a message, sends nothing.
+: > "$STUB_LOG"; set +e; out="$(bash "$script" example-dev </dev/null 2>&1)"; code=$?; set -e
+[ "$code" -eq 1 ] || fail "end of input should stop with exit 1, got $code"
+grep -q "Nothing was changed" <<<"$out" || fail "end of input should say nothing was changed"
+[ -s "$STUB_LOG" ] && fail "must not call Google after end of input"
 echo "test-31 passed"

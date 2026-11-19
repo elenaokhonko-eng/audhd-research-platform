@@ -37,8 +37,11 @@ body_file="$(mktemp)"; trap 'rm -f "$body_file"' EXIT
 call() { if [ $# -ge 3 ]; then printf '%s' "$3" | "$CURL" -sS -X "$1" -H "Authorization: Bearer $token" -H "x-goog-user-project: $project" -H 'content-type: application/json' -o "$body_file" -w '%{http_code}' --data @- "$2"; else "$CURL" -sS -X "$1" -H "Authorization: Bearer $token" -H "x-goog-user-project: $project" -o "$body_file" -w '%{http_code}' "$2"; fi; }
 
 say "Google sign-in client for $project"
-read -r -p "Client id (ends in .apps.googleusercontent.com): " client_id
-read -rs -p "Client secret (typed without echo): " client_secret; echo
+read -r -p "Client id (ends in .apps.googleusercontent.com): " client_id \
+  || stop "The input ended before a client id was entered. Nothing was changed. Re-run in a terminal and paste the client id."
+read -rs -p "Client secret (typed without echo): " client_secret \
+  || stop "The input ended before a client secret was entered. Nothing was changed. Re-run in a terminal and paste the client secret."
+echo
 [[ -n "$client_id" ]] || stop "No client id was entered. Nothing was changed. Re-run and paste the client id."
 [[ -n "$client_secret" ]] || stop "No client secret was entered. Nothing was changed. Re-run and paste the client secret."
 

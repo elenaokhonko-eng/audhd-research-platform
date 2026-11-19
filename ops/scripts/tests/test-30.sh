@@ -32,4 +32,10 @@ set +e; out="$(STUB_STATUS=403 run 2>&1)"; code=$?; set -e
 [ "$code" -ne 0 ] || fail "a 403 on the read must fail"
 grep -q "^POST" "$STUB_LOG" && fail "must not POST after a failed read"
 grep -q "stub-token" <<<"$out" && fail "token leaked on failure"
+# 6. Verification of this domain FAILED earlier: asks for verification again, does not apply, exit 3.
+echo '{"notification":{"sendEmail":{"dnsInfo":{"pendingCustomDomain":"dev.example.org","customDomainState":"FAILED"}}}}' > "$tmp/config.json"
+set +e; out="$(run)"; code=$?; set -e
+[ "$code" -eq 3 ] || fail "exit code should be 3 after a failed verification, got $code"
+grep -q '"action":"VERIFY"' "$STUB_LOG" || fail "should request verification again after FAILED"
+grep -q '"action":"APPLY"' "$STUB_LOG" && fail "must not apply after a failed verification"
 echo "test-30 passed"
