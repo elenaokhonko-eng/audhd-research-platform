@@ -2,13 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AuthError,
-  createFakeAuthClient,
-  createFirebaseAuthClient,
-  toAuthError,
-  type AuthClient,
-} from "@/lib/identity/auth-client";
+import { AuthError, toAuthError, type AuthClient } from "@/lib/identity/auth-client";
+import { buildAuthClient, defaultNavigate, defaultPostSession } from "@/lib/identity/session-client";
 import type { IdentityConfig } from "@/lib/identity/config";
 import type { Campaign } from "@/lib/platform-api/types";
 
@@ -27,18 +22,6 @@ export function continueUrl(siteOrigin: string, slug: string | null): string {
   return slug ? `${siteOrigin}/auth/finish?c=${slug}` : `${siteOrigin}/auth/finish`;
 }
 
-async function defaultPostSession(idToken: string, campaign: string | null): Promise<{ next: string }> {
-  const response = await fetch("/api/session", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id_token: idToken, campaign }),
-  });
-  if (response.status !== 200) throw new Error("session_failed");
-  return (await response.json()) as { next: string };
-}
-
-const defaultNavigate = (url: string) => window.location.assign(url);
-
 type Phase = "idle" | "sending" | "sent";
 
 export function JoinScreen({
@@ -51,15 +34,7 @@ export function JoinScreen({
   postSession = defaultPostSession,
   navigate = defaultNavigate,
 }: JoinScreenProps) {
-  const client = useMemo<AuthClient | null>(() => {
-    if (identity.kind === "missing") return null;
-    if (authClient) return authClient;
-    if (identity.kind === "fake") return createFakeAuthClient();
-    if (identity.kind === "firebase") {
-      return createFirebaseAuthClient({ apiKey: identity.apiKey, authDomain: identity.authDomain });
-    }
-    return null;
-  }, [authClient, identity]);
+  const client = useMemo<AuthClient | null>(() => buildAuthClient(identity, authClient), [authClient, identity]);
 
   const [email, setEmail] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
