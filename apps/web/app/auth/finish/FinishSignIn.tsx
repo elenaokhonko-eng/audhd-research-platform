@@ -6,7 +6,6 @@ import { toAuthError, type AuthClient } from "@/lib/identity/auth-client";
 import type { IdentityConfig } from "@/lib/identity/config";
 import {
   buildAuthClient,
-  defaultNavigate,
   defaultPostSession,
   type PostSession,
 } from "@/lib/identity/session-client";
@@ -32,6 +31,9 @@ export function slugFromHref(href: string): string | null {
   }
 }
 
+// The sign-in page is not worth keeping in history: replace it.
+const replaceNavigate = (url: string): void => window.location.replace(url);
+
 type Phase = "working" | "ask" | "expired" | "retry";
 
 export function FinishSignIn({
@@ -39,7 +41,7 @@ export function FinishSignIn({
   href: hrefProp,
   authClient,
   postSession = defaultPostSession,
-  navigate = defaultNavigate,
+  navigate = replaceNavigate,
 }: FinishProps) {
   const client = useMemo(() => buildAuthClient(identity, authClient), [authClient, identity]);
   const [href, setHref] = useState<string | null>(hrefProp ?? null);
@@ -54,9 +56,17 @@ export function FinishSignIn({
   const liveRef = useRef<HTMLDivElement>(null);
   const focusTarget = useRef<"input" | "live" | null>(null);
 
+  const captured = useRef<string | null>(hrefProp ?? null);
+
   useEffect(() => {
-    if (href === null) setHref(window.location.href);
-  }, [href]);
+    // Keep the link in memory, then take the single-use code out of the address
+    // bar, history and Referer. Captured once, so a second effect run (StrictMode)
+    // never reads the cleaned address.
+    if (captured.current === null) captured.current = window.location.href;
+    setHref(captured.current);
+    const slugOnly = slugFromHref(captured.current);
+    window.history.replaceState(null, "", slugOnly ? `/auth/finish?c=${slugOnly}` : "/auth/finish");
+  }, []);
 
   useEffect(() => {
     const target = focusTarget.current;
@@ -100,6 +110,11 @@ export function FinishSignIn({
       const code = toAuthError(error).code;
       setBusy(false);
       if (code === "link_expired" || code === "link_used") {
+        try {
+          localStorage.removeItem("signin.email");
+        } catch {
+          // Storage unavailable: nothing to remove.
+        }
         focusTarget.current = "live";
         setPhase("expired");
       } else {
@@ -191,7 +206,7 @@ export function FinishSignIn({
     body = null;
   }
 
-  const showStatus = client !== null && isLink !== false;
+  const showStatus = client !== null && isLink !== false && href !== null;
   return (
     <section className="section-shell join">
       <p className="section-kicker">Sign in</p>

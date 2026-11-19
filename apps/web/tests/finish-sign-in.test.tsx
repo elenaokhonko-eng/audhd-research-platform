@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
+import { renderToString } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FinishSignIn, slugFromHref } from "@/app/auth/finish/FinishSignIn";
 import { createFakeAuthClient } from "@/lib/identity/auth-client";
@@ -79,6 +80,7 @@ describe("FinishSignIn", () => {
     expect(await screen.findByText("This link has expired or was already used.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Send me a new link" })).toHaveAttribute("href", "/join/founding");
     expect(postSession).not.toHaveBeenCalled();
+    expect(localStorage.getItem("signin.email")).toBeNull();
   });
 
   it("offers the plain join page when there is no campaign", async () => {
@@ -124,5 +126,31 @@ describe("FinishSignIn", () => {
     render(<FinishSignIn identity={{ kind: "missing" }} href={LINK} />);
     expect(screen.getByText("Sign-in is not set up in this environment.")).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("removes the single-use code from the address bar after mount, keeping the slug", () => {
+    const spy = vi.spyOn(window.history, "replaceState");
+    setup(LINK);
+    expect(spy).toHaveBeenCalledWith(null, "", "/auth/finish?c=founding");
+    spy.mockRestore();
+  });
+
+  it("reads the real address by default, still completes with it, then cleans it", async () => {
+    window.history.replaceState(null, "", "/auth/finish?c=founding&oobCode=ok&mode=signIn");
+    localStorage.setItem("signin.email", "ana@example.org");
+    const spy = vi.spyOn(window.history, "replaceState");
+    const navigate = vi.fn();
+    const postSession = vi.fn().mockResolvedValue({ next: "/welcome" });
+    render(<FinishSignIn identity={{ kind: "fake" }} authClient={createFakeAuthClient()} postSession={postSession} navigate={navigate} />);
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
+    expect(postSession).toHaveBeenCalledWith("fake-token:ana", "founding");
+    expect(spy).toHaveBeenCalledWith(null, "", "/auth/finish?c=founding");
+    expect(window.location.search).toBe("?c=founding");
+    spy.mockRestore();
+  });
+
+  it("shows nothing in the status region before the address is known", () => {
+    const html = renderToString(<FinishSignIn identity={{ kind: "fake" }} authClient={createFakeAuthClient()} />);
+    expect(html).not.toContain("Signing you in.");
   });
 });
