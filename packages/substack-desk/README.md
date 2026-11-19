@@ -7,8 +7,14 @@ imports nothing from `platform_api` and does not depend on it, so it can be extr
 
 ## What exists today
 
-Only the package skeleton and a test that keeps the boundary. The port of the Substack client and
-the capability matrix arrive in the next tasks of the lane.
+- `SubscriberRecord` and `DirectoryListing` (`models.py`): the two shapes the Desk hands to the platform.
+- The `SubscriberDirectory` port (`ports.py`): one method, `list_paid()`.
+- The capability matrix (`capabilities.py`): `subscriber_directory.file` is on;
+  `subscriber_directory.publisher_api` is listed and off; `require()` refuses anything that is off;
+  private surfaces are off by default.
+- `tests/test_boundary.py` stands in for `lint-imports`: it fails if any source file imports `platform_api`.
+
+The export-file adapter, `FileDirectory`, comes next.
 
 ## How to run the checks
 
