@@ -67,7 +67,12 @@ if ! terraform version 2>/dev/null | grep -q '^Terraform v'; then
   grep -q 'HOME/bin' "$HOME/.bashrc" 2>/dev/null || echo 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc"
 fi
 terraform version | head -1
-cd "$ROOT/infra/terraform"
+cd "$ROOT/infra/terraform/envs/prod"
+# The production root moved from infra/terraform to infra/terraform/envs/prod (Stage 1).
+# Carry over a terraform.tfvars written before the move; the state bucket is unchanged.
+if [[ ! -f terraform.tfvars && -f "$ROOT/infra/terraform/terraform.tfvars" ]]; then
+  mv "$ROOT/infra/terraform/terraform.tfvars" terraform.tfvars
+fi
 if [[ ! -f terraform.tfvars ]]; then
   cat > terraform.tfvars <<EOF
 project_id         = "${PROJECT_ID}"
@@ -114,7 +119,7 @@ else
   echo "gh is not logged in. Run 'gh auth login', then re-run this script (steps 1-4 are skipped when done)."
 fi
 
-cd "$ROOT/infra/terraform"
+cd "$ROOT/infra/terraform/envs/prod"
 say "Done"
 echo "dev:  $(terraform output -raw web_dev_url)"
 echo "prod: $(terraform output -raw web_prod_url)"

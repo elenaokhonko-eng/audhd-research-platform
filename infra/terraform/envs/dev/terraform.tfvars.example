@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. ops/scripts/20-stage1-foundations.sh writes it for you.
+project_id  = "audhd-neurobiology-dev"
+region      = "asia-southeast1"
+alert_email = "you@example.com"
+
+# Once dev.audhdneurobiology.org is verified and prod no longer maps it:
+map_custom_domains    = false
+manage_cloudflare_dns = false
+cloudflare_zone_id    = ""
+# cloudflare_api_token comes from the environment: export TF_VAR_cloudflare_api_token=...

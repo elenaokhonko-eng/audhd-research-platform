@@ -6,6 +6,16 @@ output "web_prod_url" {
   value = module.web_prod.uri
 }
 
+output "platform_api_url" {
+  description = "platform-api (private); also the audience of identity tokens sent to it"
+  value       = module.platform_api.uri
+}
+
+output "platform_hooks_url" {
+  description = "platform-hooks (public webhook receiver)"
+  value       = module.platform_hooks.uri
+}
+
 output "artifact_registry" {
   value = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.platform.repository_id}"
 }
