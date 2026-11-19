@@ -64,5 +64,12 @@ module "web_prod" {
   site_env        = "prod"
   max_instances   = 10
   service_account = google_service_account.web_runtime.email
-  depends_on      = [google_project_service.enabled]
+  env = {
+    IDENTITY_API_KEY     = nonsensitive(module.identity.api_key) # public browser value
+    IDENTITY_AUTH_DOMAIN = module.identity.auth_domain
+    PLATFORM_API_URL     = module.platform_api.uri
+    SITE_ORIGIN          = "https://${var.domain}"
+    SIGNIN_SENDER_HINT   = var.signin_sender_hint
+  }
+  depends_on = [google_project_service.enabled]
 }

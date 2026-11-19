@@ -67,3 +67,27 @@ variable "check_custom_domain" {
   type        = bool
   default     = false
 }
+
+variable "owner_member" {
+  description = "IAM member of the owner, e.g. user:name@example.org. Set via TF_VAR_owner_member; never written to a file."
+  type        = string
+  sensitive   = true
+}
+
+variable "auth_email_spf_includes" {
+  description = "Hosts in the one SPF record of the sign-in email domain. Add any includes the domain already carries (dig +short TXT <domain>)."
+  type        = list(string)
+  default     = ["_spf.firebasemail.com"]
+}
+
+variable "auth_email_dkim_targets" {
+  description = "Override of the two DKIM CNAME targets (selector to host), if the console's customize-domain screen differs from the computed pattern. Null computes them."
+  type        = map(string)
+  default     = null
+}
+
+variable "signin_sender_hint" {
+  description = "Sender address the sign-in email shows, once the first test email reveals it. Given to the web service as SIGNIN_SENDER_HINT."
+  type        = string
+  default     = ""
+}

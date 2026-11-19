@@ -19,7 +19,8 @@ Read the three warnings first.
 | State bucket `gs://audhd-neurobiology-dev-tfstate` | Versioned, public access prevented. Terraform's record of the dev project |
 | In **each** project (Terraform, `infra/terraform/envs/prod` and `envs/dev`) | Firestore database `(default)`; Pub/Sub topics `platform.events`, `inbound.webhooks` and their dead-letter topics; the push subscription `platform-events-to-api`; Cloud Run services `platform-api` (private) and `platform-hooks` (public); the Cloud Run job `platform-selfcheck`; one service account per component; an email alert when a message cannot be delivered |
 | In the dev project only | The preview site `web-dev`, its own image registry and GitHub deploy identity, and (if your domains are mapped) `dev.audhdneurobiology.org` |
-| GitHub environments `dev` and `production` | Each holds `GCP_PROJECT_ID`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOYER_SA`, `RUNTIME_SA`, `REGISTRY` for its own project. Deploy workflows read them from there |
+| Member pieces, in **each** project (`members.tf`) | The sign-in configuration (Identity Platform), the browser API key, the contact key (Cloud KMS), the private buckets `<project>-library`, `<project>-library-staging` and `<project>-roster-inbox`, and the DNS records of the sign-in email's sending domain (`audhdneurobiology.org` for prod, `auth.dev.audhdneurobiology.org` for dev). The sign-in runbook ([stage-1-sign-in.md](stage-1-sign-in.md)) finishes them; read its "Before you run anything" first |
+| GitHub environments `dev` and `production` | Each holds `GCP_PROJECT_ID`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOYER_SA`, `RUNTIME_SA`, `REGISTRY` for its own project. Deploy workflows read them from there. `dev` accepts deploys only from the branch `integration/stage-1`; `production` only from tags starting with `v` |
 
 Two terms used below. A **GitHub environment** is a named deploy target in the repository's settings, with its own variables and, optionally, people who must approve before a job may use it. A **service agent** is an identity Google itself runs inside a project for one product; Pub/Sub's agent is the one that moves undeliverable messages to the dead-letter topics.
 
@@ -43,14 +44,16 @@ git fetch origin && git checkout integration/stage-1 && git pull
 bash ops/scripts/20-stage1-foundations.sh
 ```
 
+The script sets `export TF_VAR_owner_member="user:$(gcloud config get-value account)"` for you, so Terraform can let your account add files to the upload buckets without your address being written into the repository. If you run `terraform plan` by hand later (the "No changes" check at the end), run that same line first in the same shell.
+
 ## What each prompt means
 
 | Prompt | Answer |
 | --- | --- |
 | `Cloudflare API token:` | Paste the token and press Enter. Nothing is shown while you paste; it is kept in this shell session only and never written to a file. It is skipped if `TF_VAR_cloudflare_api_token` is already set. |
 | `Move audhd-neurobiology-prod into the folder audhd-neurobiology now? [y/N]` | `y` moves the prod project into the folder. The project keeps its id, number, services and data; nothing restarts. Anything other than `y` skips the move and the script continues; re-run later to move it. |
-| Terraform, first time: `Do you want to perform these actions?` (envs/prod) | Read the plan. Expect it to **destroy** `web-dev`, the mapping `dev.audhdneurobiology.org` and the `dev` CNAME record, and to **create** the platform resources listed above. Nothing for `web-prod`, `audhdneurobiology.org` or `www` should be destroyed. Type `yes` to apply; anything else cancels, nothing changes, and the script stops: re-run it when you are ready. |
-| Terraform, second time (envs/dev) | Expect only **creates**, in the dev project. Type `yes`. |
+| Terraform, first time: `Do you want to perform these actions?` (envs/prod) | Read the plan. Expect it to **destroy** `web-dev`, the mapping `dev.audhdneurobiology.org` and the `dev` CNAME record, and to **create** the platform resources and the member pieces listed above (sign-in configuration, API key, contact key, three buckets, the sending domain's DNS records). Expect one **update in place**: `web-prod` gets its sign-in settings as environment variables. An SPF or DMARC record you imported (sign-in runbook, "Before you run anything") also shows as an update in place. Nothing for `web-prod`, `audhdneurobiology.org` or `www` should be destroyed. Type `yes` to apply; anything else cancels, nothing changes, and the script stops: re-run it when you are ready. |
+| Terraform, second time (envs/dev) | Expect **creates**, in the dev project: the resources listed above, including the member pieces (sign-in configuration, API key, contact key, three buckets, the DNS records of `auth.dev.audhdneurobiology.org`). If `web-dev` exists already from an earlier run, it shows as an **update in place** (its sign-in settings as environment variables) instead of a create. Nothing should be destroyed. Type `yes`. |
 
 The script also asks Google to create Pub/Sub's service agent in each project before each apply (`gcloud beta services identity create --service=pubsub.googleapis.com`). Google normally creates that agent a little after the API is switched on, and Terraform's first apply would fail if it granted roles to an agent that does not exist yet.
 
@@ -58,11 +61,19 @@ Step 6 first builds the website (`apps/web`) and deploys it to `web-dev` in the 
 
 Step 6 then builds the first `platform-api` image and deploys it to both projects. If the service's code has not been merged yet (no `services/platform-api/Dockerfile`), the script says so and skips this part; `platform-api`, `platform-hooks` and `platform-selfcheck` keep Google's placeholder image. They get the real image once Core's service code and the platform-api image (S1.0 Task 6) have been merged: re-run the script then. The platform-api CI deploy arrives with S1.0 Task 6 as well; until it does, no workflow deploys platform-api. The script's last message tells you which case you are in.
 
-At the end it prints whether the `production` environment has a required reviewer. If it has none, make yourself the reviewer (GitHub → repository → Settings → Environments → production → Required reviewers), or:
+Step 7 also limits which code may deploy to each GitHub environment (a **deployment branch policy**): `dev` accepts jobs only from the branch `integration/stage-1`, `production` only from tags matching `v*`. It sends GitHub only that setting, never the list of reviewers, so a required reviewer you already set is kept; step 8 checks it afterwards. Re-running adds nothing when the rules exist. To see them:
+
+```bash
+gh api repos/elenaokhonko-eng/audhd-research-platform/environments/production/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'
+```
+
+At the end it prints whether the `production` environment has a required reviewer. If it has none, make yourself the reviewer (GitHub → repository → Settings → Environments → production → Required reviewers), or run the command below. Its last two lines keep the tag rule of step 7 switched on:
 
 ```bash
 gh api -X PUT repos/elenaokhonko-eng/audhd-research-platform/environments/production \
-  -f 'reviewers[][type]=User' -F "reviewers[][id]=$(gh api user -q .id)"
+  -f 'reviewers[][type]=User' -F "reviewers[][id]=$(gh api user -q .id)" \
+  -F 'deployment_branch_policy[protected_branches]=false' \
+  -F 'deployment_branch_policy[custom_branch_policies]=true'
 ```
 
 ## If it stops

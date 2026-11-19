@@ -8,11 +8,15 @@
 #      moves the prod project into it
 #   2. creates the dev project in that folder and links it to the prod project's billing account
 #   3. creates the dev Terraform state bucket
-#   4. Terraform in envs/prod: removes web-dev and dev.<domain> from prod, adds the platform
-#   5. Terraform in envs/dev: creates the dev project's services and takes over dev.<domain>
+#   4. Terraform in envs/prod: removes web-dev and dev.<domain> from prod, adds the platform and
+#      the member pieces (sign-in configuration, browser API key, contact key, three buckets,
+#      the sending domain's DNS records) and updates web-prod's settings in place
+#   5. Terraform in envs/dev: creates the dev project's services and member pieces, takes over
+#      dev.<domain> and updates web-dev's settings in place once it exists
 #   6. builds the website and deploys it to web-dev in the dev project; builds the first
 #      platform-api image and deploys it to both projects (when the service exists)
-#   7. creates the GitHub environments dev and production and sets their variables
+#   7. creates the GitHub environments dev and production, limits which branch (dev) or tag
+#      (production) may deploy to each, and sets their variables
 #   8. reminds you to make yourself the required reviewer of production
 # This script never prints a secret or your email address.
 set -euo pipefail
@@ -97,6 +101,14 @@ fi
 if [[ -z "$TF_VAR_cloudflare_api_token" || "$TF_VAR_cloudflare_api_token" == *" "* ]]; then
   stop "The Cloudflare token is empty or contains a space. Create one (Cloudflare > My Profile > API Tokens > 'Edit zone DNS', zone $DOMAIN) and re-run."
 fi
+
+# The owner's own account may add files to the inbox buckets (read by Terraform, never printed).
+OWNER_ACCOUNT="$(gcloud config get-value account 2>/dev/null || true)"
+if [[ -z "$OWNER_ACCOUNT" ]]; then
+  stop "gcloud has no account set, so Terraform cannot be told who may add files to the upload buckets. Run 'gcloud auth login', then re-run this script."
+fi
+TF_VAR_owner_member="user:${OWNER_ACCOUNT}"
+export TF_VAR_owner_member
 
 # ---------------------------------------------------------------- 1. folder
 say "1/8 Folder ${FOLDER_NAME}"
@@ -186,7 +198,12 @@ The plan below should DESTROY the old preview site in the prod project: the Clou
 web-dev, the domain mapping dev.${DOMAIN} and its Cloudflare record (if domains are mapped).
 dev.${DOMAIN} is unavailable from here until step 5 has run and its new certificate is issued.
 It should CREATE the platform: Firestore, the Pub/Sub topics, platform-api, platform-hooks,
-the job platform-selfcheck, their service accounts and permissions.
+the job platform-selfcheck, their service accounts and permissions; and the member pieces:
+the sign-in configuration (Identity Platform), the browser API key, the contact key (Cloud KMS),
+the buckets library, library-staging and roster-inbox, and the DNS records of the sending
+domain ${DOMAIN} (SPF, firebase verification, two DKIM, DMARC; an SPF or DMARC record you
+imported shows as an in-place update). web-prod is UPDATED in place: it gets its sign-in
+settings as environment variables. Nothing for web-prod, ${DOMAIN} or www is destroyed.
 Read the plan, then type yes at Terraform's prompt to apply it (anything else cancels).
 EOF
 ensure_pubsub_agent "$PROD_PROJECT"
@@ -226,7 +243,10 @@ fi
 cat <<EOF
 The plan below should CREATE the dev project's resources: APIs, the image registry, web-dev,
 the GitHub identity for dev deploys, Firestore, the Pub/Sub topics, platform-api,
-platform-hooks, platform-selfcheck and (if domains are mapped) dev.${DOMAIN}.
+platform-hooks, platform-selfcheck and (if domains are mapped) dev.${DOMAIN}; and the member
+pieces: the sign-in configuration, the browser API key, the contact key, the three buckets
+and the DNS records of the sending domain auth.dev.${DOMAIN}. If web-dev exists already (an
+earlier run), it is UPDATED in place with its sign-in settings instead of created.
 Type yes at Terraform's prompt to apply it.
 EOF
 ensure_pubsub_agent "$DEV_PROJECT"
@@ -297,6 +317,26 @@ if command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
       echo "Created environment ${envname}."
     fi
   done
+  # Which refs may deploy: dev only from integration/stage-1, production only from tags v*.
+  # The PUT sends deployment_branch_policy and nothing else: no reviewers field, so required
+  # reviewers you set are kept. Skipped when the policy is already custom; a rule is added only
+  # when one with that name is missing.
+  limit_refs() { # limit_refs env name branch|tag
+    local custom policies
+    custom="$(gh api "repos/${GITHUB_REPO}/environments/$1" --jq '.deployment_branch_policy.custom_branch_policies // false')"
+    if [[ "$custom" != "true" ]]; then
+      gh api -X PUT "repos/${GITHUB_REPO}/environments/$1" --silent --input - <<<'{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+    fi
+    policies="$(gh api "repos/${GITHUB_REPO}/environments/$1/deployment-branch-policies" --paginate \
+      --jq '.branch_policies[] | "\(.type // "branch") \(.name)"')"
+    if ! grep -qxF "$3 $2" <<<"$policies"; then
+      gh api -X POST "repos/${GITHUB_REPO}/environments/$1/deployment-branch-policies" --silent \
+        -f "name=$2" -f "type=$3"
+      echo "Environment $1: deploys allowed from $3 $2."
+    fi
+  }
+  limit_refs dev integration/stage-1 branch
+  limit_refs production 'v*' tag
   set_env_vars() { # set_env_vars env project wif deployer runtime registry
     gh variable set GCP_PROJECT_ID --env "$1" --repo "$GITHUB_REPO" --body "$2"
     gh variable set GCP_REGION     --env "$1" --repo "$GITHUB_REPO" --body "$REGION"
@@ -329,7 +369,10 @@ Production deploys must wait for your approval. Make yourself the required revie
 production environment (GitHub > ${GITHUB_REPO} > Settings > Environments > production >
 Required reviewers), or run:
   gh api -X PUT repos/${GITHUB_REPO}/environments/production \\
-    -f 'reviewers[][type]=User' -F "reviewers[][id]=\$(gh api user -q .id)"
+    -f 'reviewers[][type]=User' -F "reviewers[][id]=\$(gh api user -q .id)" \\
+    -F 'deployment_branch_policy[protected_branches]=false' \\
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+(The last two lines keep the tag rule of step 7.)
 EOF
 fi
 

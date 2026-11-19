@@ -9,6 +9,11 @@ variable "max_instances" {
   type    = number
   default = 5
 }
+variable "env" {
+  type        = map(string)
+  default     = {}
+  description = "Extra environment variables; none may be secret"
+}
 
 resource "google_cloud_run_v2_service" "this" {
   name                = var.name
@@ -40,6 +45,14 @@ resource "google_cloud_run_v2_service" "this" {
       env {
         name  = "SITE_ENV"
         value = var.site_env
+      }
+
+      dynamic "env" {
+        for_each = var.env
+        content {
+          name  = env.key
+          value = env.value
+        }
       }
 
       resources {
