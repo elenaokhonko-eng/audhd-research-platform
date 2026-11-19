@@ -1,18 +1,44 @@
 """Read the subscriber export file the owner downloads from the dashboard.
 
 Columns are found by name. No cell is ever copied into an error or a report,
-except a short `Type` value in later tasks (never one that holds an `@`).
+except a `Type` or `Stripe plan` value cut to 40 characters that the tables
+below do not know (never one that holds an `@`; it is shown as `<redacted>`).
+`TYPE_VALUES` and `PLAN_WORDS` are the only places a value is interpreted.
 """
 
 import csv
 import io
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from substack_desk.models import DirectoryListing, SubscriberRecord
+from substack_desk.models import DirectoryListing, SubscriberRecord, SubscriberType
 
 REQUIRED_COLUMNS: tuple[str, ...] = ("Email", "Type")
+
+# Key: the Type cell, trimmed and lower-cased. None means "free": left out of the records.
+# "free trial" is handled before this table (the reader has not paid).
+TYPE_VALUES: Mapping[str, SubscriberType | None] = {
+    "free": None,
+    "paid": "paid",
+    "ios subscription": "paid",  # billed by Apple; the export is the only source
+    "comp": "comp",
+    "complimentary": "comp",
+    "gift": "gift",
+    "founding": "founding",
+    "founding member": "founding",
+    "lifetime": "lifetime",
+}
+TRIAL_VALUE = "free trial"
+
+# A lower-cased Stripe plan cell containing the word gets the interval; first match wins.
+PLAN_WORDS: tuple[tuple[str, Literal["month", "year"]], ...] = (
+    ("year", "year"),
+    ("annual", "year"),
+    ("month", "month"),
+)
 
 
 class ExportHeaderError(ValueError):
@@ -37,6 +63,29 @@ def _bump(counts: dict[str, int], key: str) -> None:
     counts[key] = counts.get(key, 0) + 1
 
 
+def _shown(value: str) -> str:
+    shown = value.strip()[:40]
+    return "<redacted>" if "@" in shown else shown
+
+
+def _read_date(cell: str) -> tuple[datetime | None, bool]:
+    """Return (value, unreadable). An empty cell is (None, False)."""
+    text = cell.strip()
+    if not text:
+        return None, False
+    parsed: datetime | None = None
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text, "%b %d, %Y")
+        except ValueError:
+            return None, True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed, False
+
+
 def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, ExportReport]:
     text = text.removeprefix("﻿")
     first_line = text.split("\n", 1)[0]
@@ -51,11 +100,18 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
     email_at = names.index("Email")
     type_at = names.index("Type")
 
+    def column(cells: list[str], name: str) -> str:
+        return cells[names.index(name)].strip() if name in names else ""
+
     records: list[SubscriberRecord] = []
     rejected: dict[str, int] = {}
     unknown_types: dict[str, int] = {}
+    unknown_plans: dict[str, int] = {}
+    seen: set[str] = set()
     rows_read = 0
     free_rows = 0
+    trial_rows = 0
+    unreadable_dates = 0
 
     for cells in reader:
         if not cells:
@@ -65,26 +121,53 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
             _bump(rejected, "wrong_cell_count")
             continue
         kind = cells[type_at].strip().lower()
-        if kind == "free":
-            free_rows += 1
-            continue
-        if kind != "paid":
+        if kind != TRIAL_VALUE and kind not in TYPE_VALUES:
             _bump(rejected, "unknown_type")
-            shown = cells[type_at].strip()[:40]
-            _bump(unknown_types, "<redacted>" if "@" in shown else shown)
+            _bump(unknown_types, _shown(cells[type_at]))
             continue
+        address = cells[email_at].strip().lower()
+        if address in seen:
+            _bump(rejected, "duplicate_email")
+            continue
+        if kind == TRIAL_VALUE:
+            trial_rows += 1
+            seen.add(address)
+            continue
+        mapped = TYPE_VALUES[kind]
+        if mapped is None:
+            free_rows += 1
+            seen.add(address)
+            continue
+        if mapped == "paid" and kind == "paid" and column(cells, "Group membership"):
+            mapped = "group_seat"
+
+        plan_cell = column(cells, "Stripe plan")
+        plan_text = plan_cell.lower()
+        interval = next((value for word, value in PLAN_WORDS if word in plan_text), None)
+        if interval is None and plan_cell:
+            _bump(unknown_plans, _shown(plan_cell))
+
+        paid_until, bad_until = _read_date(column(cells, "Expiration date"))
+        since, bad_since = _read_date(column(cells, "First paid date"))
+        bad_upgrade = False
+        if since is None and not bad_since:
+            since, bad_upgrade = _read_date(column(cells, "Paid upgrade date"))
+        unreadable_dates += bad_until + bad_since + bad_upgrade
+
         try:
             records.append(
                 SubscriberRecord(
                     email=cells[email_at],
-                    type="paid",
-                    plan_interval=None,
-                    paid_until=None,
-                    since=None,
+                    type=mapped,
+                    plan_interval=interval,
+                    paid_until=paid_until,
+                    since=since,
                 )
             )
         except ValidationError:
             _bump(rejected, "bad_email")
+            continue
+        seen.add(address)
 
     listing = DirectoryListing(
         records=records,
@@ -95,10 +178,10 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
     report = ExportReport(
         rows_read=rows_read,
         free_rows=free_rows,
-        trial_rows=0,
+        trial_rows=trial_rows,
         rejected=rejected,
         unknown_types=unknown_types,
-        unknown_plans={},
-        unreadable_dates=0,
+        unknown_plans=unknown_plans,
+        unreadable_dates=unreadable_dates,
     )
     return listing, report
