@@ -18,10 +18,33 @@ def test_email_is_trimmed_and_lower_cased():
     assert record(email="  Ana@Example.ORG ").email == "ana@example.org"
 
 
-@pytest.mark.parametrize("bad", ["ana", "@example.org", "ana@", "a@b@c", ""])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "ana",
+        "@example.org",
+        "ana@",
+        "a@b@c",
+        "",
+        "ana smith@example.org",
+        "ana@ example.org",
+        "ana@example.org\x00",
+        "ana@exa\tmple.org",
+    ],
+)
 def test_a_value_that_is_not_an_email_is_refused(bad):
     with pytest.raises(ValidationError):
         record(email=bad)
+
+
+def test_a_since_without_a_zone_is_refused():
+    with pytest.raises(ValidationError):
+        record(since=datetime(2026, 11, 20))
+
+
+def test_an_exported_at_without_a_zone_is_refused():
+    with pytest.raises(ValidationError):
+        DirectoryListing(records=[], complete=True, rejected_rows=0, exported_at=datetime(2026, 11, 20))
 
 
 def test_a_time_without_a_zone_is_refused():

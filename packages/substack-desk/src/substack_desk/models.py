@@ -1,17 +1,10 @@
 """The two data shapes the desk hands to the platform (contracts section 3)."""
 
-from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 SubscriberType = Literal["free", "paid", "comp", "gift", "group_seat", "founding", "lifetime"]
-
-
-def _require_zone(value: datetime | None) -> datetime | None:
-    if value is not None and value.tzinfo is None:
-        raise ValueError("a time must carry a time zone")
-    return value
 
 
 class SubscriberRecord(BaseModel):
@@ -20,22 +13,19 @@ class SubscriberRecord(BaseModel):
     email: str
     type: SubscriberType
     plan_interval: Literal["month", "year"] | None
-    paid_until: datetime | None
-    since: datetime | None
+    paid_until: AwareDatetime | None
+    since: AwareDatetime | None
 
     @field_validator("email")
     @classmethod
     def _clean_email(cls, value: str) -> str:
         cleaned = value.strip().lower()
         parts = cleaned.split("@")
+        if any(c.isspace() or not c.isprintable() for c in cleaned):
+            raise ValueError("not an email address")
         if len(parts) != 2 or not parts[0] or not parts[1]:
             raise ValueError("not an email address")
         return cleaned
-
-    @field_validator("paid_until", "since")
-    @classmethod
-    def _zoned(cls, value: datetime | None) -> datetime | None:
-        return _require_zone(value)
 
     @property
     def is_paid(self) -> bool:
@@ -48,14 +38,7 @@ class DirectoryListing(BaseModel):
     records: list[SubscriberRecord]
     complete: bool
     rejected_rows: int = Field(ge=0)
-    exported_at: datetime
-
-    @field_validator("exported_at")
-    @classmethod
-    def _zoned(cls, value: datetime) -> datetime:
-        if value.tzinfo is None:
-            raise ValueError("a time must carry a time zone")
-        return value
+    exported_at: AwareDatetime
 
     @field_validator("records")
     @classmethod
