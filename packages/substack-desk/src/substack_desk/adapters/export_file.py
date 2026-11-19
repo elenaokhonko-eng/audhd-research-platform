@@ -64,8 +64,8 @@ def _bump(counts: dict[str, int], key: str) -> None:
 
 
 def _shown(value: str) -> str:
-    shown = value.strip()[:40]
-    return "<redacted>" if "@" in shown else shown
+    value = value.strip()
+    return "<redacted>" if "@" in value else value[:40]
 
 
 def _read_date(cell: str) -> tuple[datetime | None, bool]:
@@ -83,7 +83,7 @@ def _read_date(cell: str) -> tuple[datetime | None, bool]:
             return None, True
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed, False
+    return parsed.astimezone(UTC), False
 
 
 def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, ExportReport]:
@@ -144,15 +144,13 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
         plan_cell = column(cells, "Stripe plan")
         plan_text = plan_cell.lower()
         interval = next((value for word, value in PLAN_WORDS if word in plan_text), None)
-        if interval is None and plan_cell:
-            _bump(unknown_plans, _shown(plan_cell))
 
         paid_until, bad_until = _read_date(column(cells, "Expiration date"))
         since, bad_since = _read_date(column(cells, "First paid date"))
         bad_upgrade = False
         if since is None and not bad_since:
             since, bad_upgrade = _read_date(column(cells, "Paid upgrade date"))
-        unreadable_dates += bad_until + bad_since + bad_upgrade
+        bad_dates = bad_until + bad_since + bad_upgrade
 
         try:
             records.append(
@@ -168,6 +166,9 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
             _bump(rejected, "bad_email")
             continue
         seen.add(address)
+        unreadable_dates += bad_dates
+        if interval is None and plan_cell:
+            _bump(unknown_plans, _shown(plan_cell))
 
     listing = DirectoryListing(
         records=records,

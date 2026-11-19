@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -123,3 +123,23 @@ def test_the_first_of_two_rows_with_one_address_wins():
     listing, report = parse_export(make_export(rows), NOW)
     assert [r.plan_interval for r in listing.records] == ["year"]
     assert report.rejected == {"duplicate_email": 1}
+
+
+def test_an_address_after_the_cut_is_still_redacted():
+    long_value = "a" * 45 + "@example.org"
+    _, report = parse_export(make_export([paid(Type=long_value), paid(**{"Stripe plan": long_value})]), NOW)
+    assert report.unknown_types == {"<redacted>": 1}
+    assert report.unknown_plans == {"<redacted>": 1}
+
+
+def test_a_rejected_row_adds_nothing_to_plan_or_date_counts():
+    row = paid(Email="not-an-address", **{"Stripe plan": "Weekly", "Expiration date": "next spring"})
+    listing, report = parse_export(make_export([row]), NOW)
+    assert listing.records == [] and report.rejected == {"bad_email": 1}
+    assert report.unknown_plans == {} and report.unreadable_dates == 0
+
+
+def test_a_date_with_an_offset_is_normalised_to_utc():
+    record = parse_export(make_export([paid(**{"First paid date": "2026-04-14T16:36:24+05:00"})]), NOW)[0].records[0]
+    assert record.since.utcoffset() == timedelta(0)
+    assert record.since == datetime(2026, 4, 14, 11, 36, 24, tzinfo=UTC)
