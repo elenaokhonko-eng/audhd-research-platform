@@ -8,12 +8,13 @@ below do not know (never one that holds an `@`; it is shown as `<redacted>`).
 
 import csv
 import io
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from substack_desk.capabilities import require
 from substack_desk.models import DirectoryListing, SubscriberRecord, SubscriberType
 
 REQUIRED_COLUMNS: tuple[str, ...] = ("Email", "Type")
@@ -42,9 +43,9 @@ PLAN_WORDS: tuple[tuple[str, Literal["month", "year"]], ...] = (
 
 
 class ExportHeaderError(ValueError):
-    def __init__(self, missing: tuple[str, ...]) -> None:
+    def __init__(self, missing: tuple[str, ...], message: str | None = None) -> None:
         self.missing = missing
-        super().__init__("The export has no column named: " + ", ".join(missing))
+        super().__init__(message or "The export has no column named: " + ", ".join(missing))
 
 
 class ExportReport(BaseModel):
@@ -86,6 +87,29 @@ def _read_date(cell: str) -> tuple[datetime | None, bool]:
     return parsed.astimezone(UTC), False
 
 
+def _rows(reader: Iterator[list[str]], cut: list[bool]) -> Iterator[tuple[list[str], bool]]:
+    """Yield (cells, is_last) for each non-empty row, holding one back to know the last.
+
+    A `csv.Error` (an open quote at the end) is not passed on: its text could hold cell
+    content. It sets `cut[0]` and ends the rows; the row held back is then a whole row.
+    """
+    held: list[str] | None = None
+    try:
+        for cells in reader:
+            if not cells:
+                continue
+            if held is not None:
+                yield held, False
+            held = cells
+    except csv.Error:
+        cut[0] = True
+        is_last = False
+    else:
+        is_last = True
+    if held is not None:
+        yield held, is_last
+
+
 def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, ExportReport]:
     text = text.removeprefix("﻿")
     first_line = text.split("\n", 1)[0]
@@ -113,8 +137,10 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
     trial_rows = 0
     unreadable_dates = 0
 
-    for cells in reader:
-        if not cells:
+    cut = [False]
+    for cells, is_last in _rows(reader, cut):
+        if len(cells) != len(names) and is_last:
+            cut[0] = True  # the file ends in the middle of a row
             continue
         rows_read += 1
         if len(cells) != len(names):
@@ -172,7 +198,7 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
 
     listing = DirectoryListing(
         records=records,
-        complete=True,
+        complete=not cut[0],
         rejected_rows=sum(rejected.values()),
         exported_at=exported_at,
     )
@@ -186,3 +212,27 @@ def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, Ex
         unreadable_dates=unreadable_dates,
     )
     return listing, report
+
+
+class FileDirectory:
+    """A `SubscriberDirectory` that reads the owner's export file."""
+
+    def __init__(self, data: bytes, exported_at: datetime) -> None:
+        self._data = data
+        self._exported_at = exported_at
+        self._report: ExportReport | None = None
+
+    def list_paid(self) -> DirectoryListing:
+        require("subscriber_directory.file")
+        try:
+            text = self._data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise ExportHeaderError((), "The export is not a UTF-8 text file") from None
+        listing, self._report = parse_export(text, self._exported_at)
+        return listing
+
+    @property
+    def report(self) -> ExportReport:
+        if self._report is None:
+            raise RuntimeError("list_paid has not been called yet")
+        return self._report

@@ -2,7 +2,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from substack_desk.adapters.export_file import ExportHeaderError, parse_export
+from substack_desk.adapters.export_file import ExportHeaderError, FileDirectory, parse_export
+from substack_desk.ports import SubscriberDirectory
 from tests.export_rows import HEADER, make_export
 
 NOW = datetime(2026, 11, 20, tzinfo=UTC)
@@ -143,3 +144,40 @@ def test_a_date_with_an_offset_is_normalised_to_utc():
     record = parse_export(make_export([paid(**{"First paid date": "2026-04-14T16:36:24+05:00"})]), NOW)[0].records[0]
     assert record.since.utcoffset() == timedelta(0)
     assert record.since == datetime(2026, 4, 14, 11, 36, 24, tzinfo=UTC)
+
+
+CY = {"Email": "cy@example.org", "Type": "Paid"}
+
+
+def test_a_last_row_cut_short_makes_the_listing_incomplete():
+    text = make_export([ANA, CY])
+    cut = text[: text.rindex("cy@example.org") + len("cy@example.org,Pa")]
+    listing, report = parse_export(cut, NOW)
+    assert listing.complete is False
+    assert [r.email for r in listing.records] == ["ana@example.org"] and listing.rejected_rows == 0
+
+
+def test_a_short_row_in_the_middle_is_only_rejected():
+    lines = make_export([ANA, CY]).split("\r\n")
+    lines.insert(2, "di@example.org,Paid")
+    listing, report = parse_export("\r\n".join(lines), NOW)
+    assert listing.complete is True and report.rejected == {"wrong_cell_count": 1}
+    assert len(listing.records) == 2
+
+
+def test_an_open_quote_at_the_end_makes_the_listing_incomplete():
+    listing, _ = parse_export(make_export([ANA]) + '"cy@example.org,Paid', NOW)
+    assert listing.complete is False and len(listing.records) == 1
+
+
+def test_file_directory_is_a_subscriber_directory_with_a_report():
+    directory: SubscriberDirectory = FileDirectory(make_export([ANA, BO]).encode(), NOW)
+    with pytest.raises(RuntimeError):
+        directory.report  # type: ignore[attr-defined]  # noqa: B018
+    assert len(directory.list_paid().records) == 1
+    assert directory.report.free_rows == 1  # type: ignore[attr-defined]
+
+
+def test_bytes_that_are_not_text_are_refused():
+    with pytest.raises(ExportHeaderError, match="UTF-8"):
+        FileDirectory(b"\xff\xfe\x00", NOW).list_paid()
