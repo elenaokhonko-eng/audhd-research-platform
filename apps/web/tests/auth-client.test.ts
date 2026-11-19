@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createFakeAuthClient, toAuthError } from "@/lib/identity/auth-client";
+import { createFakeAuthClient, looksLikeSignInLink, toAuthError } from "@/lib/identity/auth-client";
 import { identityConfig } from "@/lib/identity/config";
 
 describe("toAuthError", () => {
@@ -46,5 +46,14 @@ describe("identityConfig", () => {
   it("needs both values", () => {
     expect(identityConfig({ IDENTITY_API_KEY: "k", IDENTITY_AUTH_DOMAIN: "d.example" })).toEqual({ kind: "firebase", apiKey: "k", authDomain: "d.example" });
     expect(identityConfig({ IDENTITY_API_KEY: "k" })).toEqual({ kind: "missing" });
+  });
+});
+
+describe("real client link check (no SDK needed)", () => {
+  it("accepts only a sign-in link with a code", () => {
+    expect(looksLikeSignInLink("https://dev.example.org/auth/finish?mode=signIn&oobCode=abc")).toBe(true);
+    expect(looksLikeSignInLink("https://dev.example.org/auth/finish?oobCode=abc")).toBe(false);
+    expect(looksLikeSignInLink("https://dev.example.org/auth/finish?mode=signIn&oobCode=")).toBe(false);
+    expect(looksLikeSignInLink("not a url")).toBe(false);
   });
 });

@@ -43,58 +43,71 @@ function oobCodeOf(href: string): string | null {
   }
 }
 
-export function createFirebaseAuthClient(config: { apiKey: string; authDomain: string }): AuthClient {
-  let loaded: Promise<{
-    auth: import("firebase/auth").Auth;
-    sdk: typeof import("firebase/auth");
-  }> | null = null;
+type Loaded = { auth: import("firebase/auth").Auth; sdk: typeof import("firebase/auth") };
 
-  function load() {
-    loaded ??= (async () => {
+// Kept at module level: initializeAuth throws auth/already-initialized if it
+// runs twice on one app (second client, remount, hot reload).
+let loaded: Promise<Loaded> | null = null;
+
+function load(config: { apiKey: string; authDomain: string }): Promise<Loaded> {
+  if (!loaded) {
+    const attempt = (async () => {
       const [{ getApps, initializeApp }, sdk] = await Promise.all([import("firebase/app"), import("firebase/auth")]);
       const app = getApps()[0] ?? initializeApp(config);
-      const auth = sdk.initializeAuth(app, { persistence: sdk.inMemoryPersistence });
+      const auth = sdk.initializeAuth(app, {
+        persistence: sdk.inMemoryPersistence,
+        // initializeAuth does not default the popup resolver; signInWithPopup needs it.
+        popupRedirectResolver: sdk.browserPopupRedirectResolver,
+      });
       return { auth, sdk };
     })();
-    return loaded;
+    loaded = attempt;
+    attempt.catch(() => {
+      if (loaded === attempt) loaded = null; // do not cache a failure for good
+    });
   }
+  return loaded;
+}
 
-  // Take the token, then sign the SDK out so no refresh token stays in the browser.
-  async function tokenThenSignOut(
-    { auth, sdk }: Awaited<ReturnType<typeof load>>,
-    user: import("firebase/auth").User,
-  ): Promise<string> {
-    const token = await user.getIdToken();
+// Synchronous by contract, so the SDK may not be loaded yet: check the URL
+// for the parameters Firebase puts in a sign-in link (mode=signIn and oobCode).
+export function looksLikeSignInLink(href: string): boolean {
+  try {
+    const params = new URL(href).searchParams;
+    return params.get("mode") === "signIn" && Boolean(params.get("oobCode"));
+  } catch {
+    return false;
+  }
+}
+
+// Take the token, then sign the SDK out so no refresh token stays in the browser.
+// Sign out even if the token could not be read; a failed sign-out never hides the token.
+async function tokenThenSignOut({ auth, sdk }: Loaded, user: import("firebase/auth").User): Promise<string> {
+  try {
+    return await user.getIdToken();
+  } finally {
     try {
       await sdk.signOut(auth);
     } catch {
-      // The token is already ours; a failed sign-out must not fail the sign-in.
+      // Nothing more to do; the caller already has its token or its error.
     }
-    return token;
   }
+}
 
+export function createFirebaseAuthClient(config: { apiKey: string; authDomain: string }): AuthClient {
   return {
     async sendEmailLink(email, continueUrl) {
       try {
-        const { auth, sdk } = await load();
+        const { auth, sdk } = await load(config);
         await sdk.sendSignInLinkToEmail(auth, email, { url: continueUrl, handleCodeInApp: true });
       } catch (error) {
         throw toAuthError(error);
       }
     },
-    // Synchronous by contract, so the SDK may not be loaded yet: check the URL
-    // for the parameters Firebase puts in a sign-in link (mode=signIn and oobCode).
-    isEmailLink(href) {
-      try {
-        const params = new URL(href).searchParams;
-        return params.get("mode") === "signIn" && Boolean(params.get("oobCode"));
-      } catch {
-        return false;
-      }
-    },
+    isEmailLink: looksLikeSignInLink,
     async completeEmailLink(email, href) {
       try {
-        const ctx = await load();
+        const ctx = await load(config);
         const result = await ctx.sdk.signInWithEmailLink(ctx.auth, email, href);
         return await tokenThenSignOut(ctx, result.user);
       } catch (error) {
@@ -103,7 +116,7 @@ export function createFirebaseAuthClient(config: { apiKey: string; authDomain: s
     },
     async signInWithGoogle() {
       try {
-        const ctx = await load();
+        const ctx = await load(config);
         const result = await ctx.sdk.signInWithPopup(ctx.auth, new ctx.sdk.GoogleAuthProvider());
         return await tokenThenSignOut(ctx, result.user);
       } catch (error) {
