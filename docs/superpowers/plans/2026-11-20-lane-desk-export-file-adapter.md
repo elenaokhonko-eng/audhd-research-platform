@@ -32,7 +32,7 @@ Group membership
 
 - Columns the adapter uses: `Email` and `Type` (required); `Stripe plan`, `Expiration date`, `First paid date`, `Paid upgrade date`, `Group membership` (optional: when one is absent its value is treated as empty). `Name` and every other column are never read into memory beyond the row being parsed and are never stored.
 - The separator is detected from the header line: a tab if the line contains a tab, otherwise a comma. (The owner's copy of the header arrived tab-separated; the file itself may use commas.)
-- **Values are provisional.** The owner has supplied the column names but not the values these columns take. The mappings below are written from the dashboard's labels. Unknown values are never guessed: the row is left out and the value is counted in the report, so the first dry run on the real file shows what is missing. The integrator updates the two mapping tables when the owner sends the distinct values of `Type` and `Stripe plan`.
+- **Values.** The owner confirmed on 2026-11-20 the values of `Type` the dashboard offers (`Paid`, `Free`, `Founding`, `Comp`, `Gift`, `Free Trial`, `iOS Subscription`) and the form of `Stripe plan` (a price, then `a month` or `a year`, sometimes with a currency prefix; the prices themselves are not written in this repository, and tests use invented ones). The form of the date cells in the file is not confirmed, so two forms are accepted. Unknown values are never guessed: the row is left out, or the cell is left empty, and the value is counted in the report, so the first dry run on the real file shows what is missing.
 - Check command for every task: `cd packages/substack-desk && uv run pytest -v && uv run ruff check . && uv run mypy src`.
 
 ## Review Focus
@@ -76,6 +76,7 @@ class ExportHeaderError(ValueError):
 class ExportReport(BaseModel):          # frozen
     rows_read: int
     free_rows: int
+    trial_rows: int                     # readers on a free trial: not paying yet, left out like free rows
     rejected: dict[str, int]            # reason -> count; reasons: "bad_email", "duplicate_email",
                                         # "unknown_type", "wrong_cell_count"
     unknown_types: dict[str, int]       # value (cut to 40 characters) -> count
@@ -183,6 +184,8 @@ PLAN_WORDS: tuple[tuple[str, Literal["month", "year"]], ...]
 | --- | --- |
 | `free` | left out, counted in `free_rows` |
 | `paid` | `paid`; or `group_seat` when `Group membership` is not empty |
+| `ios subscription` | `paid` (billed by Apple, so Stripe never shows this reader; the export is the only source) |
+| `free trial` | left out, counted in `trial_rows`: the reader has not paid |
 | `comp`, `complimentary` | `comp` |
 | `gift` | `gift` |
 | `founding`, `founding member` | `founding` |
@@ -191,14 +194,14 @@ PLAN_WORDS: tuple[tuple[str, Literal["month", "year"]], ...]
 
 | `Stripe plan` cell (any case) | `plan_interval` |
 | --- | --- |
-| contains `year` or `annual` | `year` |
-| contains `month` | `month` |
+| contains `year` or `annual` (for example `$50 a year`, `CA$70 a year`) | `year` |
+| contains `month` (for example `$5 a month`) | `month` |
 | empty | `None` |
 | anything else | `None`; the value is counted in `unknown_plans` (the row is kept) |
 
 - `paid_until` is the `Expiration date` cell. `since` is the `First paid date` cell and, when that is empty, the `Paid upgrade date` cell; `Start date` is **not** used, because it is the day the reader first subscribed for free.
-- A date cell is read with `datetime.fromisoformat` after replacing a final `Z` with `+00:00`. A value without a time zone, or a date without a time, is taken as UTC. An empty cell is `None`. A cell that cannot be read is `None` and adds one to `unreadable_dates`; the row is kept.
-- The second and later rows with an address already seen (after trimming and lower-casing) are rejected as `duplicate_email`. An address counts as seen only when its row was kept as a record or counted as a free row; the type is checked before the duplicate.
+- A date cell is read with `datetime.fromisoformat` after replacing a final `Z` with `+00:00`; when that fails, as the dashboard's form `Nov 17, 2026` (`%b %d, %Y`). A value without a time zone, or a date without a time, is taken as UTC. An empty cell is `None`. A cell that cannot be read is `None` and adds one to `unreadable_dates`; the row is kept.
+- The second and later rows with an address already seen (after trimming and lower-casing) are rejected as `duplicate_email`. An address counts as seen only when its row was kept as a record or counted as a free or trial row; the type is checked before the duplicate.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -210,11 +213,17 @@ def paid(**over):
 @pytest.mark.parametrize(
     ("cell", "group", "expected"),
     [("paid", "", "paid"), ("Paid", "Team A", "group_seat"), ("Comp", "", "comp"), ("complimentary", "", "comp"),
-     ("Gift", "", "gift"), ("Founding", "", "founding"), ("Lifetime", "", "lifetime")],
+     ("Gift", "", "gift"), ("Founding", "", "founding"), ("Lifetime", "", "lifetime"), ("iOS Subscription", "", "paid")],
 )
 def test_types(cell, group, expected):
     listing, _ = parse_export(make_export([paid(Type=cell, **{"Group membership": group})]), NOW)
     assert listing.records[0].type == expected
+
+
+def test_a_free_trial_is_not_a_paying_reader():
+    listing, report = parse_export(make_export([paid(Type="Free Trial")]), NOW)
+    assert listing.records == [] and listing.rejected_rows == 0
+    assert (report.trial_rows, report.free_rows) == (1, 0)
 
 
 def test_an_unknown_type_is_rejected_and_reported_never_guessed():
@@ -231,7 +240,8 @@ def test_a_reported_value_never_carries_an_address():
 
 @pytest.mark.parametrize(
     ("cell", "expected", "unknown"),
-    [("Annual", "year", {}), ("yearly", "year", {}), ("Monthly", "month", {}), ("", None, {}), ("Weekly", None, {"Weekly": 1})],
+    [("Annual", "year", {}), ("yearly", "year", {}), ("Monthly", "month", {}), ("", None, {}), ("Weekly", None, {"Weekly": 1}),
+     ("$5 a month", "month", {}), ("CA$70 a year", "year", {})],
 )
 def test_plans(cell, expected, unknown):
     listing, report = parse_export(make_export([paid(**{"Stripe plan": cell})]), NOW)
@@ -244,6 +254,11 @@ def test_dates():
     record = parse_export(make_export([row]), NOW)[0].records[0]
     assert record.paid_until == datetime(2027, 3, 1, tzinfo=UTC)
     assert record.since == datetime(2026, 3, 1, tzinfo=UTC)          # not the Start date
+
+
+def test_the_dashboard_form_of_a_date_is_read_too():
+    record = parse_export(make_export([paid(**{"First paid date": "Nov 17, 2026"})]), NOW)[0].records[0]
+    assert record.since == datetime(2026, 11, 17, tzinfo=UTC)
 
 
 def test_an_unreadable_date_is_counted_and_the_row_kept():
@@ -267,7 +282,7 @@ Expected: FAIL on the new tests (types other than `Paid` are rejected; intervals
 
 - [ ] **Step 4: See them pass**
 
-Run the check command. Expected: 17 new tests pass (7 types, 5 plans, 5 others); no lint or type errors.
+Run the check command. Expected: 22 new tests pass (8 types, 7 plans, 7 others); no lint or type errors.
 
 - [ ] **Step 5: Commit**
 
@@ -353,7 +368,7 @@ The section says, in this order: which columns are used; that unknown values are
 
 - [ ] **Step 4: See them pass**
 
-Run the check command. Expected: 5 new tests pass, 29 in this file; `tests/test_boundary.py` still passes.
+Run the check command. Expected: 5 new tests pass, 34 in this file; `tests/test_boundary.py` still passes.
 
 - [ ] **Step 5: Commit**
 
