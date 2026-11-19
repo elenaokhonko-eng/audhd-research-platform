@@ -11,8 +11,9 @@
 set -euo pipefail
 
 # Value of Config.notification.sendEmail.dnsInfo.customDomainState that means "verified".
-# Identity Toolkit Admin API v2, reference for Config / DnsInfo: the enum VerificationState has
-# VERIFICATION_STATE_UNSPECIFIED, NOT_VERIFIED, FAILED and SUCCEEDED. Anything else counts as not verified.
+# Identity Toolkit API v2 discovery document, DnsInfo.customDomainState (VerificationState): the values
+# are VERIFICATION_STATE_UNSPECIFIED, NOT_STARTED, IN_PROGRESS, FAILED and SUCCEEDED. SUCCEEDED means
+# "verified and ready to be applied". Anything else counts as not verified.
 VERIFIED_STATE="SUCCEEDED"
 
 CURL="${CURL:-curl}"
@@ -33,7 +34,8 @@ case "${3:-}" in
 esac
 command -v jq >/dev/null || stop "jq is not installed (Cloud Shell has it). Install it, then re-run."
 
-token="${GCLOUD_TOKEN:-$(gcloud auth print-access-token)}"
+token="${GCLOUD_TOKEN:-$(gcloud auth print-access-token 2>/dev/null)}" || stop "Could not get an access token from gcloud. Run 'gcloud auth login', then re-run."
+[[ -n "$token" ]] || stop "Could not get an access token from gcloud. Run 'gcloud auth login', then re-run."
 body_file="$(mktemp)"; trap 'rm -f "$body_file"' EXIT
 
 # status=$(call <METHOD> <URL> [<BODY>]); the response body is left in "$body_file"
@@ -46,7 +48,7 @@ read_config() {
   local status
   status="$(call GET "$config_url")" || stop "Could not reach Google (the request itself failed). Check your connection and re-run."
   if [[ "$status" != "200" ]]; then
-    stop "Google answered $status when reading the sign-in settings of $project. If it is 403, your account needs the role 'Firebase Authentication Admin' on the project and the Identity Toolkit API must be on (Terraform enables it). If it is 404, check the project id. Then re-run."
+    stop "Google answered $status when reading the sign-in settings of $project. If it is 403, your account needs the role 'Firebase Authentication Admin' on the project and the Identity Toolkit API must be on (Terraform enables it). If it is 404, check the project id. Then re-run. If it keeps failing, use the console instead: Firebase console > Authentication > Templates > edit any template > "customize domain", following docs/runbooks/stage-1-sign-in.md."
   fi
   config="$(cat "$body_file")"
 }
@@ -60,7 +62,9 @@ post_verify() { # post_verify VERIFY|APPLY
     return 0
   fi
   status="$(call POST "$verify_url" "$body")" || stop "Could not reach Google while sending the $1 request. Re-run."
-  [[ "$status" == "200" ]] || stop "Google answered $status to the $1 request for $domain. Re-run in a minute; if it repeats, check that Terraform created the DNS records."
+  if [[ "$status" != "200" ]]; then
+    stop "Google answered HTTP $status to the $1 request for $domain. Google may not offer this method to your project (it is not in the published API description), so this script cannot always do the step. Do it in the console instead: Firebase console > Authentication > Templates > edit any template > "customize domain", following docs/runbooks/stage-1-sign-in.md. Then re-run this script to check the result."
+  fi
 }
 
 say "1/3 Reading the current sign-in email settings of $project"
@@ -81,6 +85,9 @@ echo "Verification requested at: $(field domainVerificationRequestTime || true)"
 
 if [[ "$state" != "$VERIFIED_STATE" ]]; then
   say "NOT VERIFIED YET"
+  if [[ "$state" == "FAILED" ]]; then
+    echo "Google checked and verification FAILED: the DNS records it found do not match. Do not just wait; compare the records below with the zone and correct them."
+  fi
   cat <<RECORDS
 Google has not confirmed the DNS records of $domain yet. DNS changes can take from a few minutes
 up to a few hours. Compare these with what Terraform created (terraform output auth_email_domain,

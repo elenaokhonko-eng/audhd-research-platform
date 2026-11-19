@@ -27,4 +27,9 @@ grep -q "^POST" "$STUB_LOG" && fail "dry run must not POST"
 
 # 4. The token never appears in output.
 grep -q "stub-token" <<<"$out" && fail "token leaked"
+# 5. A failed read (403) stops with an error, sends no POST and leaks no token.
+set +e; out="$(STUB_STATUS=403 run 2>&1)"; code=$?; set -e
+[ "$code" -ne 0 ] || fail "a 403 on the read must fail"
+grep -q "^POST" "$STUB_LOG" && fail "must not POST after a failed read"
+grep -q "stub-token" <<<"$out" && fail "token leaked on failure"
 echo "test-30 passed"
