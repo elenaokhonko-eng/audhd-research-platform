@@ -13,10 +13,13 @@ You are helping build **audhdneurobiology.org**: a member platform for a researc
 
 | Read | For |
 | --- | --- |
-| `docs/architecture/README.md` and pages 01 to 10 | The design. Page 01 first. |
+| `docs/architecture/README.md` and pages 01 to 11 | The design. Page 01 first. |
 | `docs/adr/` | Why each decision was made. Add an ADR when you change one. |
 | `docs/plans/roadmap.md` | Stage order and exit tests |
 | `docs/plans/stage-1-members-and-commerce.md` | The current stage, slice by slice |
+| `docs/superpowers/specs/` | The design of a single feature, approved before its plan is written. Current: the launch track |
+| `docs/contracts/` | Names and shapes that parallel lanes share: routes, functions, documents, events, settings. Build exactly what it says; change it only through a pull request labelled `contract-change` |
+| `docs/plans/stage-1-swarm-build-plan.md` and `docs/swarm/` | How Stage 1 is built by parallel lanes: who owns which paths, roles, the rules for a pull request, kick-off prompts |
 | `docs/superpowers/plans/` | Task-by-task plans. Implement from these with the `superpowers:executing-plans` or `superpowers:subagent-driven-development` skill. |
 | `docs/architecture/10-borrow-map.md` | **Check before writing a component**: what to reuse and from where |
 
@@ -29,6 +32,7 @@ apps/web/                  Next.js site, member workspace, admin (TypeScript)
 services/platform-api/     Backend: membership, commerce, library, content index (Python, FastAPI)   [Stage 1]
 packages/substack-desk/    Substack integration, extractable; must not import platform_api            [Stage 1 on]
 packages/events/           Event schemas shared by Python and TypeScript                              [when needed]
+packages/study-governance/ Study pack schemas, rules, ethics and survey templates, extractable         [Stage 3; templates earlier]
 agents/                    Genkit agent teams                                                         [Stage 2 on]
 infra/terraform/           modules/ and one root per environment under envs/
 ops/scripts/               Bootstrap and smoke scripts the owner runs in Cloud Shell
@@ -86,3 +90,5 @@ bash ops/scripts/check-private-content.sh
 ## When something is unclear
 
 Stop and ask the owner. In particular: anything that would change an ADR, add a fixed monthly cost, switch on a Substack private-endpoint capability, or touch members' data in a way the docs do not describe.
+
+If you were started as a lane of the Stage 1 build, `.claude/rules/swarm.md` and `docs/swarm/README.md` apply as well. They add to this file and never loosen it.
