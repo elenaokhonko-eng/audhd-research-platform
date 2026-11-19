@@ -118,7 +118,7 @@ class SourceState(BaseModel):        # what a source says now about one grant fo
     source: Literal["substack_stripe", "substack_roster", "platform_stripe"]
     source_ref: str                  # Stripe subscription id, or "roster"
     email: str                       # used only to compute contact_id; never stored on the entitlement
-    grant: str                       # "tier:paid"
+    grant: str                       # "tier:paid", or "status:substack_paid" when a Substack subscription does not include the platform
     status: Literal["active", "grace", "expired"]
     started_at: datetime | None      # when the source says the paid period began; becomes valid_from. Never "first seen"
     valid_until: datetime | None
@@ -189,6 +189,7 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 | `PLATFORM_ROSTER_INBOX_BUCKET` | Restricted bucket where the owner places the export file; objects are deleted after seven days |
 | `PLATFORM_STRIPE_SUBSTACK_APPLICATION` | The application id that marks a subscription as created by Substack |
 | `PLATFORM_STRIPE_TEST_CHANNEL_METADATA` | Dev only. When true, a sandbox subscription with metadata `test_channel=substack` is classified as created by Substack, because a sandbox cannot reproduce another platform's application id. `Settings` refuses to start with this set when `PLATFORM_ENV` is `prod` |
+| `PLATFORM_SUBSTACK_PAID_GRANT` | What a paying Substack reader is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). The owner's commercial decision |
 | `PLATFORM_LIBRARY_BUCKET` | Private bucket for library files |
 | `PLATFORM_SESSION_TTL_DAYS` | Session cookie lifetime |
 

@@ -144,7 +144,7 @@ campaigns:
 - **It ends on its date** like every `grant` (Rule 1), and `access_for` treats it as ended from that moment even before the daily sweep runs.
 - **Abuse to design against:** subscribe for one month, collect the grant, cancel. `paid_since_before`, set to a moment before the invitation is announced, limits the launch grant to readers who were already paying.
 
-What a member holds after the grant ends depends on decision 1 (§9). The engine needs no change for either answer: the union of live entitlements decides.
+What a member holds after the grant ends depends on decision 1 (§9), and one configuration value carries the answer. Under (a) the reconcile records a paying Substack reader as `tier:paid`, so access continues for as long as they pay. Under (b) it records the same fact as `status:substack_paid`, a status that unlocks nothing by itself: it satisfies a grant policy's `requires_live_source`, and only the grant, or later a platform membership, gives access. The engine is the same for both: the union of live entitlements decides.
 
 ### 5.5 The promotion
 
@@ -223,7 +223,7 @@ Defaults are what the build assumes until told otherwise. None of them is in cod
 
 | # | Decision | Options | Default |
 | --- | --- | --- | --- |
-| 1 | What does a Substack paid subscription include? | (a) The platform, for as long as it is paid; the launch grant is a guarantee on top. (b) The platform is a separate membership; the launch grant is a free period, after which the member pays or becomes free. | (a) |
+| 1 | What does a Substack paid subscription include? | (a) The platform, for as long as it is paid; the launch grant is a guarantee on top. (b) The platform is a separate membership; the launch grant is a free period, after which the member pays or becomes free. Under (b) the platform-only product must exist before the first grant ends, and decision 2 should let readers who become paid during a promotion qualify. | (a). The choice changes one configuration value and the wording of the invitation, not the build |
 | 2 | Grant terms | Number of months; counted from each person's first sign-in or to one fixed date; a last day to claim; whether only readers paying before the announcement qualify | From first sign-in; a claim-by date; `paid_since_before` set |
 | 3 | Promotion terms | Percentage; first year only or for good; end date; shown to everyone or by link only | Owner's values, kept private |
 | 4 | Open B1 and B2 together or B1 first | – | B1 first if fewer than the planned items are published |
