@@ -1,6 +1,6 @@
 # Launch track: invite links, launch grants and promotions
 
-**Status:** Proposed for the owner's review · 2026-11-19
+**Status:** Approved by merge of pull request #5 on 2026-11-19 · the owner's decisions recorded 2026-11-20 (her choices are in the private launch plan)
 **Changes:** [02 membership](../../architecture/02-membership-and-entitlements.md) §5.3, §6, §8 · [03 commerce](../../architecture/03-commerce-and-revenue.md) §3, §5 · [09 data and events](../../architecture/09-events-and-data-model.md) · the order of slices in the [Stage 1 plan](../../plans/stage-1-members-and-commerce.md)
 **Decisions:** [ADR 0021](../../adr/0021-one-join-link-recognition-by-verified-email.md) · [ADR 0022](../../adr/0022-campaigns-grants-and-promotions-as-configuration.md)
 **Interfaces:** [contracts for the launch track](../../contracts/stage-1-launch.md)
@@ -135,16 +135,17 @@ campaigns:
       fixed_until: null              # used when starts is fixed
       requires_live_source: [substack_stripe, substack_roster]
       paid_since_before: <timestamp or null>   # see "abuse" below
+      plan_intervals: <list of month and year, or null for both>
 ```
 
-- **Created when** a registered member holds a live entitlement from one of `requires_live_source`, the campaign is open, and `paid_since_before` (if set) is later than that entitlement's `valid_from`. Evaluated at every sign-in, and after any reconcile or roster run that writes a tier entitlement for a contact who is already a member.
+- **Created when** a registered member holds a live entitlement from one of `requires_live_source`, the campaign is open, and `paid_since_before` (if set) is later than that entitlement's `valid_from`. If `plan_intervals` is set, that entitlement's plan interval must be one of them; an entitlement with no recorded plan interval does not satisfy such a policy, and the owner can grant by hand. Evaluated at every sign-in, and after any reconcile or roster run that writes a tier entitlement for a contact who is already a member.
 - **A reader who cancelled and subscribed again after the cut-off** does not qualify automatically; the owner can grant by hand.
 - **Identity:** `entitlement_id = sha256("grant:campaign:<slug>:<contact_id>:tier:paid")[:32]`. Evaluating twice changes nothing. One grant per contact per campaign.
 - **It is a verified grant.** The evidence (the entitlement that satisfied the policy) is written to the audit log. A campaign slug, by itself, never satisfies a policy.
 - **It ends on its date** like every `grant` (Rule 1), and `access_for` treats it as ended from that moment even before the daily sweep runs.
 - **Abuse to design against:** subscribe for one month, collect the grant, cancel. `paid_since_before`, set to a moment before the invitation is announced, limits the launch grant to readers who were already paying.
 
-What a member holds after the grant ends depends on decision 1 (§9), and one configuration value carries the answer. Under (a) the reconcile records a paying Substack reader as `tier:paid`, so access continues for as long as they pay. Under (b) it records the same fact as `status:substack_paid`, a status that unlocks nothing by itself: it satisfies a grant policy's `requires_live_source`, and only the grant, or later a platform membership, gives access. The engine is the same for both: the union of live entitlements decides.
+What a member holds, during and after the grant, depends on decision 1 (§9), and two configuration values carry the answer, one per plan interval: what a paying Substack reader on a monthly plan is recorded as, and what one on an annual plan is recorded as. Each is either `tier:paid` (the platform is included for as long as they pay) or `status:substack_paid` (a status that unlocks nothing by itself: it satisfies a grant policy's `requires_live_source`, and only a grant, or later a platform membership, gives access). "Included for every paying reader", "included in the annual plan only" and "a separate membership" are three settings of the same build. The engine is the same for all: the union of live entitlements decides.
 
 ### 5.5 The promotion
 
@@ -184,7 +185,7 @@ First sign-in asks the member to accept the terms and privacy notice; the versio
 | Piece | From slice | In the launch track | Deferred |
 | --- | --- | --- | --- |
 | Foundations | S1.0 | All of it | – |
-| Sign-in | S1.1 | Email link and Google, session cookie, CSRF protection, member record, terms acceptance, workspace shell | Admin screens, custom sending domain |
+| Sign-in | S1.1 | Email link and Google, session cookie, CSRF protection, member record, terms acceptance, workspace shell, the sign-in email sent from the platform's own domain | Admin screens |
 | Entitlements | S1.2 | Contact key, contacts, entitlements, `access_for`, `can_open`, claim at sign-in, grant and revoke with audit, the `membership.tier.changed` event, campaigns and grant policies, paid-only route guard, the admin routes behind `platform-cli` | Linking a second email in the browser, tier-change emails, the daily sweep (the reconcile covers Stripe; no grant can end inside the launch window) |
 | Stripe | S1.3 | Restricted-key client, reconcile job with dry run and guard, started on a schedule and on request | Webhooks, raw-event bucket, test-clock journeys beyond subscribe and cancel |
 | Roster | S1.4 | Desk package skeleton, `SubscriberDirectory`, file adapter for paid rows, dry run | Publisher API adapter, free-subscriber flags, admin upload |
@@ -221,13 +222,15 @@ Not negotiable at launch: the privacy notice and terms are published and approve
 
 Defaults are what the build assumes until told otherwise. None of them is in code.
 
+**Decided by the owner on 2026-11-20.** Her choices are recorded in the private launch plan. Two of them changed the mechanism described here: a grant policy can be limited by plan interval (§5.4), and the sign-in email is sent from the platform's own domain from the first day (decision 5).
+
 | # | Decision | Options | Default |
 | --- | --- | --- | --- |
 | 1 | What does a Substack paid subscription include? | (a) The platform, for as long as it is paid; the launch grant is a guarantee on top. (b) The platform is a separate membership; the launch grant is a free period, after which the member pays or becomes free. Under (b) the platform-only product must exist before the first grant ends, and decision 2 should let readers who become paid during a promotion qualify. | (a). The choice changes one configuration value and the wording of the invitation, not the build |
 | 2 | Grant terms | Number of months; counted from each person's first sign-in or to one fixed date; a last day to claim; whether only readers paying before the announcement qualify | From first sign-in; a claim-by date; `paid_since_before` set |
 | 3 | Promotion terms | Percentage; first year only or for good; end date; shown to everyone or by link only | Owner's values, kept private |
 | 4 | Open B1 and B2 together or B1 first | – | B1 first if fewer than the planned items are published |
-| 5 | Sign-in email sender | Identity Platform's default sender now; the platform's own domain after its DNS records are verified | Default sender now |
+| 5 | Sign-in email sender | Identity Platform's default sender; or the platform's own domain with SPF, DKIM and DMARC records | The platform's own domain from the first day (changed 2026-11-20: the owner's priority is that the email is not treated as spam). Identity Platform still sends it; no email vendor is added. Google sign-in sits beside it and the invitation names the sender |
 | 6 | Minimum age and the texts of the terms and privacy notice | – | Owner approves the drafts |
 | 7 | Who qualifies as "paid" for recognition | Card-paying only; or also complimentary, gift and Apple-billed through the roster file | Both |
 
@@ -241,7 +244,7 @@ Page wording and layout within the site's existing design; the cookie and CSRF m
 | --- | --- | --- | --- |
 | The thin platform is not ready by the promotion | Medium | Paid readers are invited later than hoped | Layer A is independent; B1 can open any day after its exit test |
 | A paid reader is not recognised | High at first | Frustration on the first visit | Plain message, two self-service routes, support request, manual grant |
-| Sign-in emails go to spam | Medium | Nobody gets in by email | Google sign-in beside it; own sending domain as the next step |
+| Sign-in emails go to spam | Medium | Nobody gets in by email | The platform's own authenticated sending domain; Google sign-in beside it; the Substack invitation names the sender and says where to look |
 | Reconcile reads a partial list | Low | Wrong downgrades | Guard stops the run; nothing is ended on missing information; launch grants do not depend on the source |
 | A promotion keeps showing after Substack ended it | Low | A broken promise on the page | One end time in configuration, set to Substack's; the page states the end; the layer switch hides it at once |
 | First personal data in the project | Certain | Legal duties begin | The launch gate (§8) |
@@ -257,4 +260,5 @@ An independent builder's read of this design raised questions. These are the ans
 5. `platform-cli` calls admin routes; nobody writes to the database by hand (§6).
 6. The reconcile job doubles as the sweep for Stripe-sourced access at launch; the tier-change event is published from day one and its email follows (§6, §8).
 7. A campaign's slug is its id.
+8. A grant policy may name the plan intervals it applies to, and what a paying Substack reader is recorded as is set per plan interval (§5.4). Added 2026-11-20 after the owner's decisions.
 

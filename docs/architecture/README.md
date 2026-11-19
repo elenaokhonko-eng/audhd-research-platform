@@ -1,7 +1,7 @@
 # Architecture v4
 
-**Status:** v4 approved by merge on 2026-11-17 · v4.1 additions proposed for the owner's review · 2026-11-19
-**Rule:** no Stage 1 code is written until the launch design, the contracts and the swarm build plan are approved.
+**Status:** v4 approved by merge on 2026-11-17 · v4.1 approved by merge on 2026-11-19 · Stage 1 build in progress
+**Rule:** every slice is built from a reviewed plan, against the contracts page.
 
 **What v4.1 adds:** a launch track at the front of Stage 1 (one join link per audience, recognition by verified email, launch grants, promotions shown from Substack); study governance (study packs, ethics policy as code, ethics and survey templates that agents fill); a plan to build Stage 1 with parallel lanes of Claude agents; a review of the owner's newer forks.
 

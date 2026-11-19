@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Lanes (added 2026-11-20):** tasks 1 to 5 are built by lane **L1 Core**, tasks 6 to 8 by lane **L3 Infra**, task 9 by the **integrator** ([swarm build plan](../../plans/stage-1-swarm-build-plan.md)). Each lane branches from `integration/stage-1` and opens its pull requests against it. Task 6 builds and tests the image of the service, so the Infra lane starts it only after Core's tasks 1 to 5 are merged into `integration/stage-1`; until then it works on tasks 7 and 8 and on its second plan. `services/platform-api/.dockerignore` belongs to the Infra lane together with the `Dockerfile`. Interfaces shared with other lanes are on the [contracts page](../../contracts/stage-1-launch.md).
+
 **Goal:** A private `platform-api` and a public `platform-hooks` run in a new dev project from one image, exchange CloudEvents over Pub/Sub exactly-once-in-effect, and enforce module boundaries, so every later Stage 1 slice only adds business code.
 
 **Architecture:** One Python package, `platform_api`, started in one of two HTTP modes (`api`, `hooks`) or as a job through `platform-cli`. Feature modules are empty packages with a `public.py`; shared code holds the event envelope, the bus port, the inbox and the Pub/Sub push receiver. Infrastructure is Terraform with one root per environment; applying it is the owner's step in Cloud Shell.
@@ -149,7 +151,7 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'platform_api'`
 
 - [ ] **Step 3: Write `pyproject.toml`**
 
-Project name `platform-api`, `requires-python = ">=3.12,<3.13"`, src layout, script `platform-cli = "platform_api.cli:main"`. Runtime dependencies: `fastapi`, `uvicorn[standard]`, `pydantic>=2`, `pydantic-settings`, `google-cloud-firestore`, `google-cloud-pubsub`, `google-auth`, `requests`. Dev group: `pytest`, `httpx`, `ruff`, `mypy`, `import-linter`. Configure ruff (line length 100, rules `E,F,I,UP,B,S`, with per-file ignores `S101` and `E501` for `tests/**`), mypy `strict = true` for `platform_api`, pytest marker `integration`. Format with `ruff format` and let `ruff check --fix` order imports before committing; the test code in this plan is written for readability, not to the formatter's line breaks. Run `uv lock` and commit `uv.lock`; the image build installs from it.
+Project name `platform-api`, `requires-python = ">=3.12,<3.13"`, src layout with a `[build-system]` table (`hatchling`, `packages = ["src/platform_api"]`; without it uv does not install the package and the script entry does not exist), script `platform-cli = "platform_api.cli:main"`. Runtime dependencies: `fastapi`, `uvicorn[standard]`, `pydantic>=2`, `pydantic-settings`, `google-cloud-firestore`, `google-cloud-pubsub`, `google-auth`, `requests`. Also add the launch track's runtime dependencies now, so that no other lane edits this file in Wave 2: `stripe`, `firebase-admin`, `google-cloud-kms`, `google-cloud-storage`, `google-cloud-run`, `google-cloud-secret-manager`, `pyyaml`. Dev group: `pytest`, `httpx`, `ruff`, `mypy`, `import-linter`, `types-PyYAML`. Configure ruff (line length 100, rules `E,F,I,UP,B,S`, with per-file ignores `S101` and `E501` for `tests/**`), mypy `strict = true` for `platform_api`, pytest marker `integration`. Format with `ruff format` and let `ruff check --fix` order imports before committing; the test code in this plan is written for readability, not to the formatter's line breaks. Run `uv lock` and commit `uv.lock`; the image build installs from it.
 
 - [ ] **Step 4: Implement `Settings`, `create_app` and `shared/logging.py`**
 
@@ -531,8 +533,9 @@ git commit -m "platform-api: authenticated, idempotent Pub/Sub push receiver"
 ### Task 5: Module boundaries and the self-check job
 
 **Files:**
-- Create: `src/platform_api/{identity,entitlements,commerce,library,content,admin}/__init__.py` and `public.py`; `services/platform-api/.importlinter`; `src/platform_api/cli.py`; `src/platform_api/jobs/__init__.py`, `jobs/selfcheck.py`
-- Test: `tests/test_boundaries.py`, `tests/test_selfcheck.py`
+- Create: `src/platform_api/modules.py`; `src/platform_api/{identity,entitlements,commerce,library,content,admin}/__init__.py`, `public.py`, `http.py` and `jobs.py`; `services/platform-api/.importlinter`; `src/platform_api/cli.py`; `src/platform_api/jobs/__init__.py`, `jobs/selfcheck.py`
+- Modify: `src/platform_api/app.py` (serve each module's routers)
+- Test: `tests/test_boundaries.py`, `tests/test_selfcheck.py`, `tests/test_module_registration.py`
 
 **Interfaces:**
 - Consumes: `EventBus`, `new_event`.
@@ -540,6 +543,9 @@ git commit -m "platform-api: authenticated, idempotent Pub/Sub push receiver"
   - `run_selfcheck(bus: EventBus) -> str`: publishes `platform.selfcheck.ran` with subject `platform-api` and data `{"check": "bus"}`, prints the event id on its own line, returns it
   - `platform-cli job <name>`: runs a job from the registry `JOBS: dict[str, Callable[[Settings], int]]`; unknown name exits with status 2 and lists the known names
   - Import contracts: (a) the six feature modules are independent of each other except for imports of `<module>.public`; (b) `platform_api.shared` imports none of them
+  - `modules.FEATURE_MODULES: tuple[str, ...] = ("identity", "entitlements", "commerce", "library", "content", "admin")`
+  - **Routes per module.** Each feature module's `http.py` exposes `router: fastapi.APIRouter` (served only in `api` mode) and `hooks_router: fastapi.APIRouter` (served only in `hooks` mode). Both are empty in this slice. `create_app` looks them up as `platform_api.<module>.http` **each time it is called** and includes them. Later lanes add routes to their own module's routers and never edit `app.py`.
+  - **Jobs per module.** Each feature module's `jobs.py` exposes `JOBS: dict[str, Callable[[Settings], int]]`, empty in this slice. `cli.build_registry() -> dict[str, Callable[[Settings], int]]` merges `platform_api.jobs.JOBS` (the shared jobs, here `selfcheck`) with every module's `JOBS`; a name registered twice raises `cli.DuplicateJob`, whose message names both owners. `platform-cli job <name>` uses this registry.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -593,14 +599,69 @@ def test_selfcheck_publishes_one_event_and_prints_its_id(capsys):
     assert capsys.readouterr().out.strip().splitlines()[-1] == event_id
 ```
 
+```python
+# tests/test_module_registration.py
+import pytest
+from fastapi import APIRouter
+from fastapi.testclient import TestClient
+
+from platform_api import cli
+from platform_api.app import create_app
+from platform_api.settings import Settings
+
+
+def _probe_router(path: str) -> APIRouter:
+    router = APIRouter()
+
+    @router.get(path)
+    def probe() -> dict[str, bool]:
+        return {"ok": True}
+
+    return router
+
+
+def test_a_module_route_is_served_in_api_mode_only(monkeypatch):
+    from platform_api.library import http as library_http
+
+    monkeypatch.setattr(library_http, "router", _probe_router("/v1/library/probe"))
+    assert TestClient(create_app(Settings(app_mode="api"))).get("/v1/library/probe").json() == {"ok": True}
+    assert TestClient(create_app(Settings(app_mode="hooks"))).get("/v1/library/probe").status_code == 404
+
+
+def test_a_module_hook_route_is_served_in_hooks_mode_only(monkeypatch):
+    from platform_api.commerce import http as commerce_http
+
+    monkeypatch.setattr(commerce_http, "hooks_router", _probe_router("/hooks/probe"))
+    assert TestClient(create_app(Settings(app_mode="hooks"))).get("/hooks/probe").json() == {"ok": True}
+    assert TestClient(create_app(Settings(app_mode="api"))).get("/hooks/probe").status_code == 404
+
+
+def test_a_job_registered_by_a_module_is_runnable(monkeypatch):
+    from platform_api.commerce import jobs as commerce_jobs
+
+    monkeypatch.setattr(commerce_jobs, "JOBS", {"probe-job": lambda settings: 7})
+    assert cli.build_registry()["probe-job"](Settings()) == 7
+
+
+def test_the_same_job_name_in_two_modules_is_refused(monkeypatch):
+    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api.library import jobs as library_jobs
+
+    monkeypatch.setattr(commerce_jobs, "JOBS", {"twin": lambda settings: 0})
+    monkeypatch.setattr(library_jobs, "JOBS", {"twin": lambda settings: 0})
+    with pytest.raises(cli.DuplicateJob) as err:
+        cli.build_registry()
+    assert "commerce" in str(err.value) and "library" in str(err.value)
+```
+
 - [ ] **Step 2: Run them to see them fail**
 
-Run: `uv run pytest tests/test_boundaries.py tests/test_selfcheck.py -v`
-Expected: FAIL (no `.importlinter`, no `jobs.selfcheck`)
+Run: `uv run pytest tests/test_boundaries.py tests/test_selfcheck.py tests/test_module_registration.py -v`
+Expected: FAIL (no `.importlinter`, no `jobs.selfcheck`, no `platform_api.library.http`)
 
-- [ ] **Step 3: Create the module packages, `.importlinter`, `cli.py`, `jobs/selfcheck.py`**
+- [ ] **Step 3: Create the module packages, `.importlinter`, `modules.py`, `cli.py`, `jobs/selfcheck.py`, and serve the module routers from `app.py`**
 
-Two contracts in `.importlinter` with `root_package = platform_api`: an `independence` contract over the six feature modules that ignores imports whose target is a module's `public`, and a `forbidden` contract with `source_modules = platform_api.shared` and the six feature modules as `forbidden_modules`. The three boundary tests are the specification: adjust the ignore patterns until all three pass.
+Two contracts in `.importlinter` with `root_package = platform_api`: an `independence` contract over the six feature modules that ignores imports whose target is a module's `public`, and a `forbidden` contract with `source_modules = platform_api.shared` and the six feature modules as `forbidden_modules`. The three boundary tests are the specification: adjust the ignore patterns until all three pass. A module's `http.py` and `jobs.py` are part of that module: they may import its own code and other modules' `public` only. `app.py` and `cli.py` sit outside the feature modules and import each module's `http` and `jobs` by name with `importlib.import_module`, at call time, so a test can replace a module's router or job table.
 
 - [ ] **Step 4: Run all tests and the linters**
 
@@ -640,12 +701,12 @@ Expected: `{"status":"ok","service":"platform-api","mode":"hooks","env":"local"}
 
 - [ ] **Step 3: Write `.github/workflows/platform-api.yml`**
 
-Triggers: pull requests and pushes to `main` touching `services/platform-api/**` or the workflow file; tags `v*`.
+Triggers: every pull request touching `services/platform-api/**` or the workflow file, whatever its target branch; pushes to `main` and to `integration/**` touching the same paths; tags `v*`.
 
 | Job | When | Does |
 | --- | --- | --- |
 | `test` | always | `uv sync`, `ruff check`, `mypy src`, `lint-imports`, `pytest -m "not integration"`; then start the Firestore emulator in a step (GitHub service containers cannot take a command, so use `docker run -d -p 8085:8085 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators gcloud emulators firestore start --host-port=0.0.0.0:8085`, wait until port 8085 answers) and run `pytest -m integration` with `FIRESTORE_EMULATOR_HOST=localhost:8085` |
-| `deploy-dev` | push to `main`, after `test` | GitHub environment `dev`; authenticate with Workload Identity Federation; build and push the image; `gcloud run deploy platform-api` and `platform-hooks` with `--image`; `gcloud run jobs update platform-selfcheck --image` |
+| `deploy-dev` | push to `integration/stage-1` while the build runs in integration-branch mode (`docs/swarm/README.md`); the job's condition names that one branch, so the daily promotion to `main` does not deploy a second time; the condition also requires `vars.DEPLOY_DEV_ENABLED == 'true'`, a variable the owner sets on the GitHub environment `dev` at Gate 1 (before that, the environment has no variables of its own and `vars.*` would fall back to the repository-level values, which point at the prod project); after `test` | GitHub environment `dev`; authenticate with Workload Identity Federation; build and push the image; `gcloud run deploy platform-api` and `platform-hooks` with `--image`; `gcloud run jobs update platform-selfcheck --image` |
 | `deploy-prod` | tag `v*`, after `test` | GitHub environment `production`; same steps against prod |
 
 Read `GCP_PROJECT_ID`, `GCP_REGION`, `WIF_PROVIDER`, `DEPLOYER_SA`, `REGISTRY` from **environment-scoped** variables, so both environments use the same names. Deploy steps change only the image; all other service settings belong to Terraform.
@@ -744,7 +805,7 @@ Expected: no output
 
 - [ ] **Step 3: Move `web-dev` to the dev project in Terraform and CI**
 
-Remove `module "web_dev"` and the `dev` host from the prod root. In `web.yml`, give `deploy-dev` `environment: dev` and `deploy-prod` `environment: production`; both read the same variable names from their environment.
+Remove `module "web_dev"` and the `dev` host from the prod root. In `web.yml`, give `deploy-dev` `environment: dev` and `deploy-prod` `environment: production`; both read the same variable names from their environment. Trigger `deploy-dev` on pushes to `integration/stage-1` in the same way as in Task 6, with the same `vars.DEPLOY_DEV_ENABLED == 'true'` condition.
 
 - [ ] **Step 4: Write the runbook**
 
@@ -774,7 +835,7 @@ Expected: `SMOKE PASSED` for the dev project, and `terraform plan` reports no ch
 
 - [ ] **Step 1: Update `CLAUDE.md`**
 
-In "Commands", replace the placeholder lines for `services/platform-api` with the real ones: `uv sync`, `uv run pytest -m "not integration"`, `uv run pytest -m integration` (with the emulator), `uv run ruff check .`, `uv run mypy src`, `uv run lint-imports`. In "How to add things", add the exact file to touch for: a new event type (`shared/events.py` users call `new_event`; list the type in `docs/architecture/09-events-and-data-model.md`), a handler (`HandlerRegistry.register` in the module's `handlers.py`), a job (`cli.py` `JOBS`), a module (`.importlinter` list).
+In "Commands", replace the placeholder lines for `services/platform-api` with the real ones: `uv sync`, `uv run pytest -m "not integration"`, `uv run pytest -m integration` (with the emulator), `uv run ruff check .`, `uv run mypy src`, `uv run lint-imports`. In "How to add things", add the exact file to touch for: a new event type (`shared/events.py` users call `new_event`; list the type in `docs/architecture/09-events-and-data-model.md`), a handler (`HandlerRegistry.register` in the module's `handlers.py`), a job (the owning module's `jobs.py` `JOBS`; shared jobs in `platform_api/jobs/__init__.py`), a module (`.importlinter` list).
 
 - [ ] **Step 2: Update the README path table**
 

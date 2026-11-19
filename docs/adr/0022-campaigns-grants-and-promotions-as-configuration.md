@@ -1,6 +1,6 @@
 # ADR-0022: Launch grants and promotions are configuration; promotions name the channel where money changes hands; reconcile by polling before webhooks
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19, by merge of pull request #5)
 **Date:** 2026-11-19
 **Deciders:** Owner (Elena Okhonko)
 

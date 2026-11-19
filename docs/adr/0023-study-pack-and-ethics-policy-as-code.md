@@ -1,6 +1,6 @@
 # ADR-0023: Every study is a study pack built from templates; the ethics policy is data that the survey engine enforces
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19, by merge of pull request #5)
 **Date:** 2026-11-19
 **Deciders:** Owner (Elena Okhonko)
 
