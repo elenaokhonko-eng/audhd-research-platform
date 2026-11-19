@@ -1,0 +1,152 @@
+# platform-api: test on every pull request that touches the service, whatever its target branch.
+# Deploy the image to the dev project on every push to integration/stage-1, or a manual run
+# (workflow_dispatch) on that branch, once the owner has switched dev deploys on (Gate 1), and
+# to prod when a v* tag is pushed and the owner approves. One image serves platform-api
+# (PLATFORM_APP_MODE=api), platform-hooks (hooks) and the job platform-selfcheck
+# (platform-cli job selfcheck). The deploy changes only the image; every other setting of the
+# services and the job belongs to Terraform. Each deploy job reads GCP_PROJECT_ID, GCP_REGION,
+# WIF_PROVIDER, DEPLOYER_SA and REGISTRY from its GitHub environment (dev or production),
+# which ops/scripts/20-stage1-foundations.sh fills from Terraform's outputs.
+name: platform-api
+
+on:
+  pull_request:
+    paths: ["services/platform-api/**", ".github/workflows/platform-api.yml"]
+  push:
+    branches: [main, "integration/**"]
+    paths: ["services/platform-api/**", ".github/workflows/platform-api.yml"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-api-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/platform-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.11.32" # the same uv as the Dockerfile
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: services/platform-api/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run mypy src
+      - run: uv run lint-imports
+      - run: uv run pytest -m "not integration"
+      # GitHub service containers cannot take a command, so the emulator starts in a step.
+      - name: Start the Firestore emulator
+        run: |
+          docker run -d --name firestore-emulator -p 8085:8085 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8085
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://localhost:8085; then
+              echo "Firestore emulator answers after ${i}s."; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The Firestore emulator did not answer on port 8085 within 60 seconds."
+          docker logs firestore-emulator
+          exit 1
+      - run: uv run pytest -m integration
+        env:
+          FIRESTORE_EMULATOR_HOST: localhost:8085
+
+  # Only integration/stage-1 deploys to dev, so the daily promotion to main does not deploy a
+  # second time. A manual run on that branch redeploys without a new commit. DEPLOY_DEV_ENABLED
+  # is a variable of the environment dev, which a job-level condition cannot see (the
+  # environment's variables are available to steps only), so the check is the first step and
+  # every later step depends on it.
+  deploy-dev:
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/integration/stage-1'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write # lets GitHub mint the OIDC token Workload Identity exchanges
+    steps:
+      - name: Dev deploys switched on (DEPLOY_DEV_ENABLED on environment dev)
+        id: gate
+        run: |
+          if [ "${{ vars.DEPLOY_DEV_ENABLED == 'true' }}" = "true" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Dev deploys are off until Gate 1. Nothing deployed."
+          fi
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Image name
+        run: |
+          echo "PROJECT=${{ vars.GCP_PROJECT_ID }}" >> "$GITHUB_ENV"
+          echo "REGION=${{ vars.GCP_REGION }}" >> "$GITHUB_ENV"
+          echo "IMAGE=${{ vars.REGISTRY }}/platform-api:${{ github.sha }}" >> "$GITHUB_ENV"
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+      - if: steps.gate.outputs.enabled == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Build and push the image
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          docker build -t "$IMAGE" services/platform-api && docker push "$IMAGE"
+      - if: steps.gate.outputs.enabled == 'true'
+        name: Deploy the image (only the image changes)
+        run: |
+          for svc in platform-api platform-hooks; do
+            gcloud run deploy "$svc" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+          done
+          gcloud run jobs update platform-selfcheck --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+
+  deploy-prod:
+    # The prod deployer accepts only jobs in the environment production on a v* tag
+    # (infra/terraform/envs/prod/identities.tf).
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production # the owner is the required reviewer of this environment
+    permissions:
+      contents: read
+      id-token: write # lets GitHub mint the OIDC token Workload Identity exchanges
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image name
+        run: |
+          echo "PROJECT=${{ vars.GCP_PROJECT_ID }}" >> "$GITHUB_ENV"
+          echo "REGION=${{ vars.GCP_REGION }}" >> "$GITHUB_ENV"
+          echo "IMAGE=${{ vars.REGISTRY }}/platform-api:${{ github.sha }}" >> "$GITHUB_ENV"
+      - uses: google-github-actions/auth@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Reuse the image if this commit is already in the prod registry, or build it
+        run: |
+          gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+          if ! gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
+            docker build -t "$IMAGE" services/platform-api && docker push "$IMAGE"
+          fi
+      - name: Deploy the image (only the image changes)
+        run: |
+          for svc in platform-api platform-hooks; do
+            gcloud run deploy "$svc" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+          done
+          gcloud run jobs update platform-selfcheck --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
