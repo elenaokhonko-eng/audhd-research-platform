@@ -1,28 +1,41 @@
 # Format and validate Terraform on every pull request. Applying stays a human step
 # (ops/scripts, run by the owner) until the ops team's drift agent arrives in Stage 2.
+# One root per environment: infra/terraform/envs/dev and infra/terraform/envs/prod.
 name: terraform
 
 on:
   pull_request:
     paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
   push:
-    branches: [main]
-    paths: ["infra/terraform/**"]
+    branches: [main, "integration/**"]
+    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
 
 permissions:
   contents: read
 
 jobs:
-  validate:
+  fmt:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: infra/terraform
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.13.4
-      - run: terraform fmt -check -recursive
+      - run: terraform fmt -check -recursive infra/terraform
+
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [envs/dev, envs/prod]
+    defaults:
+      run:
+        working-directory: infra/terraform/${{ matrix.root }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.4
       - run: terraform init -backend=false -input=false
       - run: terraform validate

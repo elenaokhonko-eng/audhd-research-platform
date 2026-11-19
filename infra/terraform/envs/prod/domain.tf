@@ -3,13 +3,13 @@
 #
 #   audhdneurobiology.org      -> web-prod   (A + AAAA)
 #   www.audhdneurobiology.org  -> web-prod   (CNAME ghs.googlehosted.com)
-#   dev.audhdneurobiology.org  -> web-dev    (CNAME ghs.googlehosted.com)
+#
+# dev.audhdneurobiology.org is mapped from the dev project (envs/dev/main.tf).
 
 locals {
   mappings = var.map_custom_domains ? {
     apex = { host = var.domain, service = module.web_prod.name }
     www  = { host = "www.${var.domain}", service = module.web_prod.name }
-    dev  = { host = "dev.${var.domain}", service = module.web_dev.name }
   } : {}
 
   # Fixed anycast addresses Cloud Run domain mappings hand out for apex domains.
@@ -56,7 +56,7 @@ resource "cloudflare_record" "apex_aaaa" {
 }
 
 resource "cloudflare_record" "cname" {
-  for_each = local.dns_on ? toset(["www", "dev"]) : toset([])
+  for_each = local.dns_on ? toset(["www"]) : toset([])
   zone_id  = var.cloudflare_zone_id
   name     = each.value
   type     = "CNAME"

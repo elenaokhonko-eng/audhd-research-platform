@@ -1,9 +1,15 @@
-output "web_dev_url" {
-  value = module.web_dev.uri
-}
-
 output "web_prod_url" {
   value = module.web_prod.uri
+}
+
+output "platform_api_url" {
+  description = "platform-api (private), its Cloud Run URL. Pub/Sub push tokens use the deterministic URL (local.platform_api_base_url) as their audience, not this one"
+  value       = module.platform_api.uri
+}
+
+output "platform_hooks_url" {
+  description = "platform-hooks (public webhook receiver)"
+  value       = module.platform_hooks.uri
 }
 
 output "artifact_registry" {
