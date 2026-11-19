@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 
+from platform_api.modules import FEATURE_MODULES
 from platform_api.settings import Settings
 
 if TYPE_CHECKING:
@@ -59,5 +61,11 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
             app.include_router(
                 build_push_router(inbox=deps.inbox, registry=deps.registry, verify=deps.verify_push)
             )
+
+    # Looked up at call time, so a module's routers can be replaced in a test.
+    attr = "router" if settings.app_mode == "api" else "hooks_router"
+    for name in FEATURE_MODULES:
+        http = importlib.import_module(f"platform_api.{name}.http")
+        app.include_router(getattr(http, attr))
 
     return app
