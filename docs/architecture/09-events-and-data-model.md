@@ -55,7 +55,8 @@ erDiagram
   LIBRARY_ITEM ||--o{ CONTENT_ITEM : "indexed as"
   CONTENT_ITEM ||--o{ CONTENT_CHUNK : "split into"
   MEMBER ||--o{ QUESTION : submits
-  INVITE_WAVE ||--o{ CONTACT : targets
+  CAMPAIGN ||--o{ MEMBER : "joined via"
+  CAMPAIGN ||--o{ ENTITLEMENT : "grant policy creates"
 ```
 
 ### `contacts/{contact_id}` (M2, fed by M14 and M15)
@@ -70,7 +71,7 @@ erDiagram
 | `channels.payhip` | map | `buyer`, `first_purchase_at`, `purchase_count` |
 | `channels.platform` | map | `member_uid`, `registered_at` |
 | `segment` | string | Derived: `substack_paid`, `substack_free`, `platform_paid`, `buyer_only`, `lapsed_paid`, `unknown` |
-| `invite` | map | `wave`, `state` (`none`, `invited`, `accepted`), timestamps |
+| `invite` | map | `campaign` (slug), `state` (`none`, `accepted`), timestamps |
 | `created_at`, `updated_at` | timestamp | |
 
 The `channels` map is the preserved flag: it records every channel a person came through, independent of what they may open today.
@@ -81,7 +82,7 @@ The `channels` map is the preserved flag: it records every channel a person came
 
 ### `entitlements/{entitlement_id}` (M2)
 
-Fields as in [02 §3](02-membership-and-entitlements.md). `entitlement_id = sha256(source ":" source_ref ":" contact_id ":" grant)[:32]`. Indexed by `contact_id` and by (`status`, `valid_until`).
+Fields as in [02 §3](02-membership-and-entitlements.md). `entitlement_id = sha256(source ":" source_ref ":" contact_id ":" grant)[:32]`. `valid_from` is the start the source reports (for a Stripe subscription its start date), never the time of the platform's first import; for a grant it is the moment of the grant. A launch grant has `source_ref` `campaign:<slug>`. Indexed by `contact_id` and by (`status`, `valid_until`).
 
 ### `purchases/{purchase_id}` (M14)
 
@@ -102,7 +103,10 @@ One `content_item` per thing a reader can find: a library item, a site page, a S
 | `inbound_events/{provider:event_id}` | M14 | One document per webhook event; created with "create if absent" so a repeat is detected and skipped |
 | `inbox/{event_id}` | shared | The same guard for events consumed from the bus |
 | `audit_log/{auto}` | shared | Who changed what, when, why. Append-only. Admin reads of a contact are logged here too |
-| `invite_waves/{wave_id}` | M2 | Name, target segment, code, counts |
+| `campaigns/{slug}` | M2 | An invitation: audience, window, wording, optional grant policy, counts. Replaces `invite_waves`. The slug is the id |
+| `promotions/{promotion_id}` | M14 | A time-boxed offer: channel, audience, window, display text, counts ([03 §5a](03-commerce-and-revenue.md)) |
+| `support_requests/{auto}` | M2 | A member's request for help, for example "paid but not recognised": `member_uid`, `kind`, `note`, `status`. The note never leaves Zone 1 |
+| `config/launch` | shared | The layer switches (join, library, promotions) and the required versions of the terms and privacy notice |
 | `questions/{auto}` | M2 | "Submit a question" entries: `member_uid`, `text`, `topic`, `status`, `created_at` |
 | `downloads/{auto}` | M12 | `member_uid`, `sku`, `version`, `at`. Used for "recently opened" and for abuse limits |
 | `sync_runs/{auto}` | M14, M15 | One per job run: counts, guard decisions, errors |
@@ -141,7 +145,11 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 | `membership.entitlement.granted` | M2 | M14 (reporting) | `entitlement_id`, `contact_id`, `grant`, `source`, `access_scope` |
 | `membership.entitlement.ended` | M2 | M14 | `entitlement_id`, `contact_id`, `status`, `reason` |
 | `membership.tier.changed` | M2 | notifications, M14 | `contact_id`, `from`, `to`, `reason` |
-| `membership.member.registered` | M2 | M14, M10 (later) | `member_uid`, `contact_id`, `invite_wave` |
+| `membership.member.registered` | M2 | M14, M10 (later) | `member_uid`, `contact_id`, `campaign` |
+| `membership.campaign.joined` | M2 | reporting | `member_uid`, `contact_id`, `campaign`, `recognition` |
+| `commerce.reconcile.completed` | M14 | alerting, reporting | `run_id`, `kind`, `dry_run`, `guard`, counts |
+| `commerce.promotion.upgrade_counted` | M14 | reporting | `promotion_id`, `contact_id`, `channel`, `source_ref` |
+| `content.item.downloaded` | M12 | reporting | `member_uid`, `sku`, `version` |
 | `substack.roster.synced` | M15 | M2 | `run_id`, counts, `guard` |
 | `substack.subscriber.changed` | M15 | M2 | `contact_id`, `type`, `plan_interval` |
 | `substack.contract.drifted` | M15 | M13 (later), alert | `endpoint`, `expected`, `observed` |
@@ -151,7 +159,7 @@ CloudEvents 1.0 in JSON on Pub/Sub. `type` is `org.audhdneurobiology.<area>.<thi
 
 ### Later events (names reserved)
 
-`response.recorded`, `test.scored`, `test.claimed`, `consent.changed` (Stage 3) · `substack.post.published`, `substack.note.published`, `substack.note.engaged`, `substack.comment.created`, `substack.stats.snapshotted`, `substack.restack.created`, `substack.mention.created`, `substack.message.received`, `substack.recommendation.changed`, `substack.credential.expired`, `community.signal.raised`, `social.post.published`, `revenue.insight.raised`, `promo.proposed`, `promo.approved` (Stage 2) · `ops.check.failed`, `ops.incident.opened` (Stage 4) · `pattern.detected`, `finding.candidate`, `gap.identified`, `survey.draft.proposed` (Stage 5).
+`response.recorded`, `test.scored`, `test.claimed`, `consent.changed`, `study.opened`, `study.amended`, `study.closed` (Stage 3) · `substack.post.published`, `substack.note.published`, `substack.note.engaged`, `substack.comment.created`, `substack.stats.snapshotted`, `substack.restack.created`, `substack.mention.created`, `substack.message.received`, `substack.recommendation.changed`, `substack.credential.expired`, `community.signal.raised`, `social.post.published`, `revenue.insight.raised`, `promo.proposed`, `promo.approved` (Stage 2) · `ops.check.failed`, `ops.incident.opened` (Stage 4) · `pattern.detected`, `finding.candidate`, `gap.identified`, `survey.draft.proposed` (Stage 5).
 
 ### Delivery rules
 

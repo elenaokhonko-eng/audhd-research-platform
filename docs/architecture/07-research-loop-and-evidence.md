@@ -1,6 +1,6 @@
 # 07 · Research loop and evidence (M3 to M8, M11)
 
-**Status:** Proposed for review · 2026-11-16 · Stages 3, 5, 6. Outline level: each part gets its own detailed design when its stage is next.
+**Status:** Proposed for review · 2026-11-16 · Stages 3, 5, 6. Outline level: each part gets its own detailed design when its stage is next. Study governance and survey templates are detailed in [11](11-study-governance-and-survey-templates.md) (2026-11-19).
 
 The research machine is unchanged in purpose from v3: collect answers with consent, find patterns, compare them with published evidence, write about what holds up, and design the next survey from what is missing. v4 changes four things: when it is built (after the member platform), what paid members may see (exploratory patterns, clearly labelled), how surveys are drafted (by reuse first), and how the loop itself is structured (borrowing AutoRA's design).
 
@@ -80,8 +80,8 @@ Decision: [ADR 0013](../adr/0013-observation-lifecycle-visible-to-paid-members.m
 
 Collection starts in Stage 3. The zones and keys are in [09](09-events-and-data-model.md). Three rules come first:
 
-1. **Every study declares its ethics route before it can open.** The study protocol file carries `ethics.route` (`independent_review`, `institutional_review`, `anonymous_collection`, `not_research`), a reference to the approval or the written reasoning, and the date. The survey engine refuses to field an instrument whose study has no route on file.
-2. **Two collection modes, chosen per study.** *Pseudonymous*: answers are keyed by `research_id`, can be linked across waves, withdrawn and recontacted. *Anonymous*: answers carry nothing that links to an account, payment or sign-in; no linkage across waves and no withdrawal after submission. This is harder than leaving out a key: an answer sent from a signed-in session, a logged network address, or a "completed" mark written in the same second all link it back. The Stage 3 design therefore has to include a one-time participation token issued by blind signature (the issuer cannot match token to member), a survey endpoint on its own origin with no cookies and no request logging, times stored to the day only, and responses released in batches. **Until that is built and independently checked, anonymous mode must not be what an ethics route rests on.** Which mode a study may use follows from its ethics route.
+1. **Every study declares its ethics route before it can open.** The study protocol file carries `ethics.route` (`independent_review`, `institutional_review`, `anonymous_collection`, `not_research`), a reference to the approval or the written reasoning, and the date. The survey engine refuses to field an instrument whose study has no route on file. The route is one field of the study's ethics policy: the whole policy, the templates it is built from and the rules the engine runs are in [11](11-study-governance-and-survey-templates.md).
+2. **Two collection modes, chosen per study.** *Pseudonymous*: answers are keyed by `research_id`, can be linked across waves, withdrawn and recontacted. *Anonymous*: answers carry nothing that links to an account, payment or sign-in; linking waves and withdrawing are possible only through a code the participant keeps ([11 §6](11-study-governance-and-survey-templates.md)). This is harder than leaving out a key: an answer sent from a signed-in session, a logged network address, or a "completed" mark written in the same second all link it back. The Stage 3 design therefore has to include a one-time participation token issued by blind signature (the issuer cannot match token to member), a survey endpoint on its own origin with no cookies and no request logging, times stored to the day only, and responses released in batches. **Until that is built and independently checked, anonymous mode must not be what an ethics route rests on.** Which mode a study may use follows from its ethics route.
 3. **Consent is data.** Each scope is a separate, versioned yes: taking part, linking to other surveys, recontact, reporting aggregates to members, future research use, sharing de-identified data, commercial licensing of de-identified data. A row is usable for a purpose only if the consent in force when it was collected covers that purpose.
 
 The background on ethics review, national law and journal policies is in the private project notes, not in this repository.
@@ -117,7 +117,7 @@ The reviewed list with licence terms is in the private project notes.
 
 ## 6. The survey template agent (M11)
 
-It turns a `gap.identified` or `finding.candidate` event into a draft survey, reusing as much as possible.
+It turns a `gap.identified` or `finding.candidate` event, or a study brief from the owner, into a draft survey, reusing as much as possible. It is the survey composer of the study-design team and fills a blueprint: an ordered set of slots for consent, eligibility, banded demographics, instruments, custom items, a wrapper for sensitive items and the debrief ([11 §3 and §7](11-study-governance-and-survey-templates.md)).
 
 ```mermaid
 flowchart TB

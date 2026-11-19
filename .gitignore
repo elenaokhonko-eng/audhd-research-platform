@@ -152,3 +152,8 @@ terraform.tfvars
 *.pptd
 *.zip
 *.bundle
+
+# Agent build workspaces: lane ledgers, worktrees, local settings
+.superpowers/
+.claude/worktrees/
+.claude/settings.local.json

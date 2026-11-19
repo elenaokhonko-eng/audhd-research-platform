@@ -1,6 +1,6 @@
 # Stage 1 plan: members and commerce
 
-**Status:** Proposed for review · 2026-11-16
+**Status:** Proposed for review · 2026-11-16 · launch track added 2026-11-19
 **Design:** [01 overview](../architecture/01-system-overview.md) · [02 membership](../architecture/02-membership-and-entitlements.md) · [03 commerce](../architecture/03-commerce-and-revenue.md) · [04 library and search](../architecture/04-content-library-and-search.md) · [05 Substack Desk](../architecture/05-substack-desk.md) · [08 security](../architecture/08-security-identities-and-org.md) · [09 data and events](../architecture/09-events-and-data-model.md)
 
 ## Goal
@@ -10,6 +10,18 @@ A Substack reader signs in with the email they already use and finds the workspa
 ## Out of scope for Stage 1
 
 Agent teams and the model gateway; Ask AuDHD Research answers (the section is gated but shows "coming"); Substack publishing, notes, comments and any use of Substack's private endpoints; the Stripe-native store; surveys; Practice Exchange; research data of any kind.
+
+## Launch track (added 2026-11-19)
+
+The owner wants readers on the platform before a seasonal promotion. So Stage 1 is cut a second way: the **launch track** takes the parts of S1.0 to S1.5, S1.8 and S1.9 that a first opening needs and builds them first; the remainder of each slice follows. The design, with the table of what is in and what is deferred, is the [launch design](../superpowers/specs/2026-11-19-launch-invites-grants-promotions-design.md) (§6). Its interfaces are the [contracts](../contracts/stage-1-launch.md).
+
+| Layer | Opens | Depends on the next layer? |
+| --- | --- | --- |
+| A | The promotion, as a special offer on Substack | No: nothing is built |
+| B1 | Join link, sign-in, recognition of paid readers, launch grant, upgrade page | No |
+| B2 | A first library with gated downloads | – |
+
+The slices below stay the unit of design and keep their exit tests. The work itself is organised in lanes that run in parallel: see the [swarm build plan](stage-1-swarm-build-plan.md).
 
 ## Slices
 
@@ -99,7 +111,7 @@ flowchart LR
 
 | | |
 | --- | --- |
-| Builds | Stripe product and Checkout for platform-only membership, tagged as the platform's own sale, with the hosted customer portal; upgrade page with both routes; launch grant migration; invite waves with codes; welcome and purchase emails; Submit a question; cockpit v0 (segments, sign-up funnel, sync health, dead letters); nightly `revenue-export` and the revenue-by-channel view |
+| Builds | Stripe product and Checkout for platform-only membership, tagged as the platform's own sale, with the hosted customer portal and the `platform_checkout` promotion channel; upgrade page with both routes; (campaigns, grant policies and the Substack promotion channel move to the launch track); welcome and purchase emails; Submit a question; cockpit v0 (segments, sign-up funnel, sync health, dead letters); nightly `revenue-export` and the revenue-by-channel view |
 | Exit test | A platform-only test subscription upgrades and, cancelled, downgrades; the revenue view matches Stripe for the last full month, with the processor's daily fee totals shown as their own lines |
 | Owner actions | Set the platform-only prices; publish nothing yet |
 
@@ -135,4 +147,4 @@ In order of what to drop first without losing a stated requirement: vector ranki
 
 ## Sequence and effort
 
-Rough effort, assuming the owner reviews between slices and a coding agent implements: S1.0 three sessions; S1.1 three; S1.2 five; S1.3 four; S1.4 two; S1.5 four; S1.6 three; S1.7 three; S1.8 four; S1.9 three. S1.3, S1.4 and S1.5 can run in parallel after S1.2. These are estimates to plan around, not commitments.
+How the work is split across parallel sessions is in the [swarm build plan](stage-1-swarm-build-plan.md). Rough effort if one coding agent implemented the slices in order, with the owner reviewing between them: S1.0 three sessions; S1.1 three; S1.2 five; S1.3 four; S1.4 two; S1.5 four; S1.6 three; S1.7 three; S1.8 four; S1.9 three. S1.3, S1.4 and S1.5 can run in parallel after S1.2. These are estimates to plan around, not commitments.
