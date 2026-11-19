@@ -24,6 +24,11 @@ describe("welcomeView", () => {
     expect(welcomeView(await meOf("fay"), null)).toMatchObject({ kind: "paid", includedWhilePaying: false }));
   it("shows hal as paid with no guarantee date", async () =>
     expect(welcomeView(await meOf("hal"), null)).toEqual({ kind: "paid", grantUntil: null, includedWhilePaying: true }));
+  it("ignores a launch grant whose end date does not parse", async () => {
+    const me = await meOf("ana");
+    me.access.reasons = me.access.reasons.map((r) => (r.label === "launch_grant" ? { ...r, valid_until: "not-a-date" } : r));
+    expect(welcomeView(me, null)).toMatchObject({ kind: "paid", grantUntil: null });
+  });
   it("shows bo as free, checking only when a check was started", async () => {
     expect(welcomeView(await meOf("bo"), null)).toEqual({ kind: "free", checking: false });
     expect(welcomeView(await meOf("bo"), "started")).toEqual({ kind: "free", checking: true });
@@ -83,6 +88,20 @@ describe("NotRecognised", () => {
     render(<NotRecognised send={vi.fn().mockRejectedValue(new Error("x"))} />);
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
+  });
+  it("does not allow a second send after success", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    render(<NotRecognised send={send} />);
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Thank you. We will look at it.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).not.toBeInTheDocument();
+    expect(send).toHaveBeenCalledOnce();
+  });
+  it("does not mark the note invalid when the server fails", async () => {
+    render(<NotRecognised send={vi.fn().mockRejectedValue(new Error("x"))} />);
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+    await screen.findByText("Something went wrong. Try again.");
+    expect(screen.getByLabelText("Tell us what happened")).not.toHaveAttribute("aria-invalid");
   });
   it("limits the note to 500 characters", () => {
     render(<NotRecognised send={vi.fn()} />);

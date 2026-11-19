@@ -33,7 +33,7 @@ export function NotRecognised({
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [failed, setFailed] = useState(false);
+  const [done, setDone] = useState(false);
 
   const another = async () => {
     try {
@@ -49,12 +49,11 @@ export function NotRecognised({
     if (busy) return;
     setBusy(true);
     setMessage("");
-    setFailed(false);
     try {
       await send(note);
+      setDone(true);
       setMessage("Thank you. We will look at it.");
     } catch (error) {
-      setFailed(true);
       setMessage(
         (error as { status?: number }).status === 409 ? "Accept the terms first." : "Something went wrong. Try again.",
       );
@@ -71,11 +70,11 @@ export function NotRecognised({
           Sign in with another email
         </button>
       </div>
+      {done ? null : (
       <form onSubmit={submit}>
         <label htmlFor="support-note">Tell us what happened</label>
         <textarea
           aria-describedby="support-status"
-          aria-invalid={failed ? "true" : undefined}
           id="support-note"
           maxLength={500}
           name="note"
@@ -89,6 +88,7 @@ export function NotRecognised({
           </button>
         </div>
       </form>
+      )}
       <div aria-live="polite" id="support-status" role="status">
         {message ? <p>{message}</p> : null}
       </div>

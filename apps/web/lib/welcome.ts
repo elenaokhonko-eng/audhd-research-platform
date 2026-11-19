@@ -10,7 +10,7 @@ export function welcomeView(me: { member: Member; access: Access }, check: strin
   if (me.access.tier === "paid") {
     const reasons = me.access.reasons;
     const dates = reasons
-      .filter((r) => r.label === "launch_grant" && r.status === "active" && r.valid_until)
+      .filter((r) => r.label === "launch_grant" && r.status === "active" && r.valid_until && !Number.isNaN(Date.parse(r.valid_until)))
       .map((r) => r.valid_until as string)
       .sort((a, b) => Date.parse(a) - Date.parse(b));
     return {
