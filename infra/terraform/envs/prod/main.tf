@@ -69,6 +69,7 @@ module "web_prod" {
     IDENTITY_AUTH_DOMAIN = module.identity.auth_domain
     PLATFORM_API_URL     = module.platform_api.uri
     SITE_ORIGIN          = "https://${var.domain}"
+    SIGNIN_SENDER_HINT   = var.signin_sender_hint
   }
   depends_on = [google_project_service.enabled]
 }

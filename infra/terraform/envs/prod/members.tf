@@ -45,3 +45,20 @@ module "roster_inbox" {
   force_destroy     = false
   depends_on        = [google_project_service.enabled]
 }
+
+# The sign-in email's own domain: SPF, DKIM and DMARC records in Cloudflare.
+# Prod sends from the apex. It may already carry a v=spf1 record: fold its includes into auth_email_spf_includes.
+locals {
+  auth_email_domain = var.domain
+}
+
+module "sending_domain" {
+  source       = "../../modules/sending_domain"
+  enabled      = var.manage_cloudflare_dns
+  zone_id      = var.cloudflare_zone_id
+  zone_name    = var.domain
+  domain       = local.auth_email_domain
+  project_id   = var.project_id
+  spf_includes = var.auth_email_spf_includes
+  dkim_targets = var.auth_email_dkim_targets
+}

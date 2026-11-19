@@ -45,3 +45,20 @@ module "roster_inbox" {
   force_destroy     = true
   depends_on        = [google_project_service.enabled]
 }
+
+# The sign-in email's own domain: SPF, DKIM and DMARC records in Cloudflare.
+# Dev sends from auth.dev.<domain>: dev.<domain> is a CNAME (Cloud Run mapping) and DNS forbids TXT beside a CNAME.
+locals {
+  auth_email_domain = "auth.dev.${var.domain}"
+}
+
+module "sending_domain" {
+  source       = "../../modules/sending_domain"
+  enabled      = var.manage_cloudflare_dns
+  zone_id      = var.cloudflare_zone_id
+  zone_name    = var.domain
+  domain       = local.auth_email_domain
+  project_id   = var.project_id
+  spf_includes = var.auth_email_spf_includes
+  dkim_targets = var.auth_email_dkim_targets
+}

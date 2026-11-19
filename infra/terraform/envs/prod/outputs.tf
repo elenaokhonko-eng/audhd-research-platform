@@ -66,3 +66,8 @@ output "library_staging_bucket" {
 output "roster_inbox_bucket" {
   value = module.roster_inbox.name
 }
+
+output "auth_email_domain" {
+  description = "The domain the sign-in email is sent from"
+  value       = module.sending_domain.domain
+}
