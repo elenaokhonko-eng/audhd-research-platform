@@ -86,8 +86,8 @@ There is no command for this part; use the console. APIs & Services, Credentials
   ```bash
   terraform -chdir=infra/terraform/envs/dev output -raw identity_auth_domain
   ```
-  For prod: `terraform -chdir=infra/terraform/envs/prod output -raw identity_auth_domain`, with the site's origin `https://audhdneurobiology.org`.
-- **Authorised JavaScript origins:** the origin of the site, for example `https://dev.audhdneurobiology.org` for dev.
+  For prod: `terraform -chdir=infra/terraform/envs/prod output -raw identity_auth_domain`.
+- **Authorised JavaScript origins:** dev: `https://dev.audhdneurobiology.org`; prod: `https://audhdneurobiology.org` and `https://www.audhdneurobiology.org`.
 
 Then store the client:
 
