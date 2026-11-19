@@ -139,7 +139,7 @@ campaigns:
 
 - **Created when** a registered member holds a live entitlement from one of `requires_live_source`, the campaign is open, and `paid_since_before` (if set) is later than that entitlement's `valid_from`. Evaluated at every sign-in, and after any reconcile or roster run that writes a tier entitlement for a contact who is already a member.
 - **A reader who cancelled and subscribed again after the cut-off** does not qualify automatically; the owner can grant by hand.
-- **Identity:** `entitlement_id = sha256("grant:campaign:<campaign_id>:<contact_id>:tier:paid")[:32]`. Evaluating twice changes nothing. One grant per contact per campaign.
+- **Identity:** `entitlement_id = sha256("grant:campaign:<slug>:<contact_id>:tier:paid")[:32]`. Evaluating twice changes nothing. One grant per contact per campaign.
 - **It is a verified grant.** The evidence (the entitlement that satisfied the policy) is written to the audit log. A campaign slug, by itself, never satisfies a policy.
 - **It ends on its date** like every `grant` (Rule 1), and `access_for` treats it as ended from that moment even before the daily sweep runs.
 - **Abuse to design against:** subscribe for one month, collect the grant, cancel. `paid_since_before`, set to a moment before the invitation is announced, limits the launch grant to readers who were already paying.
