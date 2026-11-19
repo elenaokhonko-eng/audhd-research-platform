@@ -1,6 +1,6 @@
 # ADR-0021: One join link per audience; recognition by verified email, never by the link
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19, by merge of pull request #5)
 **Date:** 2026-11-19
 **Deciders:** Owner (Elena Okhonko)
 

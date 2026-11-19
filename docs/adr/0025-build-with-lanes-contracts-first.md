@@ -1,6 +1,6 @@
 # ADR-0025: Build Stage 1 with parallel lanes of Claude agents: contracts first, one session per lane, subagent-driven development inside each, the owner at fixed gates
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19, by merge of pull request #5)
 **Date:** 2026-11-19
 **Deciders:** Owner (Elena Okhonko)
 

@@ -1,6 +1,6 @@
 # ADR-0024: Anonymous collection: participant-held code for linkage and withdrawal, self-generated code as recovery, blind participation token for one response per member
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-19, by merge of pull request #5)
 **Date:** 2026-11-19
 **Deciders:** Owner (Elena Okhonko)
 

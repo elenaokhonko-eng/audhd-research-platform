@@ -1,6 +1,6 @@
 # Contracts for the Stage 1 launch track
 
-**Status:** Proposed · 2026-11-19 · version 0.2 (after an independent builder's read of version 0.1)
+**Status:** In force · version 0.3 · 2026-11-20 (0.2 was approved by merge on 2026-11-19; 0.3 records the owner's decisions: grant policies by plan interval, Substack plans recorded per interval, sign-in email from the platform's own domain)
 **Design:** [launch track](../superpowers/specs/2026-11-19-launch-invites-grants-promotions-design.md) · [02](../architecture/02-membership-and-entitlements.md) · [09](../architecture/09-events-and-data-model.md)
 
 A **contract** here is a name and a shape that two lanes of the build both rely on: an HTTP route, a Python function in a module's `public.py`, a Firestore document, an event, a setting. Lanes build against this page in parallel. **Changing anything on it is a pull request of its own, owned by the integrator, merged before the code that needs it.** Once the code exists, the Pydantic models are the source of truth and this page is regenerated from them.
@@ -18,7 +18,7 @@ A **contract** here is a name and a shape that two lanes of the build both rely 
 | 401 | `unauthenticated` | No valid member session |
 | 403 | `forbidden` | Signed in, not allowed. `reason` is added for downloads: `paid_required`, `purchase_required` |
 | 404 | `not_found` | Unknown id, or a route not served in this mode |
-| 409 | `terms_required` | The member must accept the current terms first |
+| 409 | `terms_required` | The member must accept the current terms first. Returned by every member route except `GET /v1/me`, `POST /v1/me/terms-acceptance`, `POST /v1/session/revoke` and `POST /v1/me/deletion-request` |
 | 422 | `validation_failed` | Body did not match the shape |
 | 429 | `rate_limited` | `retry_after` says when |
 | 503 | `unavailable` | A source could not be reached; nothing was changed |
@@ -27,7 +27,7 @@ A **contract** here is a name and a shape that two lanes of the build both rely 
 
 | Route | Request | Response (200) |
 | --- | --- | --- |
-| `GET /v1/public/campaigns/{slug}` | – | `{slug, audience, state: "scheduled" \| "open" \| "closed", copy: {headline, body, cta}}`. Unknown slug: the default campaign with `slug: null` |
+| `GET /v1/public/campaigns/{slug}` | – | `{slug, audience, state: "scheduled" \| "open" \| "closed", copy: {headline, body, cta}}`. Unknown slug: the default campaign with `slug: null`. The slug `default` is reserved and always returns the default campaign. While the `join_open` switch is off, every campaign's `state` is `closed` |
 | `GET /v1/public/promotions/active` | – | `{promotions: [Promotion]}` for the `guests` audience. Cacheable for 60 seconds |
 | `POST /v1/session/resolve` | `{id_token, campaign: <slug or null>}` | `{session: {cookie, expires_at}, member: Member, access: Access, join: Join}` |
 | `POST /v1/session/revoke` | – | `{}` |
@@ -41,7 +41,7 @@ A **contract** here is a name and a shape that two lanes of the build both rely 
 | `GET /v1/library/items` | – | `{items: [ItemCard]}` |
 | `GET /v1/library/items/{sku}` | – | `{item: ItemCard, description, citation}` |
 | `POST /v1/library/items/{sku}/download` | – | `{url, expires_at}`; 403 with `reason` when not entitled |
-| `GET /health` | – | `{status: "ok", mode, version}` |
+| `GET /health` | – | `{status: "ok", service, mode, env}`, as in the S1.0 plan |
 
 Admin routes (called by `platform-cli`):
 
@@ -68,7 +68,7 @@ Admin routes (called by `platform-cli`):
 
 // Reason: why the member holds something, in terms a person can read
 {"grant": "tier:paid", "source": "substack_stripe" /* substack_roster | platform_stripe | payhip | grant */,
- "label": "substack_subscription" /* launch_grant | owner_grant | purchase | platform_subscription */,
+ "label": "substack_subscription" /* substack_status | launch_grant | owner_grant | purchase | platform_subscription */,
  "access_scope": "substack+platform", "status": "active", "valid_until": "…", "campaign": null}
 
 // Join: what happened at this sign-in
@@ -103,7 +103,7 @@ Other modules and the HTTP layer use only these. Types are Pydantic models in th
 | | `access_for(uid: str, now: datetime) -> Access` · `can_open(uid: str, sku: str, now: datetime) -> Decision` | **Pure** over loaded entitlements; a `grant` past `valid_until` is not live |
 | | `grant(contact_id, grant, valid_until, reason, actor) -> str` · `revoke(entitlement_id, reason, actor) -> None` | Audited |
 | | `campaign_by_slug(slug: str \| None, now) -> Campaign` | Falls back to the default campaign |
-| | `grants_due(entitlements: list[Entitlement], campaigns: list[Campaign], now) -> list[GrantSpec]` | **Pure.** The grant policy of the design, §5.4, over every open campaign that has one. Uses each entitlement's `valid_from` for `paid_since_before` |
+| | `grants_due(entitlements: list[Entitlement], campaigns: list[Campaign], now) -> list[GrantSpec]` | **Pure.** The grant policy of the design, §5.4, over every open campaign that has one. Uses each entitlement's `valid_from` for `paid_since_before` and its `plan_interval` for `plan_intervals`; an entitlement without a plan interval never satisfies a policy that sets `plan_intervals` |
 | | `apply_grant_policies(contact_id: str, now) -> list[str]` | Creates the grants that are due for a contact that has a member. Called at sign-in and from `apply_plan`. Idempotent |
 | | `record_arrival(uid: str, campaign: Campaign, recognition: str) -> None` | Sets `joined_via` on first sign-in only; increments the campaign's counts |
 | `commerce` | `stripe_reconcile(dry_run: bool) -> SyncRun` | Lists subscriptions, maps each to a `SourceState`, calls `plan_reconcile` and `apply_plan` |
@@ -118,7 +118,7 @@ class SourceState(BaseModel):        # what a source says now about one grant fo
     source: Literal["substack_stripe", "substack_roster", "platform_stripe"]
     source_ref: str                  # Stripe subscription id, or "roster"
     email: str                       # used only to compute contact_id; never stored on the entitlement
-    grant: str                       # "tier:paid", or "status:substack_paid" when a Substack subscription does not include the platform
+    grant: str                       # "tier:paid" or "status:substack_paid", chosen per plan interval by settings
     status: Literal["active", "grace", "expired"]
     started_at: datetime | None      # when the source says the paid period began; becomes valid_from. Never "first seen"
     valid_until: datetime | None
@@ -154,13 +154,13 @@ class FileDirectory:                 # reads Substack's export file
 
 | Collection | Fields |
 | --- | --- |
-| `campaigns/{slug}` (replaces `invite_waves`; the slug is the id and never changes) | `audience`, `opens_at`, `closes_at`, `is_default`, `grant` (`grant`, `months`, `starts`, `fixed_until`, `requires_live_source[]`, `paid_since_before`) or null, `copy` (`headline`, `body`, `cta`), `counts` (`arrivals`, `recognised_paid`, `grants_created`), `updated_at`, `updated_by` |
+| `campaigns/{slug}` (replaces `invite_waves`; the slug is the id and never changes) | `audience`, `opens_at`, `closes_at`, `is_default`, `grant` (`grant`, `months`, `starts`, `fixed_until`, `requires_live_source[]`, `paid_since_before`, `plan_intervals[]` or null) or null, `copy` (`headline`, `body`, `cta`), `counts` (`arrivals`, `recognised_paid`, `grants_created`), `updated_at`, `updated_by` |
 | `promotions/{promotion_id}` | `channel`, `audience[]`, `plan_interval`, `starts_at`, `ends_at`, `substack_offer_url`, `stripe_coupon_id` (later), `display`, `counts` (`upgrades_in_window`), `updated_at`, `updated_by` |
 | `support_requests/{auto}` | `member_uid`, `kind`, `note`, `status` (`open`, `done`), `created_at`. Zone 1; the note is never copied into an event or a log |
 | `config/launch` | `join_open`, `library_open`, `promotions_open` (booleans), `reconcile_max_age_seconds`, `required_terms_version`, `required_privacy_version` |
 | `members/{uid}` gains | `joined_via` (campaign slug), `terms_accepted.privacy_version` |
 | `contacts/{contact_id}` changes | `invite` becomes `{campaign, state}`; `channels.substack.last_seen_in_roster` is written by every roster import |
-| `entitlements/{entitlement_id}` clarifies | `valid_from` is the source's `started_at`. For an owner grant or a launch grant it is the moment of the grant |
+| `entitlements/{entitlement_id}` clarifies | `valid_from` is the source's `started_at`. For an owner grant or a launch grant it is the moment of the grant. `plan_interval` (`month`, `year` or null) is stored from the source state. A grant whose name starts with `status:` unlocks no section and no item; it is listed in `reasons` so the Account page can explain it |
 | `sync_runs/{auto}` gains | `kind` (`stripe_reconcile`, `roster_import`), `dry_run`, `state` (`running`, `completed`, `failed`), `guard` (`passed`, `blocked`), `unseen`, counts by action, `requested_by` (`schedule`, `member`, `owner`) |
 
 ## 5. Events (additions to [09 §4](../architecture/09-events-and-data-model.md))
@@ -181,23 +181,34 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 
 | Setting | Meaning |
 | --- | --- |
-| `PLATFORM_ENV`, `PLATFORM_MODE`, `PLATFORM_GCP_PROJECT` | As in S1.0 |
-| `PLATFORM_CONTACT_KEY` | Resource name of the Cloud KMS MAC key for `contact_id` |
+| `PLATFORM_ENV`, `PLATFORM_APP_MODE`, `PLATFORM_GCP_PROJECT` and the other fields of `Settings` | As in the S1.0 plan, Task 1 |
+| `PLATFORM_CONTACT_KEY` | Resource name of the key **version** of the Cloud KMS MAC key for `contact_id` (Terraform output `contact_key_name`) |
 | `PLATFORM_STRIPE_KEY_SECRET` | Secret Manager name of the restricted, read-only Stripe key. Set only on the `stripe-reconcile` job |
 | `PLATFORM_RECONCILE_JOB` | Resource name of the `stripe-reconcile` job, which `platform-api` may start |
 | `PLATFORM_OWNER_ACCOUNTS` | Account ids allowed to call `/v1/admin/` |
 | `PLATFORM_ROSTER_INBOX_BUCKET` | Restricted bucket where the owner places the export file; objects are deleted after seven days |
 | `PLATFORM_STRIPE_SUBSTACK_APPLICATION` | The application id that marks a subscription as created by Substack |
 | `PLATFORM_STRIPE_TEST_CHANNEL_METADATA` | Dev only. When true, a sandbox subscription with metadata `test_channel=substack` is classified as created by Substack, because a sandbox cannot reproduce another platform's application id. `Settings` refuses to start with this set when `PLATFORM_ENV` is `prod` |
-| `PLATFORM_SUBSTACK_PAID_GRANT` | What a paying Substack reader is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). The owner's commercial decision |
+| `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR` | What a paying Substack reader on a monthly, respectively annual, plan is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). The owner's commercial decision; set on the reconcile and roster jobs from Terraform variables |
 | `PLATFORM_LIBRARY_BUCKET` | Private bucket for library files |
 | `PLATFORM_SESSION_TTL_DAYS` | Session cookie lifetime |
+
+Settings of `web` (read on the server at request time; none is prefixed `NEXT_PUBLIC_`, because one image serves dev and prod):
+
+| Setting | Meaning |
+| --- | --- |
+| `SITE_ENV` | `local`, `dev` or `prod` |
+| `SITE_ORIGIN` | The site's own origin, used for the same-origin check and for the sign-in link's return address |
+| `PLATFORM_API_URL` | Where `platform-api` is; also the audience of the identity token `web` sends |
+| `PLATFORM_API_FAKE` | `1` replaces `platform-api` and sign-in with fakes built on the shared test people. Refused when `SITE_ENV` is `prod` |
+| `IDENTITY_API_KEY`, `IDENTITY_AUTH_DOMAIN` | Identity Platform's public client values, from Terraform outputs `identity_api_key` and `identity_auth_domain` |
+| `SIGNIN_SENDER_HINT` | Optional. The address sign-in emails come from, shown to the reader |
 
 | Job (`platform-cli job <name>`) | Runs | Schedule |
 | --- | --- | --- |
 | `stripe-reconcile` | `commerce.stripe_reconcile(dry_run=False)` | Cloud Scheduler; the period is a Terraform variable, shortened while a campaign is open. Also started by `platform-api` on request |
 | `roster-import` | Reads the newest object in the roster inbox, builds states for paid rows that have no live `substack_stripe` entitlement, plans and applies. Refuses to write unless the latest `stripe_reconcile` run completed and passed its guard in the last 24 hours | Started by the owner |
-| `self-check` | As in S1.0 | On deploy |
+| `selfcheck` | As in S1.0 | On deploy |
 
 | Owner command | Does |
 | --- | --- |
@@ -212,7 +223,7 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 
 ## 7. Infrastructure names (Terraform outputs the other lanes read)
 
-`platform_api_url`, `platform_hooks_url`, `web_url`, `library_bucket`, `library_staging_bucket`, `roster_inbox_bucket`, `contact_key_name`, `stripe_key_secret_name`, `reconcile_job_name`, `roster_import_job_name`, `identity_platform_api_key_secret_name`. Service accounts follow [08 §3](../architecture/08-security-identities-and-org.md). The reconcile job runs as its own service account, which alone may read the Stripe key. `platform-api`'s account may start that job and may not read the key. The owner's account may call `platform-api`, write to the roster inbox and the library staging bucket, and start the two jobs; it has no role on Firestore or on the contact key.
+`platform_api_url`, `platform_hooks_url`, `web_url`, `library_bucket`, `library_staging_bucket`, `roster_inbox_bucket`, `contact_key_name`, `stripe_key_secret_name`, `reconcile_job_name`, `roster_import_job_name`, `identity_api_key`, `identity_auth_domain`, `auth_email_domain`. Sign-in emails are sent by Identity Platform from `auth_email_domain`, a domain of the platform with SPF, DKIM and DMARC records; neither `web` nor `platform-api` sends email in the launch track. Service accounts follow [08 §3](../architecture/08-security-identities-and-org.md). The reconcile job runs as its own service account, which alone may read the Stripe key. `platform-api`'s account may start that job and may not read the key. The owner's account may call `platform-api`, write to the roster inbox and the library staging bucket, and start the two jobs; it has no role on Firestore or on the contact key.
 
 ## 8. Fixtures every lane uses
 
@@ -227,5 +238,6 @@ Invented people at `example.org`, in `services/platform-api/tests/fixtures/peopl
 | `ed` | Pays with one address, signs in with another | The not-recognised route |
 | `fay` | Was paid, cancelled; holds a launch grant | Grant keeps access; ends on its date; `membership.tier.changed` when it does |
 | `gus` | Paid by card and also listed as paid in the roster file | The roster import creates nothing for him |
+| `hal` | Paid by card, monthly, `started_at` before the cut-off | No launch grant when the policy sets `plan_intervals` to annual only; paid or free workspace according to `PLATFORM_SUBSTACK_GRANT_MONTH` |
 
 A recorded Stripe subscription list (sandbox data, ids replaced) lives in `services/platform-api/tests/recorded/stripe/`. Tests never call Stripe or Substack.

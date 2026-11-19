@@ -1,6 +1,6 @@
 # Swarm operating manual
 
-**Status:** Proposed · 2026-11-19 · **Plan:** [Stage 1 swarm build plan](../plans/stage-1-swarm-build-plan.md) · **Decision:** [ADR 0025](../adr/0025-build-with-lanes-contracts-first.md)
+**Status:** In force · approved by merge on 2026-11-19 · settings chosen by the owner on 2026-11-20 · **Plan:** [Stage 1 swarm build plan](../plans/stage-1-swarm-build-plan.md) · **Decision:** [ADR 0025](../adr/0025-build-with-lanes-contracts-first.md)
 
 How the lanes of the Stage 1 build work day to day. `CLAUDE.md` at the repository root always wins over this page.
 
@@ -8,7 +8,7 @@ How the lanes of the Stage 1 build work day to day. `CLAUDE.md` at the repositor
 
 | Setting | Value | Meaning |
 | --- | --- | --- |
-| `merge_mode` | `owner` | `owner`: the owner merges every pull request. `integration-branch`: lanes target `integration/stage-1`, the integrator may merge reviewed pull requests of other lanes into it, and the owner promotes it to `main`. Change this line to switch. |
+| `merge_mode` | `integration-branch` | `owner`: the owner merges every pull request. `integration-branch`: lanes target `integration/stage-1`; a pull request into it is merged by an agent that did not write it (the integrator merges the lanes' pull requests, the quality lane merges the integrator's) after CI and its reviews pass; the owner promotes the branch to `main` once a day from one digest. Change this line to switch. |
 | `max_parallel_lanes` | `3` | How many lanes run at once |
 | `lane_plan_approval` | `integrator` | `integrator`: step-by-step lane plans are reviewed by an independent plan reviewer and the integrator; the owner can read them and is not waited for. `owner`: each lane plan waits for her |
 
@@ -16,7 +16,7 @@ How the lanes of the Stage 1 build work day to day. `CLAUDE.md` at the repositor
 
 1. Read `CLAUDE.md`, this page, [roles.md](roles.md), the [contracts](../contracts/stage-1-launch.md) and its own lane plan in `docs/superpowers/plans/`.
 2. Confirm which paths it owns ([plan §2](../plans/stage-1-swarm-build-plan.md)). If the first task needs a path it does not own, stop and say so.
-3. Create its branch from the current target (`main`, or `integration/stage-1` in that mode) as `<prefix>/<short-task-name>`.
+3. Create its branch from the current target (`integration/stage-1` while `merge_mode` is `integration-branch`, otherwise `main`) as `<prefix>/<short-task-name>`, and open its pull requests against that target.
 4. Run its plan with the `superpowers:subagent-driven-development` skill. If that skill is not available in the session, follow [roles.md](roles.md), which states the same loop in plain words.
 
 ## The loop for one task

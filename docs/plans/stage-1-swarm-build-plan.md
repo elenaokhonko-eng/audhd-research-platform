@@ -1,10 +1,10 @@
 # Stage 1 build plan for a swarm of Claude agents
 
-**Status:** Proposed for the owner's review · 2026-11-19
+**Status:** Approved by merge of pull request #5 on 2026-11-19 · settings chosen by the owner on 2026-11-20: one cloud session per lane, three lanes at a time, the integration branch, lane plans approved by the integrator after an independent review
 **Decision:** [ADR 0025](../adr/0025-build-with-lanes-contracts-first.md) · **Operating manual:** [docs/swarm](../swarm/README.md) · **Interfaces:** [contracts](../contracts/stage-1-launch.md)
 **Builds:** the [launch track](../superpowers/specs/2026-11-19-launch-invites-grants-promotions-design.md) first, then the rest of [Stage 1](stage-1-members-and-commerce.md)
 
-Nothing in this plan starts until the owner has approved the launch design, the contracts and this plan.
+Gate 0 passed on 2026-11-19. Wave 0 produced the lane plans listed in §5a.
 
 ## 1. The idea in five lines
 
@@ -23,7 +23,7 @@ A term used below: a **subagent** is a helper that a session starts for one job,
 | **L0 Integrator** | `int/` | `docs/contracts/`, `docs/swarm/`, `docs/plans/`, `docs/superpowers/plans/`, `docs/adr/`, `CLAUDE.md`, `.claude/`, `packages/events/`, `THIRD_PARTY.md` | Contracts, lane plans, sequencing, the whole-stage review, release notes for each gate |
 | **L1 Core** | `core/` | `services/platform-api/` except the three folders below; this includes `pyproject.toml`, `app.py`, `settings.py`, `cli.py`, `shared/`, `identity/`, `entitlements/`, `admin/` | Skeleton, sign-in backend, entitlement engine, campaigns and grants, admin routes, `platform-cli` |
 | **L2 Web** | `web/` | `apps/web/` | Sign-in screens, join and welcome pages, workspace shell, upgrade page, library pages, terms and privacy pages |
-| **L3 Infra** | `infra/` | `infra/terraform/`, `.github/workflows/`, `ops/scripts/`, `docs/runbooks/`, `services/platform-api/Dockerfile` | Dev and prod roots, identities, keys, buckets, jobs, schedules, alerts, deploy pipelines, the owner's scripts and runbooks |
+| **L3 Infra** | `infra/` | `infra/terraform/`, `.github/workflows/`, `ops/scripts/`, `docs/runbooks/`, `services/platform-api/Dockerfile` and `.dockerignore` | Dev and prod roots, identities, keys, buckets, jobs, schedules, alerts, deploy pipelines, the owner's scripts and runbooks |
 | **L4 Commerce** | `commerce/` | `services/platform-api/src/platform_api/commerce/` and its tests, `services/platform-api/tests/recorded/stripe/` | Stripe client, reconcile job, refresh on request, promotions, roster import job; later webhooks, Payhip, revenue export |
 | **L5 Library** | `library/` | `services/platform-api/src/platform_api/library/` and `content/` and their tests | Manifest, publish, catalogue, signed downloads; later search |
 | **L6 Desk** | `desk/` | `packages/substack-desk/` | Package skeleton, `SubscriberDirectory`, the file adapter; later the Publisher API adapter |
@@ -69,7 +69,7 @@ flowchart LR
 | Gate | Only the owner can | How |
 | --- | --- | --- |
 | 0 | Approve the design and answer the decisions in the launch design, §9 | Merge the documentation pull request |
-| 1 | Create the dev project and folder; apply Terraform to dev; protect `main` and the `production` environment | `ops/scripts/20-stage1-foundations.sh` in Cloud Shell; commands in the runbook |
+| 1 | Create the dev project and folder; apply Terraform to dev; protect `main` and the `production` environment; start the verification of the sign-in email's sending domain; set the variable `DEPLOY_DEV_ENABLED` to `true` on the GitHub environment `dev` (until then no merge deploys anything) | `ops/scripts/20-stage1-foundations.sh` and `ops/scripts/30-auth-email-domain.sh` in Cloud Shell; commands in the runbooks |
 | 2 | Create the restricted Stripe key and store it; approve the privacy notice and terms; give the header line of Substack's export (column names only) | A script that reads the key from the terminal into Secret Manager; a review of two pages |
 | 3 | Apply Terraform to prod; approve the production deploy; run the dry run and compare its paid count with Substack's dashboard; run the real reconcile and the roster import; apply campaigns and promotions; pass wave 0; open the join layer | `docs/runbooks/launch.md`, every step a command |
 
@@ -82,7 +82,7 @@ A task card names a deliverable, the contract it must meet and the tests that mu
 | # | Deliverable | Must be pinned by tests | Needs |
 | --- | --- | --- | --- |
 | C1 | S1.0 tasks 1 to 5 as planned, plus the `http.py` and `jobs.py` convention and the dependency list | As in the S1.0 plan | – |
-| C2 | `identity`: `resolve_session`, `member_from_session`, session cookie, terms acceptance | A tampered or revoked cookie is refused; a member who has not accepted the current terms gets `terms_required` on every member route except acceptance and sign-out | C1 |
+| C2 | `identity`: `resolve_session`, `member_from_session`, session cookie, terms acceptance | A tampered or revoked cookie is refused; a member who has not accepted the current terms gets `terms_required` on every member route except `GET /v1/me`, acceptance, sign-out and the deletion request | C1 |
 | C3 | `entitlements` core: models, `contact_id_for` behind a key port, `access_for`, `can_open`, `claim_for_member`, `grant`, `revoke`, audit | Each of the six rules; a `grant` past its date is not live; the same email in different letter case gives the same contact; a claim sticks when the contact's email changes | C1 |
 | C4 | `plan_reconcile` and `apply_plan` | The same states applied twice change nothing; an unseen entitlement is untouched and reported; the guard blocks a run that would end more than 5 or more than 20%; a tier change emits exactly one `membership.tier.changed` | C3 |
 | C5 | Campaigns and grant policies: `grants_due`, `apply_grant_policies`, `record_arrival` | `ana` gets a grant, `cy` does not when the cut-off is set, `di` gets one through the roster, `fay` keeps access until the grant's date, `gus` gets exactly one; evaluating twice creates one grant; a closed campaign grants nothing; an unknown slug falls back to the default campaign | C3 |
@@ -132,7 +132,7 @@ Web lanes build against a mock of `platform-api` generated from the contracts pa
 | # | Deliverable | Checked by | Needs |
 | --- | --- | --- | --- |
 | I1 | S1.0 tasks 6 to 8: container image and CI, dev and prod roots, identities, topics, foundations script, smoke script (task 9, the documentation update, is the integrator's) | `terraform fmt` and `validate` in CI; the smoke script on dev after Gate 1 | – |
-| I2 | Identity Platform (email link, Google), the contact key in Cloud KMS, buckets (library, library staging, roster inbox with a seven-day lifecycle) | Plan output reviewed; the library bucket refuses anonymous reads | I1 |
+| I2 | Identity Platform (email link, Google), the sign-in email's sending domain (DNS records, verification started at Gate 1), the contact key in Cloud KMS, buckets (library, library staging, roster inbox with a seven-day lifecycle) | Plan output reviewed; the library bucket refuses anonymous reads; a sign-in email to the owner's test address arrives from the platform's domain and passes SPF, DKIM and DMARC | I1 |
 | I3 | Jobs `stripe-reconcile` and `roster-import`, the schedule, permissions exactly as in contracts §7 | A test in dev that `platform-api`'s identity is refused the Stripe key | I1 |
 | I4 | Alerts: error rate, a failed or blocked reconcile, dead letters; a log-based alert on any email-shaped string in logs | A deliberate failure in dev raises the alert | I1 |
 | I5 | Production deploy by tag through the protected environment; `docs/runbooks/launch.md` | A dry run of the workflow on a test tag in dev | I1 |
@@ -146,6 +146,18 @@ Web lanes build against a mock of `platform-api` generated from the contracts pa
 | Q3 | End-to-end journeys on dev for the exit tests of layers B1 and B2, with the six fixture people and a Stripe sandbox |
 | Q4 | Accessibility pass on W1 to W6 |
 | Q5 | Before Gate 3: a full security scan of the repository and a read of every log line produced by the journeys |
+
+## 5a. Lane plans written in Wave 0
+
+| Lane | Plan | Tasks | Starts |
+| --- | --- | --- | --- |
+| L1 Core | [S1.0 plan](../superpowers/plans/2026-11-16-stage-1-slice-0-platform-skeleton.md) | 1 to 5 | Now |
+| L3 Infra | [S1.0 plan](../superpowers/plans/2026-11-16-stage-1-slice-0-platform-skeleton.md), then [identity, sending domain, key and buckets](../superpowers/plans/2026-11-20-lane-infra-identity-keys-buckets.md) | 6 to 8, then 1 to 6 | Now |
+| L2 Web | [sign-in, join and welcome](../superpowers/plans/2026-11-20-lane-web-sign-in-and-join.md) | 1 to 6 | Now |
+| L6 Desk | [package skeleton](../superpowers/plans/2026-11-20-lane-desk-package-skeleton.md) | 1 to 3 | When one of the three is waiting at a gate |
+| L0 Integrator | [S1.0 plan](../superpowers/plans/2026-11-16-stage-1-slice-0-platform-skeleton.md) | 9 | After Core and Infra have landed |
+
+Wave 2 plans (identity and entitlements for Core, the reconcile for Commerce, the library, the workspace pages, jobs and alerts) are written by the integrator while Wave 1 runs, against the code Wave 1 produces. The export-file adapter (D2) is planned when the owner has supplied the export's header line.
 
 ## 6. After the launch: the rest of Stage 1
 
@@ -180,8 +192,9 @@ Because option B does not load `.claude/agents/`, every role text also lives in 
 
 ## 8. How work lands
 
-- **Default: the owner merges every pull request.** Each one arrives with a short summary: what changed, how it was tested, the reviewers' verdicts, and what the owner must do in Cloud Shell, if anything.
-- **Optional: an integration branch.** Lanes target `integration/stage-1`; the integrator merges a lane's pull request there after CI and both reviews pass (never its own); dev deploys from that branch; the owner promotes it to `main` once a day from one digest. This is **off** until the owner switches it on in `docs/swarm/README.md`. `main` and production stay hers in both modes.
+- **In force since 2026-11-20: the integration branch.** Lanes target `integration/stage-1`. A pull request into it is merged by an agent that did not write it, after CI and its reviews pass: the integrator merges the lanes' pull requests, and the quality lane merges the integrator's. Dev deploys from that branch. The owner promotes it to `main` once a day from one digest. `main` and production stay hers.
+- **The other mode: the owner merges every pull request.** One line in `docs/swarm/README.md` switches back.
+- Every pull request arrives with a short summary: what changed, how it was tested, the reviewers' verdicts, and what the owner must do in Cloud Shell, if anything.
 - Nobody force-pushes. Nobody pushes to `main`. A lane rebases onto the latest target before it asks for review.
 
 ## 9. When a lane stops and asks
