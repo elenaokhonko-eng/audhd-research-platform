@@ -194,7 +194,7 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 | `PLATFORM_ROSTER_INBOX_BUCKET` | Restricted bucket where the owner places the export file; objects are deleted after seven days |
 | `PLATFORM_STRIPE_SUBSTACK_APPLICATION` | The application id that marks a subscription as created by Substack |
 | `PLATFORM_STRIPE_TEST_CHANNEL_METADATA` | Dev only. When true, a sandbox subscription with metadata `test_channel=substack` is classified as created by Substack, because a sandbox cannot reproduce another platform's application id. `Settings` refuses to start with this set when `PLATFORM_ENV` is `prod` |
-| `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR` | What a paying Substack reader on a monthly, respectively annual, plan is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). The owner's commercial decision; set on the reconcile and roster jobs from Terraform variables |
+| `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR` | What a paying Substack reader on a monthly, respectively annual, plan is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). A reader whose plan interval is unknown (a roster row with an empty plan: complimentary, gift, billed by Apple) is always recorded as `status:substack_paid`; the owner gives such a reader the paid tier with an owner grant after review. The owner's commercial decision; set on the reconcile and roster jobs from Terraform variables |
 | `PLATFORM_LIBRARY_BUCKET` | Private bucket for library files |
 | `PLATFORM_SESSION_TTL_DAYS` | Session cookie lifetime |
 
@@ -239,7 +239,7 @@ Invented people at `example.org`, in `services/platform-api/tests/fixtures/peopl
 | `ana` | Paid by card on Substack, annual, `started_at` before the cut-off | Recognition, launch grant |
 | `bo` | Free subscriber | Free workspace, upgrade options |
 | `cy` | Paid by card, monthly, `started_at` after the cut-off | No launch grant when `paid_since_before` is set; an upgrade counted in a promotion window |
-| `di` | Complimentary, in the roster file only | Roster recognition |
+| `di` | Complimentary, in the roster file only, no plan interval | Roster recognition as `status:substack_paid`: free workspace, no launch grant when the policy names plan intervals; paid only after an owner grant |
 | `ed` | Pays with one address, signs in with another | The not-recognised route |
 | `fay` | Was paid, cancelled; holds a launch grant | Grant keeps access; ends on its date; `membership.tier.changed` when it does |
 | `gus` | Paid by card and also listed as paid in the roster file | The roster import creates nothing for him |
