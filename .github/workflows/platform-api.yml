@@ -45,10 +45,11 @@ jobs:
       - run: uv run lint-imports
       - run: uv run pytest -m "not integration"
       # GitHub service containers cannot take a command, so the emulator starts in a step.
+      # The emulator image is pinned to a gcloud release; bump it deliberately.
       - name: Start the Firestore emulator
         run: |
           docker run -d --name firestore-emulator -p 8085:8085 \
-            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:594.0.0-emulators \
             gcloud emulators firestore start --host-port=0.0.0.0:8085
           for i in $(seq 1 60); do
             if curl -s -o /dev/null http://localhost:8085; then
@@ -63,6 +64,35 @@ jobs:
         env:
           FIRESTORE_EMULATOR_HOST: localhost:8085
 
+  # Builds the committed Dockerfile unchanged on every run and smoke-tests the image the way
+  # the deploy jobs will use it: hooks mode over HTTP, and the job entry point.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t platform-api:ci services/platform-api
+      - name: Smoke test the image
+        run: |
+          docker run -d --name pa -e PLATFORM_APP_MODE=hooks -p 8080:8080 platform-api:ci
+          body=""
+          for i in $(seq 1 30); do
+            if body=$(curl -fsS http://localhost:8080/health 2>/dev/null); then break; fi
+            body=""; sleep 1
+          done
+          echo "health: ${body}"
+          echo "$body" | grep -q '"mode":"hooks"' || { echo "::error::/health did not answer in hooks mode within 30 seconds."; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/v1/ping)
+          echo "/v1/ping in hooks mode: ${code}"
+          test "$code" = 404 || { echo "::error::/v1/ping answered ${code} in hooks mode, expected 404."; exit 1; }
+      - name: Job entry point exists
+        run: docker run --rm platform-api:ci platform-cli --help
+      - name: Container logs
+        if: failure()
+        run: docker logs pa || true
+      - name: Stop the container
+        if: always()
+        run: docker rm -f pa || true
+
   # Only integration/stage-1 deploys to dev, so the daily promotion to main does not deploy a
   # second time. A manual run on that branch redeploys without a new commit. DEPLOY_DEV_ENABLED
   # is a variable of the environment dev, which a job-level condition cannot see (the
@@ -70,7 +100,7 @@ jobs:
   # every later step depends on it.
   deploy-dev:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/integration/stage-1'
-    needs: test
+    needs: [test, image]
     runs-on: ubuntu-latest
     environment: dev
     permissions:
@@ -119,7 +149,7 @@ jobs:
     # The prod deployer accepts only jobs in the environment production on a v* tag
     # (infra/terraform/envs/prod/identities.tf).
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, image]
     runs-on: ubuntu-latest
     environment: production # the owner is the required reviewer of this environment
     permissions:
