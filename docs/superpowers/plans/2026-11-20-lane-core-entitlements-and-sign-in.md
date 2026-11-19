@@ -21,6 +21,10 @@
 - Time is always passed in (`now: datetime`, timezone-aware, UTC). No rule reads the clock itself; route handlers and jobs call `shared.clock.utcnow()` and pass the value down.
 - Ids: `contact_id` is the first 32 hex characters of HMAC-SHA256 over the trimmed, lower-cased address, computed by the contact key. `entitlement_id = sha256(f"{source}:{source_ref}:{contact_id}:{grant}")[:32]`. A launch grant has `source = "grant"` and `source_ref = "campaign:<slug>"`.
 - Test people are the eight of contracts §8, in `tests/fixtures/people.py`, at `example.org`. Tests never call Google, Stripe or Substack.
+- Models that hold an address also set `model_config = ConfigDict(hide_input_in_errors=True)`: `repr=False` does not hide the value inside a validation error.
+- Three functions stamp a record with the time and take no `now`: `upsert_contact`, `claim_for_member` and `record_arrival` call `shared.clock.utcnow()`. They decide nothing from it.
+- Test code in this plan is not formatted to the project's style. After writing a test file, run `uv run ruff format tests` before the check command.
+- `tests/conftest.py` imports a feature module **inside** the fixture that needs it, never at the top, so that the suite still collects before that module exists.
 - Check command for every task, in `services/platform-api`: `uv run pytest -m "not integration" && uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run lint-imports`.
 
 ## Rulings by the integrator (they refine the contracts page; the pull request that carries this plan records them there)
@@ -150,7 +154,7 @@ def audit_for(self, subject: str) -> list[AuditEntry]: ...
 
 - `entitlements/runtime.py`: `@dataclass class Runtime: store: EntitlementStore; key: ContactKey; bus: EventBus`, `set_runtime(runtime) -> None`, `get_runtime() -> Runtime` (raises `RuntimeError("entitlements runtime is not configured")`). `tests/conftest.py` gains a fixture `ent` that sets a fresh `Runtime(InMemoryStore(), LocalContactKey(b"test"), InMemoryBus())` and returns it.
 - `entitlements/public.py`: `contact_id_for(email: str) -> str`, `upsert_contact(email: str, channels: ChannelsPatch) -> str` (creates the contact with `email` as first seen, or merges the patch into `channels`; never rewrites `email`), and re-exports the models other modules need.
-- `shared/http.py`: `class ApiError(Exception)` with `status`, `code`, `message`, `retry_after: int | None = None`, `reason: str | None = None`; `install_error_handlers(app)` so that an `ApiError` and FastAPI's own validation error produce the body of contracts §1 (`{"error": {"code", "message", "retry_after"}}`, plus `"reason"` when set; validation gives 422 `validation_failed` with a message that names fields and never echoes values).
+- `shared/http.py`: `class ApiError(Exception)` with `status`, `code`, `message`, `retry_after: int | None = None`, `reason: str | None = None`; `install_error_handlers(app)` so that an `ApiError` and FastAPI's own validation error produce the body of contracts §1 (`{"error": {"code", "message", "retry_after"}}`, plus `"reason"` when set; validation gives 422 `validation_failed` with a message that names fields and never echoes values; an unknown route gives 404 `not_found` in the same shape). `create_app` also sets `app.state.settings = settings`, which later tasks read.
 - `shared/clock.py`: `add_months(start: datetime, months: int) -> datetime` (same day of the month, or the month's last day when it has no such day) and `utcnow() -> datetime`. Route handlers and jobs get the time by calling `clock.utcnow()` through the module, so a test can replace it. `tests/conftest.py` gains an autouse fixture that sets it to `T0`: no test depends on the real date.
 - `tests/__init__.py` is created if absent, so that test modules can import helpers from each other.
 - `tests/fixtures/people.py`: `EMAIL: dict[str, str]` (`ana` … `hal`, `<name>@example.org`) and `T0 = datetime(2026, 11, 20, tzinfo=UTC)`.
@@ -295,7 +299,7 @@ def label_for(e: Entitlement) -> str: ...
   - `label_for`: `substack_status` for a grant starting `status:`; `launch_grant` for source `grant` with `source_ref` starting `campaign:`; `owner_grant` for any other source `grant`; `substack_subscription` for the two Substack sources; `platform_subscription` for `platform_stripe`; `purchase` for `payhip`.
   - `decision_for`: `free_members` → allowed. `paid` → allowed when the tier is paid or the sku is among the items, else `paid_required`. `purchase_only` → allowed only when the sku is among the items, else `purchase_required`.
 - `public.py`: `access_for(uid: str, now: datetime) -> Access` loads `entitlements_for_member(uid)` together with `entitlements_for_contacts(contact_ids_for_member(uid))`, removes duplicates by id, and calls `access_from`. `can_open(uid: str, sku: str, now: datetime) -> Decision` takes the item's access from a port added by the Library lane; until then it accepts an optional keyword `item_access` and raises `LookupError` when neither is available.
-- `tests/fixtures/people.py` gains `record(name: str, kind: str, **over) -> Entitlement` (contact id `c-<name>` unless given; a `launch_grant` has `source_ref` `campaign:founding` and the id that `entitlement_id` gives for it), where `kind` is one of `"stripe_year"`, `"stripe_month_status"`, `"roster_status"`, `"launch_grant"`, `"owner_grant"`, `"item"`, and `holdings(name: str) -> list[Entitlement]` giving each person's records under the settings in force (annual → `tier:paid`; monthly and no-interval → `status:substack_paid`): `ana` = stripe_year + launch_grant (until `T0` + 6 months); `bo`, `ed` = none; `cy` = stripe_month_status started after the cut-off; `di` = roster_status; `fay` = stripe_year with status `expired` + launch_grant; `gus` = stripe_year + roster_status; `hal` = stripe_month_status.
+- `tests/fixtures/people.py` gains `record(name: str, kind: str, **over) -> Entitlement` (contact id `c-<name>` unless given; a `launch_grant` has `source_ref` `campaign:founding` and the id that `entitlement_id` gives for it), where `kind` is one of `"stripe_year"`, `"stripe_month_status"`, `"roster_status"`, `"launch_grant"`, `"owner_grant"`, `"item"`, and `holdings(name: str) -> list[Entitlement]` giving each person's records under the settings in force (annual → `tier:paid`; monthly and no-interval → `status:substack_paid`): `ana` = stripe_year + launch_grant (until `T0` + 6 months); `bo`, `ed` = none; `cy` = stripe_month_status started after the cut-off; `di` = roster_status; `fay` = stripe_year with status `expired` + launch_grant; `gus` = stripe_year + roster_status; `hal` = stripe_month_status. `people.py` also defines `CUT_OFF = T0 - timedelta(days=30)`. Defaults of `record()` per kind: `stripe_year` → source `substack_stripe`, grant `tier:paid`, interval `year`, `source_ref` `sub_<name>`, `valid_from` `T0` − 200 days, `valid_until` `T0` + 165 days; `stripe_month_status` → the same with grant `status:substack_paid`, interval `month`, and for `cy` `valid_from` `T0` − 5 days; `roster_status` → source `substack_roster`, `source_ref` `roster`, grant `status:substack_paid`, no interval, `valid_from` `T0` − 200 days; `launch_grant` → source `grant`, `source_ref` `campaign:founding`, grant `tier:paid`, `valid_from` `T0`, `valid_until` `add_months(T0, 6)`; `owner_grant` → source `grant`, `source_ref` `owner:test`, grant `tier:paid`, no end; `item` → source `payhip`, `source_ref` `sale_<name>`, grant `item:sample`. Status is `active` and `member_uid` is empty unless given. `record()` computes `entitlement_id` **after** applying the overrides.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -394,7 +398,7 @@ def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
 ```
 
 - `now` is added to the two signatures of the contracts page (Global Constraints: time is passed in). This plan's pull request notes it on the contracts page.
-- `claim_for_member`: sets `member_uid` on every entitlement under the contact that has none; writes `channels.platform.member_uid` and `registered_at` on the contact if absent; one `entitlement.claimed` audit entry per record; returns the ids it claimed. Calling it again claims nothing. It never takes a record that another member has claimed.
+- `claim_for_member`: sets `member_uid` on every entitlement under the contact that has none; writes `channels.platform.member_uid` and `registered_at` on the contact if absent; one `entitlement.claimed` audit entry per record; returns the ids it claimed. Calling it again claims nothing. It never takes a record that another member has claimed, and it claims nothing (returns `[]`) when the contact's `channels.platform.member_uid` is another member's uid.
 - `grant`: refuses an empty `reason` (`ValueError`), a `grant` that does not start with `tier:` or `item:`, and a `valid_until` that is not later than `now`. Creates a `grant`-sourced entitlement with `source_ref = "owner:" + sha256(reason + now.isoformat())[:12]`, status `active`, `valid_from = now`, `member_uid` taken from the contact when it has one. Publishes `membership.entitlement.granted` with `contact_id`, `entitlement_id`, `grant`, `source: "grant"`, `source_ref`.
 - `revoke`: only a `grant`-sourced entitlement can be revoked (`ValueError` otherwise: a source ends only its own records, Rule 2). Sets status `revoked`. An unknown id raises `LookupError`.
 
@@ -500,7 +504,7 @@ class Guard(BaseModel):
 class Action(BaseModel):
     kind: Literal["create", "update", "end", "move"]
     entitlement: Entitlement                     # the record as it will be after the action
-    email: str | None = Field(default=None, repr=False)   # set for "create" and "move", used once to upsert the contact
+    email: str | None = Field(default=None, repr=False, exclude=True)   # set for "create" and "move", used once to upsert the contact; never dumped
     evidence_source_ref: str
 
 class ReconcilePlan(BaseModel):
@@ -523,14 +527,15 @@ def plan(existing: Sequence[Entitlement], resolved: Sequence[tuple[str, SourceSt
 
 - `resolved` pairs each state with the contact id of its address. `existing` is every entitlement of the sources the caller is reconciling.
 - Rules of `plan`:
-  - The record for a state is found by `(source, source_ref)` first, then its id is checked.
+  - The record for a state is found by its `entitlement_id` first. Only for `substack_stripe` and `platform_stripe`, whose reference is a subscription id, it is then looked for by `(source, source_ref)`; when several records share a reference (after a move), the one that is not ended is taken. A roster state's reference is the fixed word `roster`, so roster records are found by id only.
+  - A record with the same source, reference and contact but **another grant name** (the owner changed what a plan is recorded as): one `move` that ends the old record and creates the new one.
   - No record, state `active` or `grace` → `create` (`valid_from = started_at`, `plan_interval`, `access_scope`, `valid_until` from the state; `member_uid` empty). No record, state `expired` → nothing.
   - A record under the **same** contact: fields differ → `update`; state `expired` and the record is live → `end` (status `expired`, `valid_until = provider_time`); a state `active` for a record that is `expired` → `update` back to `active` (same subscription reactivated); nothing differs → counted in `unchanged`.
-  - A record under **another** contact (the address changed at the source): claimed (`member_uid` set) → treated as the same record, updated in place, the contact is not changed (Rule 4). Unclaimed → one `move`: the old record is ended and a new one is created under the new contact. A move is not counted as an end.
+  - A record under **another** contact (the address changed at the source): claimed (`member_uid` set) → treated as the same record, updated in place, the contact is not changed (Rule 4). Unclaimed → one `move`: the old record is ended and a new one is created under the new contact. A move is not counted as an end, but moves between contacts have the same limit as ends: more of them than the guard allows blocks the plan (a changed contact key would otherwise move every record unchecked).
   - A `revoked` record is never changed.
   - `unseen`: every existing record that no state referred to. Nothing is done to it.
   - `ends` counts `end` actions on grants starting `tier:` or `status:`. `live_before` counts live existing records with such grants. The plan is `blocked`, with `actions == []`, when `ends > max(guard.max_ends, guard.max_fraction * live_before)`.
-  - Two states with the same `(source, source_ref)` → `ValueError` naming the source and the reference.
+  - Two states with the same `(source, source_ref)` for a Stripe source, or the same `(source, source_ref, contact)` for the roster → `ValueError` naming the source and the reference.
 - `public.py`:
   - `plan_reconcile(existing, states, guard, now) -> ReconcilePlan` resolves each address with `contact_id_for`, then calls `plan`. (`now` is added to the contract signature.)
   - `apply_plan(plan, run_id, now) -> ReconcileReport`: a blocked plan writes nothing. Otherwise, grouped by contact: record the tier of the contact's member (if any) before; upsert the contact for `create` and `move`; one `store.write` per contact with an audit entry per action (`actor = "run:<run_id>"`); set `member_uid` on a created record when the contact already has a member; call `apply_grant_policies(contact_id, now)` when the contact has a member (it exists from Task 5; until then a module-level hook that returns `[]`); compare the tier after, and publish one `membership.tier.changed` (`member_uid`, `from`, `to`, `run_id`) when it differs.
@@ -691,7 +696,8 @@ class Campaign(BaseModel):
     closes_at: datetime | None
     is_default: bool
     grant: GrantPolicy | None
-    copy: dict[str, str]                         # headline, body, cta
+    copy_: dict[str, str] = Field(alias="copy")  # headline, body, cta. The plain name would shadow BaseModel.copy; the model sets
+                                                 # ConfigDict(populate_by_name=True), and stores and routes dump with by_alias=True
     counts: dict[str, int]                       # arrivals, recognised_paid, grants_created
 
 class GrantSpec(BaseModel):
@@ -704,10 +710,11 @@ class LaunchConfig(BaseModel):
     substack_account_url: str = ""
 ```
 
+- A policy's `requires_live_source` may not contain `grant` (validation error): a grant never earns another grant.
 - `store.py` gains `get_campaign(slug)`, `list_campaigns()`, `put_campaigns(campaigns)`, `add_to_campaign_count(slug, key, by=1)`, `get_launch_config() -> LaunchConfig`, `put_launch_config(config)`.
 - `campaigns.py`, pure: `campaign_state(campaign, config, now) -> Literal["scheduled", "open", "closed"]` (always `closed` while `join_open` is off; `scheduled` before `opens_at`; `closed` from `closes_at`) and `grants_from(entitlements, campaigns, config, now) -> list[GrantSpec]`.
 - A grant is due from a campaign when all of these hold: the campaign's state is `open`; it has a policy; some **live** entitlement `e` has `e.source` in `requires_live_source`; `paid_since_before` is `None`, or `e.valid_from` is set and earlier than it; `plan_intervals` is `None`, or `e.plan_interval` is one of them; and no entitlement with the grant's id exists among `entitlements`, **whatever its status**. `valid_until` is `add_months(now, months)` or `fixed_until`. The grant belongs to `e.contact_id`. One spec per campaign and contact, however many records qualify.
-- `public.py`: `campaign_by_slug(slug: str | None, now) -> Campaign` (unknown, `None` or `"default"` → the campaign with `is_default`; no default stored → `LookupError`); `grants_due(entitlements, campaigns, now)` (loads the config, calls `grants_from`); `apply_grant_policies(contact_id: str, now) -> list[str]` (no member on the contact → `[]`; otherwise creates each due grant with `store.create_if_absent`, `updated_by = "policy:<slug>"`, an audit entry whose `evidence` names the qualifying entitlement, the count `grants_created`, and the event `membership.entitlement.granted`; returns the ids it created); `record_arrival(uid: str, campaign: Campaign, recognition: str) -> None` (ruling 2).
+- `public.py`: `campaign_by_slug(slug: str | None, now) -> Campaign` (unknown, `None` or `"default"` → the campaign with `is_default`; no default stored → `LookupError`); `grants_due(entitlements, campaigns, now)` (loads the config, calls `grants_from`); `apply_grant_policies(contact_id: str, now) -> list[str]` (no member on the contact → `[]`; otherwise creates each due grant with `store.create_if_absent`, `updated_by = "policy:<slug>"`, an audit entry whose `evidence` is `{"entitlement_id": <the qualifying record>, "campaign": <slug>}`, the count `grants_created`, and the event `membership.entitlement.granted`; returns the ids it created); `record_arrival(uid: str, campaign: Campaign, recognition: str) -> None` (ruling 2; counts start as an empty map and only the keys that were incremented exist). For the owner's routes of Task 8, also: `put_campaigns(campaigns: list[Campaign], actor: str) -> int` (keeps the counts of a slug that already exists), `list_campaigns() -> list[Campaign]`, `update_launch_config(patch: dict[str, object], actor: str) -> LaunchConfig`, `contact_view(contact_id: str, now) -> ContactView | None` (channels, whether a member exists, reasons with entitlement ids, audit entries; no address), `write_audit(entry: AuditEntry) -> None` and `audit_for(subject: str) -> list[AuditEntry]`.
 - `entitlements/http.py`: `GET /v1/public/campaigns/{slug}` → `{slug, audience, state, copy}` with `slug: null` when the default was substituted. `GET /v1/me/entitlements` is added in Task 7.
 
 - [ ] **Step 1: Write the failing tests**
@@ -725,9 +732,8 @@ from platform_api.entitlements.campaigns import campaign_state, grants_from
 from platform_api.entitlements.models import Campaign, ChannelsPatch, GrantPolicy, LaunchConfig
 from platform_api.settings import Settings
 from platform_api.shared.clock import add_months
-from tests.fixtures.people import EMAIL, T0, holdings, record
+from tests.fixtures.people import CUT_OFF, EMAIL, T0, holdings, record
 
-CUT_OFF = T0 - timedelta(days=30)
 POLICY = GrantPolicy(grant="tier:paid", months=6, starts="at_claim", fixed_until=None,
                      requires_live_source=["substack_stripe", "substack_roster"], paid_since_before=CUT_OFF, plan_intervals=["year"])
 OPEN = LaunchConfig(join_open=True)
@@ -841,7 +847,7 @@ git commit -m "platform-api: campaigns, grant policies evaluated on verified rec
 ### Task 6: Sign-in, sessions and terms
 
 **Files:**
-- Create: `identity/models.py`, `runtime.py`, `store.py`, `provider.py`; `shared/ratelimit.py`; `tests/identity/__init__.py`, `tests/identity/test_sessions.py`
+- Create: `identity/models.py`, `runtime.py`, `store.py`, `provider.py`; `shared/ratelimit.py`; `tests/identity/__init__.py`, `tests/fixtures/launch.py` (`TERMS`), `tests/identity/conftest.py` (`world`), `tests/identity/test_sessions.py`
 - Modify: `identity/public.py`, `identity/http.py`, `shared/http.py`, `settings.py`
 
 **Interfaces:**
@@ -860,7 +866,9 @@ class IdentityProvider(Protocol):
     def create_session_cookie(self, id_token: str, ttl: timedelta) -> str: ...
     def verify_session_cookie(self, cookie: str) -> str: ...                  # returns uid; raises InvalidToken when bad, expired or revoked
     def revoke_sessions(self, uid: str) -> None: ...
-class FakeIdentityProvider: ...   # token "fake-token:<name>" → uid "u-<name>", address from fixtures passed in; cookie "fake-session:<uid>:<n>"
+class FakeIdentityProvider: ...   # token "fake-token:<name>" → uid "u-<name>" for a name in the address table it was given, else InvalidToken;
+                                  # unverified: set[str] of names whose address is not verified; cookie "fake-session:<uid>:<n>";
+                                  # it remembers the cookies it issued and the uids it revoked, and accepts no other cookie
 
 # identity/models.py
 class Member(BaseModel): ...       # stored: uid, primary_contact_id, linked_contact_ids, email (repr=False), display_name, terms_accepted, joined_via, status, created_at, last_seen_at
@@ -878,11 +886,12 @@ def end_sessions(uid: str) -> None: ...
 def member_view(uid: str) -> MemberView: ...
 def accept_terms(uid: str, terms_version: str, privacy_version: str, now: datetime) -> MemberView: ...
 def request_deletion(uid: str, now: datetime) -> None: ...
+def member_count() -> int: ...
 ```
 
-- `identity/store.py`: `MemberStore` port (`get`, `put`) and `InMemoryMemberStore`. `identity/runtime.py`: `Runtime(members, provider, request_refresh: Callable[[str, datetime], Literal["fresh", "started"]] | None, last_reconcile_at: Callable[[], datetime | None] | None)` with `set_runtime` / `get_runtime`; fixture `idn` in `tests/conftest.py` builds it on top of `ent`.
-- `resolve_session`, in this order: verify the token (`InvalidToken`, or `email_verified` false → `Unauthenticated`); if there is no member and `join_open` is off → `JoinClosed`; `upsert_contact` with `platform={"member_uid": uid, "registered_at": now}`; create the member (`joined_via` = the campaign's slug) or update `last_seen_at`; `claim_for_member`; `apply_grant_policies`; on the first sign-in only, `record_arrival` (recognition `paid` when the tier is paid, else `free`) and the event `membership.member.registered` (`member_uid`, `contact_id`, `campaign`); when a refresh port is set and the last reconcile is older than `reconcile_max_age_seconds` (or unknown), call it and use its answer as `join.check`, else `"fresh"`; create the cookie with `timedelta(days=settings.session_ttl_days)`. `join.grant` is `{"created": true, "valid_until": …}` only when this call created one. A member whose status is `deletion_requested` cannot sign in (`Unauthenticated`).
-- `settings.py` gains `session_ttl_days: int = 14` (refused above 14 or below 1: the provider's limit), `owner_accounts: list[str] = []`, `contact_key: str = ""`, `library_bucket: str = ""`.
+- `identity/store.py`: `MemberStore` port (`get`, `put`) and `InMemoryMemberStore`. `identity/runtime.py`: `Runtime(members, provider, bus: EventBus, session_ttl: timedelta, limiter: RateLimiter, request_refresh: Callable[[str, datetime], Literal["fresh", "started"]] | None, last_reconcile_at: Callable[[], datetime | None] | None)` (the `idn` fixture passes `ent.bus`, so one list holds every published event; when the Commerce lane wires `request_refresh`, its answer `already_running` is passed on as `started`) with `set_runtime` / `get_runtime`; fixture `idn` in `tests/conftest.py` builds it on top of `ent`.
+- `resolve_session`, in this order: verify the token (`InvalidToken`, or `email_verified` false → `Unauthenticated`); if there is no member and `join_open` is off → `JoinClosed`; `upsert_contact` (with `platform={"member_uid": uid, "registered_at": now}` when the member is new, with an empty patch otherwise); create the member (`joined_via` = the campaign's slug) or update `last_seen_at`; `claim_for_member`; `apply_grant_policies`; on the first sign-in only, `record_arrival` (recognition is `paid` when the tier is paid **or** the member holds a live record from `substack_stripe` or `substack_roster`, else `free`; the same value is `join.recognition`) and the event `membership.member.registered` (`member_uid`, `contact_id`, `campaign`); when a refresh port is set and the last reconcile is older than `reconcile_max_age_seconds` (or unknown), call it and use its answer as `join.check`, else `"fresh"`; create the cookie with `timedelta(days=settings.session_ttl_days)`. `join.grant` is `{"created": true, "valid_until": …}` only when this call created one. A member whose status is `deletion_requested` cannot sign in (`Unauthenticated`).
+- `settings.py` gains `session_ttl_days: int = 14` (refused above 14 or below 1: the provider's limit), `owner_accounts: Annotated[list[str], NoDecode] = []` with a validator that splits a comma-separated string (so the environment variable is `PLATFORM_OWNER_ACCOUNTS=id1,id2`, not JSON), `contact_key: str = ""`, `library_bucket: str = ""`.
 - `email_hint`: the first character, `…@`, and the domain (`a…@example.org`).
 - `accept_terms`: both versions must equal the config's required ones, else `ApiError(422, "validation_failed")`. `terms.accepted` in the view is true only when the stored versions equal the required ones, so changing a required version asks every member again.
 - `shared/http.py` gains two FastAPI dependencies: `current_member` (reads `X-Member-Session`; missing or refused → `ApiError(401, "unauthenticated")`) and `member_with_terms` (as above, then 409 `terms_required` when `terms_ok` is false). `shared` may not import `identity`, so both take the lookup from `app.state.member_from_session`, which `create_app` sets from `identity.public`.
@@ -896,25 +905,20 @@ def request_deletion(uid: str, now: datetime) -> None: ...
 import logging
 from datetime import timedelta
 
-import pytest
-from fastapi.testclient import TestClient
-
-from platform_api.app import create_app
-from platform_api.entitlements.models import LaunchConfig
-from platform_api.settings import Settings
-from tests.entitlements.test_campaigns import campaign
-from tests.entitlements.test_reconcile import run, state
+from tests.fixtures.launch import TERMS
 from tests.fixtures.people import T0
 
-TERMS = LaunchConfig(join_open=True, required_terms_version="t1", required_privacy_version="p1")
-
-
-@pytest.fixture
-def world(idn, ent):
-    ent.store.put_launch_config(TERMS)
-    ent.store.put_campaigns([campaign(), campaign("members", audience="public", grant=None, is_default=True)])
-    run(ent, [state("ana", "sub_a"), state("hal", "sub_h", grant="status:substack_paid", interval="month")])
-    return TestClient(create_app(Settings()))
+# tests/fixtures/launch.py holds:
+#     TERMS = LaunchConfig(join_open=True, required_terms_version="t1", required_privacy_version="p1")
+#
+# tests/identity/conftest.py holds the fixture (a fixture imported into a test module makes ruff report F811):
+#     @pytest.fixture
+#     def world(idn, ent):
+#         ent.store.put_launch_config(TERMS)
+#         ent.store.put_campaigns([campaign(), campaign("members", audience="public", grant=None, is_default=True)])
+#         run(ent, [state("ana", "sub_a"), state("hal", "sub_h", grant="status:substack_paid", interval="month")])
+#         return TestClient(create_app(Settings()))
+#     with campaign, run and state imported from the two entitlement test modules.
 
 
 def sign_in(client, name, slug=None):
@@ -939,7 +943,7 @@ def test_the_grant_does_not_depend_on_the_link(world):
 def test_bo_and_hal_are_free_and_hal_sees_his_plan(world):
     assert sign_in(world, "bo", "founding").json()["access"]["tier"] == "free"
     hal = sign_in(world, "hal").json()
-    assert hal["access"]["tier"] == "free" and hal["join"]["grant"] is None
+    assert hal["access"]["tier"] == "free" and hal["join"]["grant"] is None and hal["join"]["recognition"] == "paid"
     assert [(r["label"], r["plan_interval"]) for r in hal["access"]["reasons"]] == [("substack_status", "month")]
 
 
@@ -1037,7 +1041,7 @@ git commit -m "platform-api: sign-in to member, session cookie, terms gate, dele
 
 **Interfaces:**
 - Produces: `identity.public.file_support_request(uid: str, kind: Literal["paid_not_recognised", "other"], note: str, now: datetime) -> str` and `list_support_requests() -> list[SupportRequest]`; `MemberStore` gains `add_support_request` and `support_requests`; route `POST /v1/me/support-requests` (uses `member_with_terms`).
-- A note longer than 500 characters → 422. At most 5 requests per member per day → 429 `rate_limited` with `retry_after`. The limiter lives on `identity`'s `Runtime` (`limiter: RateLimiter`).
+- A note longer than 500 characters → 422. At most 5 requests per member per day → 429 `rate_limited` with `retry_after`. The limiter is `identity`'s `Runtime.limiter` (Task 6).
 - The note is stored in `support_requests` and nowhere else. The event `membership.support.requested` carries `member_uid` and `kind` only. This event type is new: add it to the contracts page in this plan's pull request and to `docs/architecture/09-events-and-data-model.md` (the integrator makes both edits when asked in the hand-over).
 
 - [ ] **Step 1: Write the failing tests**
@@ -1046,7 +1050,7 @@ git commit -m "platform-api: sign-in to member, session cookie, terms gate, dele
 # tests/identity/test_http_member.py
 import logging
 
-from tests.identity.test_sessions import sign_in, world  # noqa: F401
+from tests.identity.test_sessions import sign_in
 
 
 def member(world, name="ed"):
@@ -1112,8 +1116,10 @@ git commit -m "platform-api: support requests, stored once, limited per member"
 - Modify: `admin/public.py`, `admin/http.py`, `shared/auth.py`, `cli.py`
 
 **Interfaces:**
-- `shared/auth.py` gains `owner_account_from_token(token: str, *, allowed: Sequence[str]) -> str`: reads the claim `sub` of the Google identity token the same way `push_identity_from_token` does (the signature is checked by Cloud Run before the request arrives; the docstring says so and says where that is enforced) and raises `NotAuthorised("wrong_identity")` unless it is in `allowed`. An empty list allows nobody.
-- `admin/http.py`: one dependency `owner` for the whole router (missing header or refused → 403 `forbidden`; the response does not say which). Every route, reads included, writes an audit entry with `actor = "owner:<account id>"`. The `subject` is the entitlement or contact id when the call is about one, and the fixed word `admin` for reads of lists and for configuration writes (campaigns, launch). Routes, as on the contracts page:
+- **The owner's token is verified inside the service**, signature included. Cloud Run's own check is not enough here: any caller allowed to invoke the service (the website's account, for one) could otherwise present a token it wrote itself. `Deps` gains `verify_owner: Callable[[str], str] | None` (token → the Google account id in the claim `sub`; raises `NotAuthorised`), and `create_app` puts it on `app.state`. `None` refuses every admin request. The real one, `shared/auth.py: google_account_from_token(token) -> str`, calls `google.oauth2.id_token.verify_token(token, google.auth.transport.requests.Request())` (signature and expiry against Google's published keys), then requires the issuer `https://accounts.google.com` and `email_verified` true, and returns `sub`; `main.py` wires it. The audience is not checked: a token from `gcloud auth print-identity-token` for a person's account carries gcloud's own audience. The account list is the gate.
+- `admin.public.owner`: the FastAPI dependency. It reads `Authorization: Bearer`, calls `request.app.state.verify_owner`, and accepts only an id in `request.app.state.settings.owner_accounts`. An empty list allows nobody.
+- Consumes, and nothing else from the other modules: `entitlements.public` (`contact_id_for`, `upsert_contact`, `contact_view`, `grant`, `revoke`, `put_campaigns`, `list_campaigns`, `campaign_state` re-exported, `launch_config`, `update_launch_config`, `write_audit`) and `identity.public` (`list_support_requests`, `member_count`).
+- `admin/http.py`: the dependency `owner` on the whole router (missing header or refused → 403 `forbidden`; the response does not say which). Every route, reads included, writes an audit entry with `actor = "owner:<account id>"`. The `subject` is the entitlement or contact id when the call is about one, and the fixed word `admin` for reads of lists and for configuration writes (campaigns, launch). Routes, as on the contracts page:
 
 | Route | Calls |
 | --- | --- |
@@ -1127,7 +1133,7 @@ git commit -m "platform-api: support requests, stored once, limited per member"
 
   `PUT /v1/admin/promotions` and `POST /v1/admin/library/publish` belong to the Commerce and Library lanes' routers under the same `owner` dependency, which they import from `admin.public`.
 - `admin/client.py`: `class AdminClient` with `__init__(self, base_url: str, token: Callable[[], str], http: httpx.Client | None = None)` and one method per route. It sends `Authorization: Bearer <token>`; a non-2xx answer raises `AdminError(status, code, message)`.
-- `cli.py` gains, beside `job`: `contact show --email`, `grant create --email --grant --months|--until --reason`, `grant revoke --id --reason`, `campaign apply --file`, `launch set [--join-open true|false] [--library-open …] [--promotions-open …] [--terms-version …] [--privacy-version …] [--substack-account-url …]`, `launch report`, `support list`. The base address comes from `PLATFORM_API_URL` and the token from `gcloud auth print-identity-token --audiences=<url>` (run as a subprocess with a fixed argument list, never through a shell). Output is plain lines of the form `key: value`; no command prints an address except the one the owner typed. `stripe reconcile`, `roster import` and `promo apply` are added by the Commerce lane.
+- `cli.py` gains, beside `job`: `contact show --email-stdin`, `grant create --email-stdin --grant --months|--until --reason` (the address is read from standard input, one line, so it never appears in the process list or the shell history), `grant revoke --id --reason`, `campaign apply --file`, `launch set [--join-open true|false] [--library-open …] [--promotions-open …] [--terms-version …] [--privacy-version …] [--substack-account-url …]`, `launch report`, `support list`. `cli.admin_client() -> AdminClient` builds the client (tests replace it): the base address comes from `PLATFORM_API_URL` and the token from `gcloud auth print-identity-token` (no `--audiences`: that flag is for service accounts), run as a subprocess with a fixed argument list, never through a shell. Output is plain lines of the form `key: value`; no command prints an address except the one the owner typed. `stripe reconcile`, `roster import` and `promo apply` are added by the Commerce lane.
 - `httpx` moves from the dev group to the runtime dependencies in `pyproject.toml`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1141,7 +1147,7 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from platform_api.app import create_app
+from platform_api.app import Deps, create_app
 from platform_api.settings import Settings
 from tests.entitlements.test_campaigns import campaign
 from tests.fixtures.people import EMAIL
@@ -1152,9 +1158,18 @@ def token(sub):
     return f"{part({'alg': 'none'})}.{part({'sub': sub, 'email_verified': True})}.x"
 
 
+def sub_of(tok):                       # stands in for Google's signature check
+    from platform_api.shared.auth import NotAuthorised
+    try:
+        payload = tok.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["sub"]
+    except Exception as exc:
+        raise NotAuthorised("invalid") from exc
+
+
 @pytest.fixture
 def admin(idn, ent):
-    client = TestClient(create_app(Settings(owner_accounts=["acc-1"])))
+    client = TestClient(create_app(Settings(owner_accounts=["acc-1"]), Deps(verify_owner=sub_of)))
     client.headers["Authorization"] = f"Bearer {token('acc-1')}"
     return client
 
@@ -1166,8 +1181,18 @@ def test_only_a_listed_account_gets_in(admin):
     assert admin.get("/v1/admin/launch/report").status_code == 200
 
 
+def test_without_a_verifier_nobody_gets_in(idn, ent):
+    client = TestClient(create_app(Settings(owner_accounts=["acc-1"])))
+    assert client.get("/v1/admin/launch/report", headers={"Authorization": f"Bearer {token('acc-1')}"}).status_code == 403
+
+
+def test_the_owner_list_reads_a_comma_separated_variable(monkeypatch):
+    monkeypatch.setenv("PLATFORM_OWNER_ACCOUNTS", "acc-1, acc-2")
+    assert Settings().owner_accounts == ["acc-1", "acc-2"]
+
+
 def test_an_empty_owner_list_allows_nobody(idn, ent):
-    client = TestClient(create_app(Settings(owner_accounts=[])))
+    client = TestClient(create_app(Settings(owner_accounts=[]), Deps(verify_owner=sub_of)))
     assert client.get("/v1/admin/launch/report", headers={"Authorization": f"Bearer {token('acc-1')}"}).status_code == 403
 
 
@@ -1224,7 +1249,7 @@ from platform_api.admin.client import AdminClient, AdminError
 
 
 def client(handler):
-    return AdminClirecord("https://api.example.org", lambda: "tok", httpx.Client(transport=httpx.MockTransport(handler)))
+    return AdminClient("https://api.example.org", lambda: "tok", httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_the_client_sends_the_token_and_puts_the_address_in_the_body():
@@ -1267,7 +1292,7 @@ Expected: FAIL, 404 for the admin routes and `No module named 'platform_api.admi
 
 - [ ] **Step 4: See them pass**
 
-Run the check command. Expected: 11 new tests pass (7 and 4); `tests/test_module_registration.py` still passes.
+Run the check command. Expected: 13 new tests pass (9 and 4); `tests/test_module_registration.py` still passes.
 
 - [ ] **Step 5: Commit**
 
@@ -1285,9 +1310,9 @@ git commit -m "platform-api: owner routes behind the account list, audited; plat
 - Modify: `main.py`, `cli.py` (jobs get the same runtimes), `.importlinter` (the `adapters` package may import every module's ports; no feature module imports `adapters`)
 
 **Interfaces:**
-- `FirestoreEntitlementStore(client)`, `FirestoreMemberStore(client)`, `FirestoreRateLimiter(client)`: the ports of Tasks 1, 5, 6 and 7 on the collections of 09 §2 and contracts §4 (`contacts`, `entitlements`, `audit`, `campaigns`, `config/launch`, `members`, `support_requests`, `rate_limits`). `write` and `create_if_absent` run in a Firestore transaction. `add_to_campaign_count` uses `Increment`.
-- `KmsContactKey(client, key_version_name)`: `mac` calls `mac_sign` and checks the response's `name` and CRC32C; `version` is the last path segment.
-- `FirebaseIdentityProvider(app)`: `verify_id_token(check_revoked=True)`, `create_session_cookie`, `verify_session_cookie(check_revoked=True)`, `revoke_refresh_tokens`. Every `firebase_admin` error becomes `InvalidToken` with a message that holds no token and no address.
+- `FirestoreEntitlementStore(client)`, `FirestoreMemberStore(client)`, `FirestoreRateLimiter(client)`: the ports of Tasks 1, 5, 6 and 7 on the collections of 09 §2 and contracts §4 (`contacts`, `entitlements`, `audit_log`, `campaigns`, `config/launch`, `members`, `support_requests`, and the new `rate_limits`, which the integrator adds to 09). `write` and `create_if_absent` run in a Firestore transaction. `add_to_campaign_count` uses `Increment`.
+- `KmsContactKey(client, key_version_name)`: `mac` calls `mac_sign(request={"name": …, "data": …, "data_crc32c": …})` and checks the response's `name` and CRC32C; `version` is the last path segment.
+- `FirebaseIdentityProvider(app)`: `verify_id_token(check_revoked=True)`, `create_session_cookie`, `verify_session_cookie(check_revoked=True)`, `revoke_refresh_tokens`. It calls these as `firebase_admin.auth.<function>` through the module (so a test can replace them). Every `firebase_admin` error, and `ValueError`, becomes `InvalidToken` with a message that holds no token and no address.
 - `main.py` builds the three runtimes lazily (no client is created at import; `/health` works without credentials) and calls `set_runtime` for `entitlements` and `identity`. A missing `PLATFORM_CONTACT_KEY` outside `local` stops the service at start with a message that names the setting; in `local`, `LocalContactKey` and the in-memory stores are used.
 - Firestore indexes the queries need are listed in the hand-over for the Infra lane (which owns Terraform): `entitlements` by `contact_id`, by `member_uid`, by `source`; `contacts` by `channels.platform.member_uid`.
 
@@ -1337,7 +1362,7 @@ def test_a_provider_error_becomes_invalid_token_without_the_token(monkeypatch):
     assert "eyJ" not in str(err.value) and "@" not in str(err.value)
 
 
-def test_importing_main_creates_no_client(monkeypatch):
+def test_importing_main_creates_no_client(monkeypatch, restore_root_logger):
     monkeypatch.setenv("PLATFORM_ENV", "local")
     import importlib
 

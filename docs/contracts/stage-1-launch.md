@@ -125,7 +125,11 @@ Refinements made when the Core plan was written (2026-11-20):
 - **`record_arrival`** updates the contact's `invite`, the campaign's counts and publishes `membership.campaign.joined`. `identity` stores `joined_via` on the member it creates, and calls `record_arrival` on the first sign-in only.
 - **`apply_plan`** compares a member's tier before the plan with the tier after the plan and after the grant policies, and publishes at most one `membership.tier.changed` per member.
 - **`entitlements.public.launch_config()`** returns the `config/launch` document. While `join_open` is off, a person with no member document cannot sign in (403 `forbidden`); an existing member can.
-- **`identity`** also offers `end_sessions(uid)`, `member_view(uid)`, `request_deletion(uid, now)`, `file_support_request(uid, kind, note, now)` and `list_support_requests()`. `admin.public` offers the `owner` dependency that every `/v1/admin/` route uses.
+- **`identity`** also offers `end_sessions(uid)`, `member_view(uid)`, `request_deletion(uid, now)`, `file_support_request(uid, kind, note, now)` and `list_support_requests()`. `identity` also offers `member_count()`. `admin.public` offers the `owner` dependency that every `/v1/admin/` route uses.
+- **The owner's token is verified inside the service** (signature, issuer, verified email), not only by Cloud Run, and its account id must be in `PLATFORM_OWNER_ACCOUNTS` (comma-separated).
+- **For the owner's routes, `entitlements.public` also offers** `put_campaigns`, `list_campaigns`, `update_launch_config`, `contact_view`, `write_audit` and `audit_for`.
+- **`Join.recognition`** is `paid` when the member's tier is paid or they hold a live record from a Substack source, whatever that record unlocks.
+- **`plan_reconcile` treats a changed grant name** for the same subscription and person as a move: the old record ends and the new one is created, outside the guard's count of ends.
 - **`PUT /v1/admin/launch`** also takes `required_terms_version`, `required_privacy_version`, `reconcile_max_age_seconds` and `substack_account_url`.
 
 ```python
