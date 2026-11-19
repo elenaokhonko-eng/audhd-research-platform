@@ -105,16 +105,37 @@ export class HttpPlatformApi implements PlatformApi {
   }
 }
 
+// One fake per server process (kept on globalThis so Next dev reloads keep it), so sessions and
+// accepted terms survive from one request to the next.
+const globalForFake = globalThis as typeof globalThis & { __platformApiFake?: FakePlatformApi };
+
+// One id-token client per audience, built lazily and reused.
+const tokenProviders = new Map<string, () => Promise<string>>();
+
+function idTokenFor(audience: string): () => Promise<string> {
+  let provider = tokenProviders.get(audience);
+  if (!provider) {
+    let client: ReturnType<GoogleAuth["getIdTokenClient"]> | undefined;
+    provider = async () => {
+      client ??= new GoogleAuth().getIdTokenClient(audience);
+      try {
+        return await (await client).idTokenProvider.fetchIdToken(audience);
+      } catch (error) {
+        client = undefined;
+        throw error;
+      }
+    };
+    tokenProviders.set(audience, provider);
+  }
+  return provider;
+}
+
 export function getPlatformApi(env: Record<string, string | undefined> = process.env): PlatformApi {
   if (env.PLATFORM_API_FAKE === "1") {
     if (env.SITE_ENV === "prod") throw new Error("PLATFORM_API_FAKE is not allowed in prod");
-    return new FakePlatformApi();
+    return (globalForFake.__platformApiFake ??= new FakePlatformApi());
   }
   const url = env.PLATFORM_API_URL;
   if (!url) throw new Error("PLATFORM_API_URL is not set");
-  const auth = new GoogleAuth();
-  return new HttpPlatformApi(url, async () => {
-    const client = await auth.getIdTokenClient(url);
-    return client.idTokenProvider.fetchIdToken(url);
-  });
+  return new HttpPlatformApi(url, idTokenFor(url));
 }

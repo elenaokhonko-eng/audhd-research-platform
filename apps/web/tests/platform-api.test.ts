@@ -1,3 +1,4 @@
+import { people } from "@/tests/fixtures/people";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError, HttpPlatformApi, getPlatformApi } from "@/lib/platform-api/client";
 import { FakePlatformApi } from "@/lib/platform-api/fake";
@@ -56,6 +57,14 @@ describe("getPlatformApi", () => {
   it("gives the fake elsewhere", () => {
     expect(getPlatformApi({ PLATFORM_API_FAKE: "1", SITE_ENV: "dev" })).toBeInstanceOf(FakePlatformApi);
   });
+  it("shares one fake, with its sessions and terms, across calls", async () => {
+    const env = { PLATFORM_API_FAKE: "1", SITE_ENV: "dev" };
+    const first = getPlatformApi(env);
+    const second = getPlatformApi(env);
+    expect(second).toBe(first);
+    await first.resolveSession("fake-token:bo", null);
+    await expect(second.me("fake-session:bo")).resolves.toBeTruthy();
+  });
   it("needs a URL for the real client", () => {
     expect(() => getPlatformApi({ SITE_ENV: "dev" })).toThrow(/PLATFORM_API_URL is not set/);
   });
@@ -88,5 +97,43 @@ describe("FakePlatformApi", () => {
     const fake = new FakePlatformApi();
     expect((await fake.campaign("no-such")).slug).toBeNull();
     expect((await fake.campaign("closed")).state).toBe("closed");
+  });
+  it("holds all eight fixture people", async () => {
+    expect(people.map((p) => p.name)).toEqual(["ana", "bo", "cy", "di", "ed", "fay", "gus", "hal"]);
+    const fake = new FakePlatformApi();
+    for (const name of ["cy", "gus"]) {
+      const r = await fake.resolveSession(`fake-token:${name}`, null);
+      expect(r.access.tier).toBe("paid");
+      expect(r.access.reasons.map((x) => x.label)).toEqual(["substack_subscription"]);
+    }
+    const di = await fake.resolveSession("fake-token:di", null);
+    expect(di.access.tier).toBe("paid");
+    expect(di.access.reasons).toMatchObject([{ label: "substack_status", source: "substack_roster", status: "active" }]);
+  });
+  it("rejects a session that was never resolved as unauthenticated", async () => {
+    const fake = new FakePlatformApi();
+    await expect(fake.me("fake-session:bo")).rejects.toMatchObject({ status: 401, code: "unauthenticated" });
+    await expect(fake.supportRequest("fake-session:bo", "other", "x")).rejects.toMatchObject({ code: "unauthenticated" });
+  });
+  it("needs accepted terms before a support request, and remembers acceptance", async () => {
+    const fake = new FakePlatformApi();
+    const { member } = await fake.resolveSession("fake-token:ed", null);
+    expect(member.terms.accepted).toBe(false);
+    await expect(fake.supportRequest("fake-session:ed", "paid_not_recognised", "x")).rejects.toMatchObject({
+      status: 409,
+      code: "terms_required",
+    });
+    const { terms } = member;
+    await fake.acceptTerms("fake-session:ed", terms.required.terms_version, terms.required.privacy_version);
+    await expect(fake.supportRequest("fake-session:ed", "paid_not_recognised", "x")).resolves.toHaveProperty("id");
+    const again = await fake.resolveSession("fake-token:ed", null);
+    expect(again.member.terms.accepted).toBe(true);
+    await expect(fake.supportRequest("fake-session:ed", "other", "y")).resolves.toHaveProperty("id");
+  });
+  it("ends the session on revoke", async () => {
+    const fake = new FakePlatformApi();
+    await fake.resolveSession("fake-token:bo", null);
+    await fake.revokeSession("fake-session:bo");
+    await expect(fake.me("fake-session:bo")).rejects.toMatchObject({ code: "unauthenticated" });
   });
 });
