@@ -1,7 +1,3 @@
-output "web_dev_url" {
-  value = module.web_dev.uri
-}
-
 output "web_prod_url" {
   value = module.web_prod.uri
 }

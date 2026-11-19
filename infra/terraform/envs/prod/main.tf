@@ -1,5 +1,5 @@
-# Production root. Stage 0 foundation: APIs, image registry, the website, custom domain, DNS,
-# uptime check, budget. Stage 1 adds platform.tf (platform-api, event bus, Firestore).
+# Production root. Stage 0 foundation: APIs, image registry, the production website, custom
+# domain, DNS, uptime check, budget. Stage 1 adds platform.tf (platform-api, event bus, Firestore).
 # Every service account and permission is in identities.tf.
 
 locals {
@@ -56,16 +56,7 @@ resource "google_artifact_registry_repository" "platform" {
 }
 
 # ---------------------------------------------------------------- web (M1)
-module "web_dev" {
-  source          = "../../modules/web_service"
-  name            = "web-dev"
-  region          = var.region
-  site_env        = "dev"
-  max_instances   = 2
-  service_account = google_service_account.web_runtime.email
-  depends_on      = [google_project_service.enabled]
-}
-
+# The preview site web-dev and its host dev.<domain> live in the dev project (envs/dev).
 module "web_prod" {
   source          = "../../modules/web_service"
   name            = "web-prod"

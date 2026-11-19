@@ -76,7 +76,8 @@ terraform apply -input=false
 terraform output domain_records
 
 say "4/4 Waiting for certificates (usually 15-60 minutes)"
-for host in "$DOMAIN" "www.$DOMAIN" "dev.$DOMAIN"; do
+# dev.$DOMAIN is mapped from the dev project since Stage 1 (20-stage1-foundations.sh).
+for host in "$DOMAIN" "www.$DOMAIN"; do
   echo "- $host: $(gcloud beta run domain-mappings describe --domain "$host" --region asia-southeast1 \
       --format='value(status.conditions[0].type,status.conditions[0].status,status.conditions[0].message)' 2>/dev/null || echo pending)"
 done
