@@ -49,3 +49,8 @@ output "web_url" {
   description = "The web service"
   value       = module.web_dev.uri
 }
+
+output "contact_key_name" {
+  description = "Version 1 of the contact key (PLATFORM_CONTACT_KEY of platform-api)"
+  value       = module.contact_key.key_version_name
+}
