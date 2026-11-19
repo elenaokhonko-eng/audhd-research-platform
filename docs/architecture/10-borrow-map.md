@@ -32,6 +32,7 @@ services/research-api/            Zones 2 and 3 (Stage 3)
 packages/substack-desk/           extractable
 packages/research-loop/           extractable (Stage 5)
 packages/consent-deid/            extractable core of M5 (Stage 3)
+packages/study-governance/        extractable: study pack schemas, rules, ethics templates, blocks, blueprints (Stage 3; templates earlier)
 packages/events/                  event schemas shared by Python and TypeScript
 agents/<team>/  agents/shared/    Genkit flows; gateway client, approvals, voice, writing checks
 instruments/  studies/            registry, templates, protocols
@@ -104,6 +105,11 @@ Nothing is borrowed for the entitlement engine, the webhook pipeline or the Payh
 | Sample size and study design reasoning | `scientific-agent-skills` | Skill | `skills/statistical-power`, `experimental-design` | `agents/study-design/skills/` | MIT |
 | Personality companion scale | IPIP items | Data | IPIP-NEO-120 or Mini-IPIP item text and keys | `instruments/ipip/` | Public domain |
 | Statute citations for consent texts | `sg-eli-mcp` | Tool | – | Developer use | Apache-2.0 |
+| Consent page, exit on every page, final confirmation, participant-held code | BPS *Ethics guidelines for internet-mediated research* (2021) | Pattern (guideline) | The behaviours, as engine blocks | `packages/study-governance/blocks/` | – |
+| Accessible consent and survey wording for autistic adults | AASPIRE practice-based guidelines (Nicolaidis et al. 2019) | Pattern (guideline) | The checklist the accessibility reviewer applies | `packages/study-governance/checklists/accessibility.md` | – |
+| Reporting a web survey | CHERRIES checklist | Pattern (checklist) | Item names; filled from engine counts | `packages/study-governance/reporting/web_survey.yaml` | – |
+| Linking anonymous waves | Self-generated identification codes (published methods) | Pattern | Element choice, tolerant matching, link-quality flag | `services/research-api/` linkage module | – |
+| One response per member without knowing which member | RSA blind signatures (RFC 9474); Privacy Pass (RFC 9576 to 9578) as the model for issue-and-redeem | Pattern, then a Dependency chosen and independently checked in the Stage 3 plan | The protocol shape | `services/research-api/` participation token | – |
 
 ## Stage 4 · Ops team
 
@@ -134,6 +140,21 @@ Nothing is borrowed for the entitlement engine, the webhook pipeline or the Payh
 | Cited answers over a full-text corpus | `lawplain` | Pattern (**ideas only: unlicensed**) | Loop design, saving threads by URL | `agents/synthesis/` | None |
 | Adaptive item selection, if wanted later | `catsim` | Dependency (later) | – | M3 | BSD-3-Clause |
 
+## Building with agents (tools for the build, not parts of the product)
+
+Reviewed on 2026-11-19 from the owner's newer forks. None is needed to start the Stage 1 build; the build uses Claude Code's own subagents and sessions ([swarm plan](../plans/stage-1-swarm-build-plan.md)).
+
+| Need | Source | How | Take | When | Licence |
+| --- | --- | --- | --- | --- | --- |
+| See where a lane's time and tokens go | `harness-profiler` | Tool | Its Claude Code hook, which records tool calls and draws the sequence of skills, subagents and contexts | Optional from Wave 2, on one lane first | MIT |
+| Read long files and papers with fewer tokens | `SparseReading` | Tool | Its reading layer for coding agents | Optional; first for the literature agents of Stage 2 | MIT |
+| A second opinion from another vendor's coding agent | `AutoSwarm` | Pattern, optional Tool | Its hand-off of approvals between agents (`approvals.py`) and small atomic records (`records.py`) as a model for the approval kit; the tool itself only if a cross-vendor reviewer is wanted | Later | MIT |
+| Tool servers for agents and for Desk's optional server | `python-sdk` (Model Context Protocol), `servers` | Dependency | The SDK; reference servers as examples | Stage 2 | MIT (the reference servers are moving to Apache-2.0) |
+| Scoring agent and retrieval answers | `trulens`, `uaef` | Tool (candidates) | Metric definitions; compare with the evaluation tools already listed for Stage 2 before adding one | Stage 2 spike | MIT; Apache-2.0 |
+| Synthetic browser journeys for the ops team | `browser-use` | Dependency (candidate) | Scripted journeys through sign-in and download | Stage 4; Playwright alone may be enough | MIT |
+| Retrieval with no model calls | `SAG-Wiki` | Pattern | Its index and retrieval design, as a comparison point for the keyword side of search | S1.7 | MIT |
+| Semantic graphs and property graphs side by side | `one-graph-two-worlds` | Pattern (reading) | The mapping between the two models, for the graph store's exit path | Stage 5 | MIT (code) |
+
 ## Reviewed and not used
 
 | Candidate | Why not |
@@ -148,6 +169,14 @@ Nothing is borrowed for the entitlement engine, the webhook pipeline or the Payh
 | `substack-cli-ts` advanced endpoints | Mostly guesses; only its client utilities are taken |
 | `substack-blog-automation` | Never calls Substack; nothing to take |
 | `PageLM`, `mirror`, `GenAI_Agents`, Rust `substack-cli` | Non-commercial, layered or missing licences; nothing needed from them |
+| `E2B` | Sandboxes for agents. Cloud sessions and Cloud Run jobs already isolate the work; a second sandbox vendor adds a processor |
+| `phoenix` | A trace screen under the Elastic License 2.0; traces already go to Cloud Trace at no cost |
+| `OmniRoute` | Stacks third parties' free tiers behind one gateway. Not for anything that carries members' data; the gateway decision stands ([ADR 0011](../adr/0011-self-hosted-model-gateway.md)) |
+| `ci` (a time-series forecasting model) | Custom licence with attribution and notification duties; revenue forecasting is not needed before Stage 2 and simpler methods come first |
+| `minimind`, `openai-cookbook`, `system-design-academy`, `fastapi` (already a dependency) | Learning material or already in use |
+| `codex`, `qwen-code` | Other vendors' coding agents; only relevant through `AutoSwarm`, above |
+| `claude-code` (the vendor's repository) | All rights reserved: examples to read, nothing to copy |
+| `craft-anything` | Site cloning; not relevant |
 
 ## `THIRD_PARTY.md` entry format
 
