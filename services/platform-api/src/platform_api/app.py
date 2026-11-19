@@ -47,6 +47,17 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
         def ping() -> dict[str, bool]:
             return {"pong": True}
 
-        # The push router (Task 4) is mounted here when deps.inbox is set.
+        # Mounted only here, and only when every dependency is supplied.
+        if (
+            deps is not None
+            and deps.inbox is not None
+            and deps.registry is not None
+            and deps.verify_push is not None
+        ):
+            from platform_api.shared.pubsub_push import build_push_router
+
+            app.include_router(
+                build_push_router(inbox=deps.inbox, registry=deps.registry, verify=deps.verify_push)
+            )
 
     return app

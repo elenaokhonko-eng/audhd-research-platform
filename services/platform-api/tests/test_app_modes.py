@@ -31,3 +31,20 @@ def test_docs_are_off_outside_local():
     c = TestClient(create_app(Settings(env="prod")))
     assert c.get("/docs").status_code == 404
     assert c.get("/openapi.json").status_code == 404
+
+
+def test_importing_main_needs_no_cloud_credentials():
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("GOOGLE_", "PLATFORM_"))}
+    env["PLATFORM_ENV"] = "local"
+    result = subprocess.run(
+        [sys.executable, "-c", "import platform_api.main"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr

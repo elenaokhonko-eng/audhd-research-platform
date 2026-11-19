@@ -1,7 +1,18 @@
 import json
 import logging
 
+import pytest
+
 from platform_api.shared.logging import configure_logging
+
+
+@pytest.fixture(autouse=True)
+def restore_root_logger():
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    yield
+    root.handlers[:] = handlers
+    root.setLevel(level)
 
 
 def test_logs_are_json_and_redact_emails(capsys):
