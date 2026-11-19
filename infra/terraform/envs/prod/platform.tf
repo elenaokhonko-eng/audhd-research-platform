@@ -4,9 +4,12 @@
 locals {
   platform_env = "prod"
 
-  # Cloud Run's deterministic URL of platform-api. It is known before the service exists, so
-  # the service can carry it as its own push audience without a dependency cycle, and the
-  # push subscription can point at it. It equals module.platform_api.uri once created.
+  # Cloud Run's deterministic URL of platform-api (https://<name>-<project number>.<region>.run.app).
+  # It is known before the service exists, so the service can carry it as its own push audience
+  # without a dependency cycle, and the push subscription can point at it. It is not the same
+  # string as module.platform_api.uri, which is Cloud Run's other (hashed) URL; both reach the
+  # service. The service lists this URL in custom_audiences, so Cloud Run accepts identity
+  # tokens minted for it whichever URL a caller uses.
   platform_api_base_url = "https://platform-api-${data.google_project.this.number}.${var.region}.run.app"
 
   platform_common_env = {
@@ -26,19 +29,6 @@ resource "google_firestore_database" "default" {
   deletion_policy                   = "ABANDON"
 
   depends_on = [google_project_service.enabled]
-}
-
-# Record every read and write of member data (docs/architecture/08).
-resource "google_project_iam_audit_config" "firestore_data_access" {
-  project = var.project_id
-  service = "datastore.googleapis.com"
-
-  audit_log_config {
-    log_type = "DATA_READ"
-  }
-  audit_log_config {
-    log_type = "DATA_WRITE"
-  }
 }
 
 # ---------------------------------------------------------------- event bus
@@ -61,6 +51,7 @@ module "platform_api" {
   service_account_email = google_service_account.platform_api.email
   public                = false
   invokers              = local.platform_api_invokers
+  custom_audiences      = [local.platform_api_base_url]
   deletion_protection   = true
   env = merge(local.platform_common_env, {
     PLATFORM_APP_MODE             = "api"

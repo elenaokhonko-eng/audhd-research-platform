@@ -11,7 +11,7 @@ Three steps need a browser, and each is marked **browser**. Everything else is a
 | Website, production | `web-prod` on Cloud Run → https://audhdneurobiology.org and https://www.audhdneurobiology.org |
 | Website, preview for testing | `web-dev` on Cloud Run → https://dev.audhdneurobiology.org (not indexed by search engines). Since Stage 1 it runs in the dev project: [stage-1-foundations.md](stage-1-foundations.md) |
 | Images | Artifact Registry `asia-southeast1-docker.pkg.dev/<project>/platform/web:<commit>` |
-| Deploys | Push to `main` → dev. Push a tag `v0.1.0` → prod, after you approve in GitHub |
+| Deploys | Superseded by [stage-1-foundations.md](stage-1-foundations.md): pushes to `integration/stage-1` deploy dev once `DEPLOY_DEV_ENABLED` is set (Gate 1). Push a tag `v0.1.0` → prod, after you approve in GitHub |
 | Health | `/api/healthz`, checked every 5 minutes; email alert if it fails for 5 minutes |
 | Budget | Monthly budget, emails at 50 %, 90 %, 100 % |
 | Code for all of it | `infra/terraform/`, `.github/workflows/`, `ops/scripts/` |

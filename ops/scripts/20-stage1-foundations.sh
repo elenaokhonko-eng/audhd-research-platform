@@ -10,7 +10,8 @@
 #   3. creates the dev Terraform state bucket
 #   4. Terraform in envs/prod: removes web-dev and dev.<domain> from prod, adds the platform
 #   5. Terraform in envs/dev: creates the dev project's services and takes over dev.<domain>
-#   6. builds the first platform-api image and deploys it to both projects (when the service exists)
+#   6. builds the website and deploys it to web-dev in the dev project; builds the first
+#      platform-api image and deploys it to both projects (when the service exists)
 #   7. creates the GitHub environments dev and production and sets their variables
 #   8. reminds you to make yourself the required reviewer of production
 # This script never prints a secret or your email address.
@@ -46,6 +47,8 @@ Terraform stopped with an error in $1 (the error is printed above).
   switched on and Google needs a minute. Wait one minute and re-run this script.
 - If it names a Pub/Sub service agent (gcp-sa-pubsub) that does not exist: wait one minute and
   re-run; the script asks Google to create that agent before each apply.
+- If you answered anything but yes at Terraform's prompt: nothing changed. Re-run this script
+  when you are ready.
 Re-running is safe: finished steps are skipped and Terraform applies only what is missing.
 EOF
   exit 1
@@ -132,7 +135,7 @@ else
   read -r -p "Move ${PROD_PROJECT} into the folder ${FOLDER_NAME} now? [y/N] " ANSWER
   if [[ "$ANSWER" == "y" || "$ANSWER" == "Y" ]]; then
     if ! gcloud beta projects move "$PROD_PROJECT" --folder="$FOLDER_ID" --quiet; then
-      stop "Google refused the move. Your account needs 'Project Mover' (roles/resourcemanager.projectMover) on the project and on the folder. Grant it and re-run, or re-run and answer N to continue without moving."
+      stop "Google refused the move. Your account needs 'Project Mover' (roles/resourcemanager.projectMover) on the project or its current parent, and permission to move projects into the folder ('Project Creator', roles/resourcemanager.projectCreator, on the folder ${FOLDER_NAME}). Grant them and re-run, or re-run and answer N to continue without moving."
     fi
   else
     echo "Not moved. Re-run the script later to move it; everything else continues."
@@ -162,8 +165,12 @@ if [[ "$CURRENT" != "$BILLING_ACCOUNT" ]]; then
 else
   echo "Billing is linked."
 fi
+# Switched on here, ahead of Terraform, so the first dev apply does not race APIs that were
+# switched on a moment earlier (service accounts, the GitHub identity, Pub/Sub, Firestore).
 gcloud services enable cloudresourcemanager.googleapis.com serviceusage.googleapis.com \
   storage.googleapis.com artifactregistry.googleapis.com run.googleapis.com \
+  iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com \
+  pubsub.googleapis.com firestore.googleapis.com \
   --project="$DEV_PROJECT"
 
 # ---------------------------------------------------------------- 3. dev state bucket
@@ -235,27 +242,45 @@ DEV_WIF="$(tf_out "$DEV_DIR" wif_provider)"
 DEV_DEPLOYER="$(tf_out "$DEV_DIR" deployer_service_account)"
 DEV_RUNTIME="$(tf_out "$DEV_DIR" web_runtime_service_account)"
 
-# ---------------------------------------------------------------- 6. first image
-say "6/8 First platform-api image"
+# ---------------------------------------------------------------- 6. first images
+say "6/8 First images: web-dev, then platform-api"
+TAG="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
+gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+push_image() { # push_image image
+  local i
+  for i in 1 2 3 4 5; do
+    docker push "$1" && return 0
+    [[ $i == 5 ]] && stop "Pushing $1 failed five times. Re-run the script."
+    echo "push failed, retrying in $((i * 10))s"; sleep $((i * 10))
+  done
+}
+
+# The website in the dev project. Terraform created web-dev with Google's placeholder image;
+# CI deploys to it only after Gate 1, so the script puts the current site there now.
+WEB_IMAGE="${DEV_REGISTRY}/web:${TAG}"
+docker build -t "$WEB_IMAGE" "$ROOT/apps/web"
+push_image "$WEB_IMAGE"
+gcloud run deploy web-dev --image="$WEB_IMAGE" --region="$REGION" --project="$DEV_PROJECT" \
+  --service-account="$DEV_RUNTIME" --quiet
+echo "web-dev runs the website at commit ${TAG}."
+
+PLATFORM_IMAGE_SKIPPED=""
 if [[ ! -f "$ROOT/services/platform-api/Dockerfile" ]]; then
+  PLATFORM_IMAGE_SKIPPED="yes"
   cat <<EOF
 The platform-api service is not in this branch yet (services/platform-api/Dockerfile is
 missing), so its image cannot be built now. Nothing is broken: Terraform created the services
-and the job with Google's placeholder image. The first CI deploy, or a re-run of this script
-once the service has been merged, puts the real image in place. Continuing with step 7.
+and the job with Google's placeholder image. Re-run this script once Core's service code and
+the platform-api image (S1.0 Task 6) have been merged; the platform-api CI deploy arrives with
+that task too. Continuing with step 7.
 EOF
 else
-  TAG="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
-  gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
   docker build -t "platform-api:${TAG}" "$ROOT/services/platform-api"
   deploy_platform() { # deploy_platform project registry
     local image="$2/platform-api:${TAG}"
     docker tag "platform-api:${TAG}" "$image"
-    for i in 1 2 3 4 5; do
-      docker push "$image" && break
-      [[ $i == 5 ]] && stop "Pushing the image to $2 failed five times. Re-run the script."
-      echo "push failed, retrying in $((i * 10))s"; sleep $((i * 10))
-    done
+    push_image "$image"
     # Only the image changes; every other setting belongs to Terraform.
     for svc in platform-api platform-hooks; do
       gcloud run deploy "$svc" --image="$image" --region="$REGION" --project="$1" --quiet
@@ -313,9 +338,21 @@ EOF
 fi
 
 say "Done"
-cat <<EOF
+if [[ -n "$PLATFORM_IMAGE_SKIPPED" ]]; then
+  cat <<EOF
+platform-api still runs Google's placeholder image, so the smoke test cannot pass yet. It runs
+only after Core's service code and the platform-api image (S1.0 Task 6) have landed: then
+re-run this script (step 6 deploys the image) and run
+  bash ops/scripts/smoke-platform.sh ${DEV_PROJECT}
+Now both of these should say "No changes":
+EOF
+else
+  cat <<EOF
 Next: bash ops/scripts/smoke-platform.sh ${DEV_PROJECT}
 Then both of these should say "No changes":
+EOF
+fi
+cat <<EOF
   terraform -chdir=infra/terraform/envs/prod plan
   terraform -chdir=infra/terraform/envs/dev plan
 EOF

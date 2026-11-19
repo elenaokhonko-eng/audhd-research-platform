@@ -23,32 +23,38 @@ locals {
 resource "google_service_account" "web_runtime" {
   account_id   = "web-runtime"
   display_name = "Website runtime (calls platform-api only)"
+  depends_on   = [google_project_service.enabled]
 }
 
 # Identity GitHub Actions borrows through Workload Identity Federation. No key file exists.
 resource "google_service_account" "deployer" {
   account_id   = "github-deployer"
   display_name = "GitHub Actions deployer"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "platform_api" {
   account_id   = "platform-api"
   display_name = "platform-api service"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "platform_hooks" {
   account_id   = "platform-hooks"
   display_name = "platform-hooks webhook receiver (public)"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "job_selfcheck" {
   account_id   = "job-selfcheck"
   display_name = "platform-selfcheck job"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "pubsub_push" {
   account_id   = "pubsub-push"
   display_name = "Pub/Sub push to platform-api"
+  depends_on   = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------- platform-api
@@ -163,10 +169,13 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   workload_identity_pool_provider_id = "github-oidc"
   display_name                       = "GitHub OIDC"
 
+  # environment is present only when the GitHub job names an environment, so it is mapped
+  # with a fallback rather than read directly (as in envs/prod/identities.tf).
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref"
+    "google.subject"        = "assertion.sub"
+    "attribute.repository"  = "assertion.repository"
+    "attribute.ref"         = "assertion.ref"
+    "attribute.environment" = "has(assertion.environment) ? assertion.environment : \"none\""
   }
   # Only this one repository can exchange a GitHub token for a Google token.
   attribute_condition = "assertion.repository == \"${var.github_repository}\""
@@ -176,12 +185,14 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   }
 }
 
-# Any workflow of this repository may deploy to dev (the provider's condition above limits it
-# to this repository). Production is restricted further in envs/prod/identities.tf.
+# The dev deployer can be borrowed only by a workflow of this repository (provider condition
+# above) running a job in the GitHub environment "dev". A job without that environment, such
+# as a pull request check, gets no Google token for this project. Production is restricted
+# further in envs/prod/identities.tf.
 resource "google_service_account_iam_member" "github_impersonates_deployer" {
   service_account_id = google_service_account.deployer.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_repository}"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/dev"
 }
 
 # ---------------------------------------------------------------- buckets
