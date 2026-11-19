@@ -4,6 +4,7 @@ import type { Access, Member } from "@/lib/platform-api/types";
 export type WelcomeView =
   | { kind: "terms" }
   | { kind: "paid"; grantUntil: string | null; includedWhilePaying: boolean }
+  | { kind: "other_plan"; planInterval: "month" | "year" }
   | { kind: "free"; checking: boolean };
 
 export function welcomeView(me: { member: Member; access: Access }, check: string | null): WelcomeView {
@@ -22,6 +23,10 @@ export function welcomeView(me: { member: Member; access: Access }, check: strin
       ),
     };
   }
+  const status = me.access.reasons.find(
+    (r) => r.label === "substack_status" && (r.status === "active" || r.status === "grace") && r.plan_interval !== null,
+  );
+  if (status?.plan_interval) return { kind: "other_plan", planInterval: status.plan_interval };
   return { kind: "free", checking: check === "started" };
 }
 

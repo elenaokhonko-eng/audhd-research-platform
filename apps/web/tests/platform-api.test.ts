@@ -101,14 +101,21 @@ describe("FakePlatformApi", () => {
   it("holds all eight fixture people", async () => {
     expect(people.map((p) => p.name)).toEqual(["ana", "bo", "cy", "di", "ed", "fay", "gus", "hal"]);
     const fake = new FakePlatformApi();
-    for (const name of ["cy", "gus"]) {
+    const gus = await fake.resolveSession("fake-token:gus", null);
+    expect(gus.access.tier).toBe("paid");
+    expect(gus.access.reasons).toMatchObject([{ label: "substack_subscription", plan_interval: "year" }]);
+    for (const name of ["hal", "cy"]) {
       const r = await fake.resolveSession(`fake-token:${name}`, null);
-      expect(r.access.tier).toBe("paid");
-      expect(r.access.reasons.map((x) => x.label)).toEqual(["substack_subscription"]);
+      expect(r.access.tier).toBe("free");
+      expect(r.access.reasons).toMatchObject([
+        { grant: "status:substack_paid", source: "substack_stripe", label: "substack_status", status: "active", plan_interval: "month" },
+      ]);
     }
     const di = await fake.resolveSession("fake-token:di", null);
-    expect(di.access.tier).toBe("paid");
-    expect(di.access.reasons).toMatchObject([{ label: "substack_status", source: "substack_roster", status: "active" }]);
+    expect(di.access.tier).toBe("free");
+    expect(di.access.reasons).toMatchObject([
+      { grant: "status:substack_paid", source: "substack_roster", label: "substack_status", status: "active", plan_interval: null },
+    ]);
   });
   it("rejects a session that was never resolved as unauthenticated", async () => {
     const fake = new FakePlatformApi();

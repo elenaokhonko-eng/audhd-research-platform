@@ -47,6 +47,24 @@ export function WelcomeBody({ view }: { view: WelcomeView | { kind: "unavailable
       </section>
     );
   }
+  if (view.kind === "other_plan") {
+    return (
+      <section className="section-shell join">
+        <h1>{view.planInterval === "month" ? "You are on the monthly plan." : "You are on the annual plan."}</h1>
+        {view.planInterval === "month" ? <p>Full access to the platform comes with the annual plan.</p> : null}
+        <p>Until you change your plan, you have the free workspace.</p>
+        <p>
+          <Link href="/upgrade">See how to change your plan</Link>
+        </p>
+        <p>
+          <Link className="button button-primary" href="/member">
+            Open your workspace
+          </Link>
+        </p>
+        <SignOutButton />
+      </section>
+    );
+  }
   return (
     <section className="section-shell join">
       <h1>You are in as a free member.</h1>
