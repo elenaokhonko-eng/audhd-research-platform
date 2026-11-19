@@ -48,7 +48,7 @@ read_config() {
   local status
   status="$(call GET "$config_url")" || stop "Could not reach Google (the request itself failed). Check your connection and re-run."
   if [[ "$status" != "200" ]]; then
-    stop "Google answered $status when reading the sign-in settings of $project. If it is 403, your account needs the role 'Firebase Authentication Admin' on the project and the Identity Toolkit API must be on (Terraform enables it). If it is 404, check the project id. Then re-run. If it keeps failing, use the console instead: Firebase console > Authentication > Templates > edit any template > "customize domain", following docs/runbooks/stage-1-sign-in.md."
+    stop "Google answered $status when reading the sign-in settings of $project. If it is 403, your account needs the role 'Firebase Authentication Admin' on the project and the Identity Toolkit API must be on (Terraform enables it). If it is 404, check the project id. Then re-run. If it keeps failing, use the console instead: Firebase console > Authentication > Templates > edit any template > 'customize domain', following docs/runbooks/stage-1-sign-in.md."
   fi
   config="$(cat "$body_file")"
 }
@@ -63,7 +63,7 @@ post_verify() { # post_verify VERIFY|APPLY
   fi
   status="$(call POST "$verify_url" "$body")" || stop "Could not reach Google while sending the $1 request. Re-run."
   if [[ "$status" != "200" ]]; then
-    stop "Google answered HTTP $status to the $1 request for $domain. Google may not offer this method to your project (it is not in the published API description), so this script cannot always do the step. Do it in the console instead: Firebase console > Authentication > Templates > edit any template > "customize domain", following docs/runbooks/stage-1-sign-in.md. Then re-run this script to check the result."
+    stop "Google answered HTTP $status to the $1 request for $domain. Google may not offer this method to your project (it is not in the published API description), so this script cannot always do the step. Do it in the console instead: Firebase console > Authentication > Templates > edit any template > 'customize domain', following docs/runbooks/stage-1-sign-in.md. Then re-run this script to check the result."
   fi
 }
 

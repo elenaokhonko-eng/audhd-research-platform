@@ -30,6 +30,7 @@ jobs:
       # -S warning: the older scripts carry one style-level note (SC2016) that is intentional.
       - run: shellcheck -S warning ops/scripts/*.sh ops/scripts/tests/*.sh
       - run: bash ops/scripts/tests/test-30.sh
+      - run: bash ops/scripts/tests/test-31.sh
 
   test:
     runs-on: ubuntu-latest
