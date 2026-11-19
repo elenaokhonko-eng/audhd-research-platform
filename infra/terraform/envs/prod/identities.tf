@@ -23,32 +23,38 @@ locals {
 resource "google_service_account" "web_runtime" {
   account_id   = "web-runtime"
   display_name = "Website runtime (calls platform-api only)"
+  depends_on   = [google_project_service.enabled]
 }
 
 # Identity GitHub Actions borrows through Workload Identity Federation. No key file exists.
 resource "google_service_account" "deployer" {
   account_id   = "github-deployer"
   display_name = "GitHub Actions deployer"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "platform_api" {
   account_id   = "platform-api"
   display_name = "platform-api service"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "platform_hooks" {
   account_id   = "platform-hooks"
   display_name = "platform-hooks webhook receiver (public)"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "job_selfcheck" {
   account_id   = "job-selfcheck"
   display_name = "platform-selfcheck job"
+  depends_on   = [google_project_service.enabled]
 }
 
 resource "google_service_account" "pubsub_push" {
   account_id   = "pubsub-push"
   display_name = "Pub/Sub push to platform-api"
+  depends_on   = [google_project_service.enabled]
 }
 
 # ---------------------------------------------------------------- platform-api
@@ -101,6 +107,20 @@ resource "google_pubsub_subscription_iam_member" "pubsub_agent_subscribes_push" 
   subscription = module.event_bus.push_subscription
   role         = "roles/pubsub.subscriber"
   member       = local.pubsub_service_agent
+}
+
+# ---------------------------------------------------------------- audit logs
+# Record every read and write of member data (docs/architecture/08).
+resource "google_project_iam_audit_config" "firestore_data_access" {
+  project = var.project_id
+  service = "datastore.googleapis.com"
+
+  audit_log_config {
+    log_type = "DATA_READ"
+  }
+  audit_log_config {
+    log_type = "DATA_WRITE"
+  }
 }
 
 # ---------------------------------------------------------------- github-deployer

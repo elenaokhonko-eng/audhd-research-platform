@@ -3,7 +3,7 @@ output "web_dev_url" {
 }
 
 output "platform_api_url" {
-  description = "platform-api (private); also the audience of identity tokens sent to it"
+  description = "platform-api (private), its Cloud Run URL. Pub/Sub push tokens use the deterministic URL (local.platform_api_base_url) as their audience, not this one"
   value       = module.platform_api.uri
 }
 

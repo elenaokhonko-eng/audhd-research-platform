@@ -1,6 +1,7 @@
 # Dev root: its own project (audhd-neurobiology-dev), applied after prod. APIs, image
-# registry, the dev website and its host dev.<domain>. No budget (the budget sits on the
-# billing account, in prod) and no apex records. platform.tf adds platform-api, the event bus
+# registry, the dev website and its host dev.<domain>. No budget: the one budget is declared in
+# envs/prod/monitoring.tf and its filter covers the prod project only, so dev spending is not
+# watched by it. No apex records. platform.tf adds platform-api, the event bus
 # and Firestore; every service account and permission is in identities.tf.
 
 locals {

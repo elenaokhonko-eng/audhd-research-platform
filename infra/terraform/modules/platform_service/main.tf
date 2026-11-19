@@ -14,6 +14,9 @@ resource "google_cloud_run_v2_service" "this" {
   # A private service keeps the check and names its callers below.
   invoker_iam_disabled = var.public
 
+  # Extra audiences Cloud Run accepts in identity tokens, besides its own URLs.
+  custom_audiences = var.custom_audiences
+
   template {
     service_account = var.service_account_email
 

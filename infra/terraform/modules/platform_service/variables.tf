@@ -47,3 +47,9 @@ variable "deletion_protection" {
   type        = bool
   default     = false
 }
+
+variable "custom_audiences" {
+  description = "Extra audiences Cloud Run accepts in identity tokens sent to the service (for example the deterministic URL used as the Pub/Sub push audience)"
+  type        = list(string)
+  default     = []
+}
