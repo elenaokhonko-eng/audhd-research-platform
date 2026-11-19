@@ -108,7 +108,7 @@ Analyst, Revenue manager and Store manager, described in [03 §7](03-commerce-an
 
 ### Study-design team (M11) · Stages 3 and 5
 
-The survey template agent ([07 §6](07-research-loop-and-evidence.md)) and, from Stage 5, a protocol drafter (hypotheses, sample size, analysis plan, registration text).
+Six narrow roles that prepare a study pack ([11](11-study-governance-and-survey-templates.md)): a study framer, an ethics pack drafter, a survey composer (the survey template agent of [07 §6](07-research-loop-and-evidence.md)), and three checkers with fresh context for methods, privacy and accessibility. They work from templates, and a rule set run as code decides whether a pack is complete. None of them can choose an ethics route, record an approval or open a study. Stage 3 runs them on request; Stage 5 drives them from gaps and findings.
 
 ### Synthesis team (M8) · Stage 5
 
