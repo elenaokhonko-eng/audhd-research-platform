@@ -37,6 +37,8 @@ is monthly. Any other plan text is counted as an unknown plan. The report lists 
 `complete: false` means the file looks cut off: its last row has fewer or more cells than the
 header, or a quoted cell is still open at the end. The rows read before that point are kept for
 the dry-run report, and nothing is applied. A short row anywhere else is only rejected and counted.
+Any malformed quoting (not only an unclosed quote at the end) stops the read at that point and
+makes the listing `complete: false`.
 
 The report is safe to print. It holds counts, plus any `Type` or
 `Stripe plan` value cut to 40 characters (shown as `<redacted>` if it holds an `@`). It never

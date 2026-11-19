@@ -84,7 +84,10 @@ def _read_date(cell: str) -> tuple[datetime | None, bool]:
             return None, True
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC), False
+    try:
+        return parsed.astimezone(UTC), False
+    except (OverflowError, ValueError):  # e.g. year 1 or 9999 does not fit in UTC
+        return None, True
 
 
 def _rows(reader: Iterator[list[str]], cut: list[bool]) -> Iterator[tuple[list[str], bool]]:
@@ -111,12 +114,19 @@ def _rows(reader: Iterator[list[str]], cut: list[bool]) -> Iterator[tuple[list[s
 
 
 def parse_export(text: str, exported_at: datetime) -> tuple[DirectoryListing, ExportReport]:
-    text = text.removeprefix("﻿")
+    text = text.removeprefix("\ufeff")
     first_line = text.split("\n", 1)[0]
     sep = "\t" if "\t" in first_line else ","
     reader = csv.reader(io.StringIO(text, newline=""), delimiter=sep, strict=True)
 
-    header = next(reader, None)
+    header: list[str] | None = None
+    unreadable_first_line = False
+    try:
+        header = next(reader, None)
+    except csv.Error:
+        unreadable_first_line = True
+    if unreadable_first_line:  # raised outside the except block: no chained content
+        raise ExportHeaderError(REQUIRED_COLUMNS, "The export's first line cannot be read")
     names = [h.strip() for h in header] if header else []
     missing = tuple(c for c in REQUIRED_COLUMNS if c not in names)
     if missing:
@@ -224,10 +234,13 @@ class FileDirectory:
 
     def list_paid(self) -> DirectoryListing:
         require("subscriber_directory.file")
+        text: str | None = None
         try:
             text = self._data.decode("utf-8", errors="strict")
         except UnicodeDecodeError:
-            raise ExportHeaderError((), "The export is not a UTF-8 text file") from None
+            pass  # the error holds the whole file; raise below, outside this block
+        if text is None:
+            raise ExportHeaderError((), "The export is not a UTF-8 text file")
         listing, self._report = parse_export(text, self._exported_at)
         return listing
 

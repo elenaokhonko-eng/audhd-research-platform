@@ -26,7 +26,7 @@ def test_the_separator_is_detected(sep):
 
 
 def test_columns_are_found_by_name_in_any_order_and_a_bom_is_ignored():
-    text = "﻿" + make_export([ANA], header=list(reversed(HEADER)))
+    text = "\ufeff" + make_export([ANA], header=list(reversed(HEADER)))
     assert len(parse_export(text, NOW)[0].records) == 1
 
 
@@ -181,3 +181,25 @@ def test_file_directory_is_a_subscriber_directory_with_a_report():
 def test_bytes_that_are_not_text_are_refused():
     with pytest.raises(ExportHeaderError, match="UTF-8"):
         FileDirectory(b"\xff\xfe\x00", NOW).list_paid()
+
+
+def test_a_decoding_error_chains_no_file_content():
+    data = b"Email,Type\r\nsomeone@example.org,Paid\xff"
+    with pytest.raises(ExportHeaderError, match="UTF-8") as err:
+        FileDirectory(data, NOW).list_paid()
+    assert err.value.__context__ is None and err.value.__cause__ is None
+    assert err.value.missing == ()
+
+
+@pytest.mark.parametrize("cell", ["0001-01-01T00:00:00+05:00", "9999-12-31T23:00:00-05:00"])
+def test_an_out_of_range_date_is_unreadable_and_the_row_is_kept(cell):
+    listing, report = parse_export(make_export([paid(**{"Expiration date": cell})]), NOW)
+    assert len(listing.records) == 1 and listing.records[0].paid_until is None
+    assert report.unreadable_dates == 1
+
+
+def test_an_unreadable_first_line_is_a_header_error_with_no_chained_content():
+    with pytest.raises(ExportHeaderError, match="first line cannot be read") as err:
+        parse_export('"Email,Type', NOW)
+    assert err.value.__context__ is None and err.value.__cause__ is None
+    assert err.value.missing == ("Email", "Type")
