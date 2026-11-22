@@ -528,3 +528,23 @@ def test_a_rate_limit_expires_two_days_after_its_window_ends():
     limiter.hit("support:u-ana", 3, timedelta(days=1), T0 + timedelta(hours=1))
     # Windows are aligned to the epoch: this one runs from T0 to T0 + 1 day.
     assert _expiries(db, "rate_limits") == [T0 + timedelta(days=3)]
+
+
+def test_a_transaction_that_gives_up_is_a_runtime_error_not_a_refusal():
+    from platform_api.adapters import in_transaction
+
+    db = FakeFirestore()
+    db.abort_commits = True
+    store = FirestoreEntitlementStore(db)
+    with pytest.raises(RuntimeError) as err:
+        store.merge_contact("c1", lambda held: _contact_for_abort("c1"))
+    assert not isinstance(err.value, ValueError)
+    # A ValueError of the work itself is still a ValueError.
+    with pytest.raises(ValueError):
+        in_transaction(FakeFirestore(), lambda tx: (_ for _ in ()).throw(ValueError("refused")))
+
+
+def _contact_for_abort(contact_id: str) -> Any:
+    from tests.entitlements.store_conformance import _contact
+
+    return _contact(contact_id)

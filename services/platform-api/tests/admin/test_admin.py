@@ -281,13 +281,13 @@ def test_a_refused_call_by_the_owner_is_audited_with_its_outcome(admin, ent):
     assert admin.post("/v1/admin/entitlements", json=bad).status_code == 422
     from platform_api.entitlements.public import contact_id_for
 
-    assert route_entries(ent, contact_id_for(EMAIL["di"])) == [
-        ("owner:acc-1", "entitlement.granted", "422")
-    ]
+    # A bad grant name is refused before a contact exists, so the entry names no contact.
+    assert route_entries(ent, contact_id_for(EMAIL["di"])) == []
     no_end = {"email": EMAIL["di"], "grant": "tier:paid", "reason": "r"}
     assert admin.post("/v1/admin/entitlements", json=no_end).status_code == 422
     assert admin.put("/v1/admin/campaigns", json={"campaigns": []}).status_code == 422
     assert route_entries(ent, "admin") == [
+        ("owner:acc-1", "entitlement.granted", "422"),
         ("owner:acc-1", "entitlement.granted", "422"),
         ("owner:acc-1", "campaign.written", "422"),
     ]
@@ -309,3 +309,15 @@ def test_a_route_without_an_audit_action_cannot_be_added():
         @router.get("/v1/admin/undeclared")
         def undeclared():
             return {}
+
+
+@pytest.mark.parametrize("name", ["status:substack_paid", "item:", "item:  ", "paid"])
+def test_a_grant_with_a_bad_name_is_refused_before_any_contact_is_made(admin, ent, name):
+    from platform_api.entitlements import public as ent_api
+
+    r = admin.post(
+        "/v1/admin/entitlements",
+        json={"email": EMAIL["di"], "grant": name, "months": 6, "reason": "comp reader"},
+    )
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation_failed"
+    assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None

@@ -2,7 +2,9 @@
 
 It covers only what the adapters call: documents (get, set, create, update with dotted
 paths and Increment), auto ids, equality and `in` filters, `order_by`, `count`, and
-transactions run through the real `firestore.transactional`. It checks the adapters'
+transactions run through the real `firestore.transactional` (with `abort_commits`, every
+commit is aborted, so the transaction gives up as it would under endless contention). It does
+not model conflicts between transactions or check that reads come before writes. It checks the adapters'
 logic here; the emulator in CI checks their use of the real API.
 """
 
@@ -10,7 +12,7 @@ import copy
 import itertools
 from typing import Any
 
-from google.api_core.exceptions import AlreadyExists, NotFound
+from google.api_core.exceptions import Aborted, AlreadyExists, NotFound
 from google.cloud.firestore import Increment
 
 _ids = itertools.count(1)
@@ -131,9 +133,10 @@ class Transaction:
     _read_only = False
     _max_attempts = 1
 
-    def __init__(self) -> None:
+    def __init__(self, abort: bool = False) -> None:
         self._id: bytes | None = None
         self._staged: list[tuple[str, DocRef, dict[str, Any]]] = []
+        self._abort = abort  # every commit is aborted, as under endless contention
 
     @property
     def in_progress(self) -> bool:
@@ -147,6 +150,8 @@ class Transaction:
         self._id = b"tx"
 
     def _commit(self) -> list[Any]:
+        if self._abort:
+            raise Aborted("contention")
         for kind, ref, data in self._staged:
             getattr(ref, kind)(data)
         self._clean_up()
@@ -170,9 +175,10 @@ class FakeFirestore:
         self.docs: dict[tuple[str, str], dict[str, Any]] = {}
         self.reads: list[str] = []
         self.writes: list[str] = []
+        self.abort_commits = False
 
     def collection(self, name: str) -> Collection:
         return Collection(self, name)
 
     def transaction(self) -> Transaction:
-        return Transaction()
+        return Transaction(abort=self.abort_commits)

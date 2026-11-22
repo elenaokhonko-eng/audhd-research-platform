@@ -182,11 +182,14 @@ def resolve_session(id_token: str, campaign_slug: str | None, now: datetime) -> 
             )
         )
     elif owns_contact:
-        entitlements._announce_tier_change(
+        entitlements.announce_tier_change(
             contact_id, uid, tier_before, now, run_id="session", reason="sign_in"
         )
     check, checked_at = _check(uid, now)
-    cookie = runtime.provider.create_session_cookie(id_token, runtime.session_ttl)
+    try:
+        cookie = runtime.provider.create_session_cookie(id_token, runtime.session_ttl)
+    except InvalidToken:
+        raise Unauthenticated("the sign-in was refused") from None
     return SessionResult(
         session=SessionCookie(cookie=cookie, expires_at=now + runtime.session_ttl),
         member=_view(member),

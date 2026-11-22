@@ -276,3 +276,14 @@ def test_terms_accepted_during_a_sign_in_are_kept(world, idn, monkeypatch):
     r = sign_in(world, "ana")
     assert r.status_code == 200 and r.json()["member"]["terms"]["accepted"] is True
     assert idn.members.get("u-ana").terms_accepted.terms_version == "t1"
+
+
+def test_a_token_the_provider_will_not_turn_into_a_cookie_is_refused(world, idn, monkeypatch):
+    from platform_api.identity.provider import InvalidToken
+
+    def refuse(id_token, ttl):
+        raise InvalidToken("the sign-in token was refused")
+
+    monkeypatch.setattr(idn.provider, "create_session_cookie", refuse)
+    r = sign_in(world, "ana")
+    assert r.status_code == 401 and r.json()["error"]["code"] == "unauthenticated"

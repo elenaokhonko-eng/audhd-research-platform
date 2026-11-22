@@ -20,11 +20,23 @@ T = TypeVar("T")
 
 
 def in_transaction(client: "firestore.Client", work: "Callable[[firestore.Transaction], T]") -> T:
-    """Run `work` in a Firestore transaction, retried on contention; `work` must be pure."""
+    """Run `work` in a Firestore transaction, retried on contention; `work` must be pure.
+
+    A transaction that gives up after its retries is a RuntimeError: the library raises it as
+    ValueError, which the routes would answer as a refusal (422) instead of a fault.
+    """
     from google.cloud import firestore
 
-    result: T = firestore.transactional(work)(client.transaction())
+    try:
+        result: T = firestore.transactional(work)(client.transaction())
+    except ValueError as exc:
+        if str(exc).startswith(_GAVE_UP):
+            raise RuntimeError("a Firestore transaction gave up after its retries") from exc
+        raise
     return result
+
+
+_GAVE_UP = "Failed to commit transaction"  # the start of the library's message
 
 
 class Lazy:

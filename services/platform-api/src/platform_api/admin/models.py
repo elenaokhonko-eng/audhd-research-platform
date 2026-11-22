@@ -2,7 +2,15 @@
 
 from typing import Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from platform_api.entitlements.public import Campaign
 
@@ -14,7 +22,8 @@ class SearchBody(BaseModel):
 
 
 class GrantBody(BaseModel):
-    """Exactly one end: `months` from now, or a date `valid_until`."""
+    """A grant name the store accepts, and exactly one end: `months` from now, or a date
+    `valid_until`."""
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -23,6 +32,14 @@ class GrantBody(BaseModel):
     months: int | None = Field(default=None, ge=1)
     valid_until: AwareDatetime | None = None
     reason: str = Field(min_length=1)
+
+    @field_validator("grant")
+    @classmethod
+    def _a_grant_name(cls, grant: str) -> str:
+        """`tier:paid` or `item:<sku>`, checked before any contact is made for the address."""
+        if grant != "tier:paid" and not (grant.startswith("item:") and grant[5:].strip()):
+            raise ValueError("a grant is tier:paid or item:<sku>")
+        return grant
 
     @model_validator(mode="after")
     def _one_end(self) -> Self:

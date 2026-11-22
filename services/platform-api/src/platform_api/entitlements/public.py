@@ -39,6 +39,7 @@ __all__ = [
     "Decision",
     "Reason",
     "access_for",
+    "announce_tier_change",
     "apply_plan",
     "existing_for",
     "Source",
@@ -172,7 +173,7 @@ def _member_tier(contact: Contact | None, now: datetime) -> tuple[str | None, st
     return (uid, access_for(uid, now).tier if uid else None)
 
 
-def _announce_tier_change(
+def announce_tier_change(
     contact_id: str,
     uid: str | None,
     before: str | None,
@@ -294,7 +295,7 @@ def grant(
             now=now,
         )
     )
-    _announce_tier_change(contact_id, uid, tier_before, now)
+    announce_tier_change(contact_id, uid, tier_before, now)
     return entitlement.entitlement_id
 
 
@@ -333,7 +334,7 @@ def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
             now=now,
         )
     )
-    _announce_tier_change(found.contact_id, uid, tier_before, now)
+    announce_tier_change(found.contact_id, uid, tier_before, now)
 
 
 def launch_config() -> LaunchConfig:
@@ -623,7 +624,7 @@ def _follow_up(
 
         def announce(contact_id: str = contact_id, uid: str = uid, tier: str = tier) -> int:
             return int(
-                _announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
+                announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
             )
 
         tier_changes += _guarded(announce, guarded)

@@ -309,3 +309,7 @@ def test_a_record_a_run_ends_during_a_claim_stays_ended(ent, monkeypatch):
     assert (held.status, held.member_uid) == ("expired", "u-bo")
     assert claimed == [held.entitlement_id]
     assert ent_api.access_for("u-bo", T0).tier == "free"
+
+
+def test_the_tier_announcement_is_part_of_the_public_port():
+    assert "announce_tier_change" in ent_api.__all__ and callable(ent_api.announce_tier_change)
