@@ -30,18 +30,13 @@ def _fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def ent() -> Iterator[Any]:
+def ent(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from platform_api.entitlements import runtime as runtime_module
     from platform_api.entitlements.keys import LocalContactKey
-    from platform_api.entitlements.runtime import Runtime, get_runtime, set_runtime
+    from platform_api.entitlements.runtime import Runtime
     from platform_api.entitlements.store import InMemoryStore
     from platform_api.shared.bus import InMemoryBus
 
-    try:
-        previous: Runtime | None = get_runtime()
-    except RuntimeError:
-        previous = None
     runtime = Runtime(InMemoryStore(), LocalContactKey(b"test"), InMemoryBus())
-    set_runtime(runtime)
-    yield runtime
-    if previous is not None:
-        set_runtime(previous)
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    return runtime

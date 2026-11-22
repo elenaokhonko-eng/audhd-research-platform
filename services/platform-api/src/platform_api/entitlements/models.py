@@ -1,10 +1,9 @@
 """Entitlement records. Frozen; every datetime is timezone-aware."""
 
 import hashlib
-from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 Source = Literal["substack_stripe", "substack_roster", "platform_stripe", "payhip", "grant"]
 Status = Literal["active", "grace", "expired", "revoked"]
@@ -22,10 +21,10 @@ class Entitlement(BaseModel):
     source_ref: str
     access_scope: Literal["substack+platform", "platform_only"] | None
     plan_interval: PlanInterval | None
-    valid_from: datetime | None
-    valid_until: datetime | None
+    valid_from: AwareDatetime | None
+    valid_until: AwareDatetime | None
     status: Status
-    updated_at: datetime
+    updated_at: AwareDatetime
     updated_by: str  # "run:<run_id>", "member:<uid>", "owner:<account id>", "policy:<slug>"
 
 
@@ -41,11 +40,13 @@ class SourceState(BaseModel):
     )  # used only to compute contact_id; never stored on the entitlement
     grant: str  # "tier:paid" or "status:substack_paid", chosen per plan interval by settings
     status: Literal["active", "grace", "expired"]
-    started_at: datetime | None  # when the source says the paid period began; becomes valid_from
-    valid_until: datetime | None
+    started_at: (
+        AwareDatetime | None
+    )  # when the source says the paid period began; becomes valid_from
+    valid_until: AwareDatetime | None
     plan_interval: Literal["month", "year"] | None
     access_scope: Literal["substack+platform", "platform_only"]
-    provider_time: datetime
+    provider_time: AwareDatetime
 
 
 class ChannelsPatch(BaseModel):
@@ -66,14 +67,14 @@ class Contact(BaseModel):
     email: str = Field(repr=False)
     channels: dict[str, dict[str, object]]
     invite: dict[str, object]  # {"campaign": slug or None, "state": "none" | "accepted"}
-    created_at: datetime
-    updated_at: datetime
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
 
 
 class AuditEntry(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    at: datetime
+    at: AwareDatetime
     actor: str  # same form as Entitlement.updated_by
     action: str
     subject: str  # an id, never an address

@@ -1,4 +1,5 @@
 import logging
+from datetime import UTC
 
 import pytest
 
@@ -44,3 +45,26 @@ def test_entitlement_ids_are_deterministic_and_separate_people():
     a = entitlement_id("substack_stripe", "sub_1", "c1", "tier:paid")
     assert a == entitlement_id("substack_stripe", "sub_1", "c1", "tier:paid") and len(a) == 32
     assert a != entitlement_id("substack_stripe", "sub_1", "c2", "tier:paid")
+
+
+def test_a_naive_timestamp_is_refused_and_the_error_does_not_show_the_address():
+    from datetime import datetime
+
+    from pydantic import ValidationError
+
+    from platform_api.entitlements.models import SourceState
+
+    with pytest.raises(ValidationError) as err:
+        SourceState(
+            source="substack_stripe",
+            source_ref="sub_1",
+            email=EMAIL["ana"],
+            grant="tier:paid",
+            status="active",
+            started_at=datetime(2026, 1, 1),
+            valid_until=None,
+            plan_interval="year",
+            access_scope="substack+platform",
+            provider_time=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    assert "@" not in str(err.value)
