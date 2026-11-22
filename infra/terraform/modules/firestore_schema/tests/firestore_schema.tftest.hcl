@@ -23,8 +23,8 @@ run "the_queries_have_their_indexes" {
     error_message = "Composite indexes exist for sync_runs, downloads, entitlements and audit_log."
   }
   assert {
-    condition     = length(google_firestore_index.this) == 5
-    error_message = "Five composite indexes, as the plan lists them."
+    condition     = length(google_firestore_index.this) == 6
+    error_message = "Six composite indexes, as the plan lists them."
   }
 }
 
@@ -34,6 +34,7 @@ run "each_index_has_exactly_its_fields_and_the_expiry_field_is_not_indexed" {
     condition = toset([for i in google_firestore_index.this : join(",", concat([i.collection], [for f in i.fields : "${f.field_path}:${f.order}"]))]) == toset([
       "sync_runs,kind:ASCENDING,finished_at:DESCENDING",
       "sync_runs,kind:ASCENDING,state:ASCENDING,dry_run:ASCENDING,finished_at:DESCENDING",
+      "sync_runs,kind:ASCENDING,dry_run:ASCENDING,finished_at:DESCENDING",
       "downloads,member_uid:ASCENDING,at:ASCENDING",
       "entitlements,status:ASCENDING,valid_until:ASCENDING",
       "audit_log,subject:ASCENDING,at:ASCENDING",
