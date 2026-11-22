@@ -72,6 +72,7 @@ def test_a_dry_run_reports_and_writes_nothing(lib, ent):
         ({"abstract": None}, "abstract"),
         ({"kind": "poster"}, "kind"),
         ({"version": "v1"}, "version"),
+        ({"version": "1.0\n"}, "version"),
         ({"title": None}, "title"),
         ({"file": "../other/secret.pdf"}, "file"),
         ({"file": "notes.txt"}, "file"),
@@ -140,6 +141,6 @@ def test_a_draft_is_stored_but_not_announced_and_the_prefix_is_checked(lib, ent)
     assert (
         run(stage(lib)).items[0].action == "updated" and len(ent.bus.published) == 1
     )  # the draft becomes published
-    for bad in ("items/sample-map", "../items", "Batch 1", ""):
+    for bad in ("items/sample-map", "../items", "Batch 1", "", "batch-1\n"):
         with pytest.raises(ValueError):
             run(bad)

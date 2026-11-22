@@ -45,7 +45,7 @@ class _ItemFields(BaseModel):
     @field_validator("sku")
     @classmethod
     def _sku(cls, value: str) -> str:
-        if not SKU.match(value):
+        if not SKU.fullmatch(value):
             raise ValueError(
                 "use 3 to 60 lower-case letters, digits and hyphens, "
                 "starting and ending with a letter or digit"
@@ -55,7 +55,7 @@ class _ItemFields(BaseModel):
     @field_validator("version")
     @classmethod
     def _version(cls, value: str) -> str:
-        if not VERSION.match(value):
+        if not VERSION.fullmatch(value):
             raise ValueError("write it as two numbers with a dot, for example 1.0")
         return value
 

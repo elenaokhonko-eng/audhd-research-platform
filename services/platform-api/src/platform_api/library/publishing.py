@@ -61,7 +61,7 @@ def _problem(error: ErrorDetails) -> str:
 
 
 def publish(staging_prefix: str, dry_run: bool, actor: str, now: datetime) -> PublishReport:
-    if not STAGING_PREFIX.match(staging_prefix):
+    if not STAGING_PREFIX.fullmatch(staging_prefix):
         raise ValueError("staging_prefix: use 1 to 40 lower-case letters, digits and hyphens")
     runtime = get_runtime()
     outcomes = []
