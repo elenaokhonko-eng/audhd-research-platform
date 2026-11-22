@@ -151,8 +151,11 @@ class DirectoryListing(BaseModel):
 class SubscriberDirectory(Protocol):
     def list_paid(self) -> DirectoryListing: ...
 
-class FileDirectory:                 # reads Substack's export file
-    def __init__(self, path: Path) -> None: ...
+class FileDirectory:                 # reads Substack's export file; satisfies SubscriberDirectory
+    def __init__(self, data: bytes, exported_at: datetime) -> None: ...   # the export's bytes as read from the roster inbox; not UTF-8 raises ExportHeaderError
+    def list_paid(self) -> DirectoryListing: ...
+    @property
+    def report(self) -> ExportReport: ...   # counts and Type / Stripe plan values only, never an address; safe to print in a dry run
 ```
 
 ## 4. Documents (Firestore, additions to [09 §2](../architecture/09-events-and-data-model.md))
