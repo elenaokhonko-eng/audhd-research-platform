@@ -93,3 +93,19 @@ def test_access_for_joins_member_and_contact_records_once_and_can_open_needs_ite
     assert public.can_open("u-ana", "map-1", T0, item_access="paid").allowed
     with pytest.raises(LookupError):
         public.can_open("u-ana", "map-1", T0)
+
+
+def test_reasons_are_ordered_newest_end_last_and_name_the_campaign():
+    soon = record("ana", "launch_grant", valid_until=T0 + timedelta(days=10))
+    later = record("ana", "stripe_year")
+    open_ended = record("ana", "owner_grant")
+    access = access_from([open_ended, later, soon], T0)
+    assert [r.valid_until for r in access.reasons] == [
+        soon.valid_until,
+        later.valid_until,
+        None,
+    ]
+    by_label = {r.label: r.campaign for r in access.reasons}
+    assert by_label["launch_grant"] == "founding"
+    assert by_label["owner_grant"] is None
+    assert by_label["substack_subscription"] is None
