@@ -59,7 +59,7 @@ The script also asks Google to create Pub/Sub's service agent in each project be
 
 Step 6 first builds the website (`apps/web`) and deploys it to `web-dev` in the dev project, with the dev website identity `web-runtime`, so the preview site shows the real site rather than Google's placeholder page. This does not depend on the platform service. Each re-run of the script deploys the commit you have checked out.
 
-Step 6 then builds the first `platform-api` image and deploys it to both projects. If the service's code has not been merged yet (no `services/platform-api/Dockerfile`), the script says so and skips this part; `platform-api`, `platform-hooks` and `platform-selfcheck` keep Google's placeholder image. They get the real image once Core's service code and the platform-api image (S1.0 Task 6) have been merged: re-run the script then. The platform-api CI deploy arrives with S1.0 Task 6 as well; until it does, no workflow deploys platform-api. The script's last message tells you which case you are in.
+Step 6 then builds the first `platform-api` image and deploys it to both projects. If the service's code has not been merged yet (no `services/platform-api/Dockerfile`), the script says so and skips this part; `platform-api`, `platform-hooks` and `platform-selfcheck` keep Google's placeholder image. They get the real image once Core's service code and the platform-api image (S1.0 Task 6) have been merged: re-run the script then. After that, the workflow `.github/workflows/platform-api.yml` (S1.0 Task 6) deploys every new image: to dev on each push to `integration/stage-1` once `DEPLOY_DEV_ENABLED` is `true` on the environment `dev`, and to prod on a `v*` tag after your approval. It changes only the image of `platform-api`, `platform-hooks` and `platform-selfcheck`. The script's last message tells you which case you are in.
 
 Step 7 also limits which code may deploy to each GitHub environment (a **deployment branch policy**): `dev` accepts jobs only from the branch `integration/stage-1`, `production` only from tags matching `v*`. It sends GitHub only that setting, never the list of reviewers, so a required reviewer you already set is kept; step 8 checks it afterwards. Re-running adds nothing when the rules exist. To see them:
 
@@ -89,7 +89,7 @@ gh api -X PUT repos/elenaokhonko-eng/audhd-research-platform/environments/produc
 
 ## Check it: the smoke test
 
-The smoke test needs the real `platform-api` image. It runs only after Core's service code and the platform-api image (S1.0 Task 6) have landed and step 6 of a re-run, or the platform-api CI deploy that arrives with S1.0 Task 6, has deployed it. With the placeholder image, step a fails.
+The smoke test needs the real `platform-api` image. It runs only after Core's service code and the platform-api image (S1.0 Task 6) have landed and step 6 of a re-run, or the platform-api CI deploy (`.github/workflows/platform-api.yml`), has deployed it. With the placeholder image, step a fails.
 
 ```bash
 bash ops/scripts/smoke-platform.sh audhd-neurobiology-dev
