@@ -82,6 +82,47 @@ class AuditEntry(BaseModel):
     evidence: dict[str, str]  # ids only
 
 
+class Reason(BaseModel):
+    """Why a member holds something, in terms a person can read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grant: str
+    source: Source
+    label: Literal[
+        "substack_subscription",
+        "substack_status",
+        "platform_subscription",
+        "launch_grant",
+        "owner_grant",
+        "purchase",
+    ]
+    access_scope: Literal["substack+platform", "platform_only"] | None
+    status: Status
+    valid_until: AwareDatetime | None
+    campaign: str | None
+    plan_interval: PlanInterval | None
+
+
+class Access(BaseModel):
+    """Always computed, never stored."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tier: Literal["free", "paid"]
+    sections: list[str]
+    items: list[str]
+    reasons: list[Reason]
+    computed_at: AwareDatetime
+
+
+class Decision(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed: bool
+    reason: Literal["paid_required", "purchase_required"] | None
+
+
 def entitlement_id(source: str, source_ref: str, contact_id: str, grant: str) -> str:
     text = f"{source}:{source_ref}:{contact_id}:{grant}"
     return hashlib.sha256(text.encode()).hexdigest()[:32]

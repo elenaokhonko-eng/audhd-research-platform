@@ -37,9 +37,14 @@ class DomainEvent(BaseModel):
     data: dict[str, Any]
 
 
+def contains_email(value: str) -> bool:
+    """True when the text holds something shaped like an email address."""
+    return _EMAIL.search(value) is not None
+
+
 def _contains_email(value: object) -> bool:
     if isinstance(value, str):
-        return _EMAIL.search(value) is not None
+        return contains_email(value)
     if isinstance(value, dict):
         return any(_contains_email(k) or _contains_email(v) for k, v in value.items())
     if isinstance(value, (list, tuple, set, frozenset)):
