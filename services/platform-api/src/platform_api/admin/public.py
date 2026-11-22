@@ -41,4 +41,5 @@ def owner(
     if not isinstance(account, str) or account not in request.app.state.settings.owner_accounts:
         _log.warning("an admin request was refused")
         raise _refused()
+    request.state.owner_account = account  # read by the audit of the admin routes
     return account

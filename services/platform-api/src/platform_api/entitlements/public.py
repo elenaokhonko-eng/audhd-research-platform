@@ -375,15 +375,16 @@ def put_campaigns(campaigns: list[Campaign], actor: str) -> int:
     """Write campaigns from the owner's file. A slug that exists keeps its counts.
 
     Stored campaigns the file does not name stay. Refused with ValueError, before anything is
-    written: a slug named twice, or more than one default once the file is merged by slug.
+    written: a slug named twice, or anything but exactly one default once the file is merged
+    by slug.
     """
     slugs = [c.slug for c in campaigns]
     if len(set(slugs)) != len(slugs):
         raise ValueError("a slug is named more than once")
     store = get_runtime().store
     merged = {c.slug: c for c in store.list_campaigns()} | {c.slug: c for c in campaigns}
-    if sum(c.is_default for c in merged.values()) > 1:
-        raise ValueError("more than one campaign would be the default")
+    if sum(c.is_default for c in merged.values()) != 1:
+        raise ValueError("exactly one campaign must be the default")
     now = clock.utcnow()
     kept = []
     for c in campaigns:

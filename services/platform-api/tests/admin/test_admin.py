@@ -241,3 +241,71 @@ def test_a_google_token_is_accepted_only_from_google_with_a_verified_address(mon
     monkeypatch.setattr(id_token, "verify_token", expired)
     with pytest.raises(NotAuthorised):
         google_account_from_token("t")
+
+
+# Fix round 1: every call by a verified owner leaves exactly one route-level entry.
+
+
+def route_entries(ent, subject):
+    return [
+        (a.actor, a.action, a.evidence["outcome"])
+        for a in ent.store.audit_for(subject)
+        if "route" in a.evidence
+    ]
+
+
+def test_a_revoke_that_changes_nothing_is_still_audited_once_per_call(admin, ent):
+    made = admin.post(
+        "/v1/admin/entitlements",
+        json={"email": EMAIL["di"], "grant": "tier:paid", "months": 6, "reason": "comp"},
+    )
+    eid = made.json()["entitlement_id"]
+    for _ in range(2):
+        assert (
+            admin.post(
+                f"/v1/admin/entitlements/{eid}/revoke", json={"reason": "mistake"}
+            ).status_code
+            == 200
+        )
+    assert route_entries(ent, eid) == [
+        ("owner:acc-1", "entitlement.granted", "200"),
+        ("owner:acc-1", "entitlement.revoked", "200"),
+        ("owner:acc-1", "entitlement.revoked", "200"),
+    ]
+
+
+def test_a_refused_call_by_the_owner_is_audited_with_its_outcome(admin, ent):
+    assert admin.post("/v1/admin/entitlements/nope/revoke", json={"reason": "x"}).status_code == 404
+    assert route_entries(ent, "nope") == [("owner:acc-1", "entitlement.revoked", "404")]
+    bad = {"email": EMAIL["di"], "grant": "tier:gold", "months": 6, "reason": "r"}
+    assert admin.post("/v1/admin/entitlements", json=bad).status_code == 422
+    from platform_api.entitlements.public import contact_id_for
+
+    assert route_entries(ent, contact_id_for(EMAIL["di"])) == [
+        ("owner:acc-1", "entitlement.granted", "422")
+    ]
+    no_end = {"email": EMAIL["di"], "grant": "tier:paid", "reason": "r"}
+    assert admin.post("/v1/admin/entitlements", json=no_end).status_code == 422
+    assert admin.put("/v1/admin/campaigns", json={"campaigns": []}).status_code == 422
+    assert route_entries(ent, "admin") == [
+        ("owner:acc-1", "entitlement.granted", "422"),
+        ("owner:acc-1", "campaign.written", "422"),
+    ]
+
+
+def test_a_refused_caller_leaves_no_entry(admin, ent):
+    admin.get("/v1/admin/launch/report", headers={"Authorization": f"Bearer {token('acc-2')}"})
+    assert ent.store.audit_for("admin") == []
+
+
+def test_a_route_without_an_audit_action_cannot_be_added():
+    from fastapi import APIRouter
+
+    from platform_api.admin.http import AuditedRoute
+
+    router = APIRouter(route_class=AuditedRoute)
+    with pytest.raises(RuntimeError):
+
+        @router.get("/v1/admin/undeclared")
+        def undeclared():
+            return {}
