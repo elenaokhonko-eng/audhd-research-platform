@@ -1,0 +1,19 @@
+# Read by BuildKit for services/platform-api/Dockerfile. The build context is the repository
+# root, so patterns are relative to it. Exclude everything, then let in only what the
+# Dockerfile copies.
+**
+!packages/substack-desk/pyproject.toml
+!packages/substack-desk/README.md
+!packages/substack-desk/src/**
+!services/platform-api/pyproject.toml
+!services/platform-api/uv.lock
+!services/platform-api/src/**
+# caches and probes inside the re-included folders
+**/__pycache__
+**/*.pyc
+.venv
+**/.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+services/platform-api/src/platform_api/*/_probe_*.py

@@ -11,10 +11,10 @@ name: platform-api
 
 on:
   pull_request:
-    paths: ["services/platform-api/**", ".github/workflows/platform-api.yml"]
+    paths: ["services/platform-api/**", "packages/substack-desk/**", ".github/workflows/platform-api.yml"]
   push:
     branches: [main, "integration/**"]
-    paths: ["services/platform-api/**", ".github/workflows/platform-api.yml"]
+    paths: ["services/platform-api/**", "packages/substack-desk/**", ".github/workflows/platform-api.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -70,7 +70,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: docker build -t platform-api:ci services/platform-api
+      - run: docker build -f services/platform-api/Dockerfile -t platform-api:ci .
+      - name: The substack-desk package is in the image
+        run: docker run --rm platform-api:ci python -c "import substack_desk"
       - name: Smoke test the image
         run: |
           docker run -d --name pa -e PLATFORM_APP_MODE=hooks -p 8080:8080 platform-api:ci
@@ -136,7 +138,7 @@ jobs:
         name: Build and push the image
         run: |
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
-          docker build -t "$IMAGE" services/platform-api && docker push "$IMAGE"
+          docker build -f services/platform-api/Dockerfile -t "$IMAGE" . && docker push "$IMAGE"
       - if: steps.gate.outputs.enabled == 'true'
         name: Deploy the image (only the image changes)
         run: |
@@ -172,7 +174,7 @@ jobs:
         run: |
           gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
           if ! gcloud artifacts docker images describe "$IMAGE" >/dev/null 2>&1; then
-            docker build -t "$IMAGE" services/platform-api && docker push "$IMAGE"
+            docker build -f services/platform-api/Dockerfile -t "$IMAGE" . && docker push "$IMAGE"
           fi
       - name: Deploy the image (only the image changes)
         run: |

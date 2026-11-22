@@ -693,7 +693,7 @@ Base `python:3.12-slim`; install with `uv sync --frozen --no-dev`; run as a non-
 
 Run:
 ```bash
-docker build -t platform-api:local services/platform-api
+docker build -f services/platform-api/Dockerfile -t platform-api:local .
 docker run --rm -d -p 8080:8080 -e PLATFORM_APP_MODE=hooks --name pa platform-api:local
 curl -s localhost:8080/health; curl -s -o /dev/null -w "%{http_code}\n" localhost:8080/v1/ping; docker stop pa
 ```

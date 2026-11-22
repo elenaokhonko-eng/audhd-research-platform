@@ -1316,6 +1316,7 @@ git commit -m "platform-api: owner routes behind the account list, audited; plat
 - `KmsContactKey(client, key_version_name)`: `mac` calls `mac_sign(request={"name": …, "data": …, "data_crc32c": …})` and checks the response's `name` and CRC32C; `version` is the last path segment.
 - `FirebaseIdentityProvider(app)`: `verify_id_token(check_revoked=True)`, `create_session_cookie`, `verify_session_cookie(check_revoked=True)`, `revoke_refresh_tokens`. It calls these as `firebase_admin.auth.<function>` through the module (so a test can replace them). Every `firebase_admin` error, and `ValueError`, becomes `InvalidToken` with a message that holds no token and no address.
 - `main.py` builds the three runtimes lazily (no client is created at import; `/health` works without credentials) and calls `set_runtime` for `entitlements` and `identity`. A missing `PLATFORM_CONTACT_KEY` outside `local` stops the service at start with a message that names the setting; in `local`, `LocalContactKey` and the in-memory stores are used.
+- **Lifetimes (added on 2026-11-23, from the privacy notice):** the Firestore stores write `expires_at` on every `support_requests` document (created + 365 days), every `audit_log` entry (at + 730 days) and every `rate_limits` counter (window end + 2 days). The Infra lane creates the time-to-live policies on that field. One integration test per collection asserts the field and its value.
 - Firestore indexes the queries need are listed in the hand-over for the Infra lane (which owns Terraform): `entitlements` by `contact_id`, by `member_uid`, by `source`; `contacts` by `channels.platform.member_uid`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1391,6 +1392,17 @@ Run the check command, then the integration tests as CI does (`FIRESTORE_EMULATO
 git add services/platform-api
 git commit -m "platform-api: Firestore, Cloud KMS and Identity Platform behind the ports"
 ```
+
+---
+
+### Task 10 (task card C8, added on 2026-11-23): deleting a member on request
+
+The privacy notice promises deletion within 30 days of a request. After Task 9, in its own pull request:
+
+- `identity.public.pending_deletions() -> list[MemberRef]` and `delete_member(uid: str, actor: str, now: datetime) -> None`. `delete_member` refuses (`ValueError`) a member whose status is not `deletion_requested`. It removes, in this order: the member's entitlements (through a new `entitlements.public.forget_contact(contact_id, actor, now)`, which deletes the contact's entitlements and the contact record, and writes one audit entry `contact.forgotten` whose subject is the contact id); the member's support requests; the member record; and the sign-in account at the identity provider (`IdentityProvider.delete_user(uid)`, added to the port and its fake). A second call for the same uid does nothing and raises nothing.
+- Routes under the `owner` dependency: `GET /v1/admin/deletions` → `{pending: [{uid, requested_at}]}` and `POST /v1/admin/members/{uid}/delete` → `{}` (404 for an unknown uid, 422 when the member did not request deletion). CLI: `platform-cli member deletions` and `platform-cli member delete --uid <uid>`.
+- Tests, in `tests/identity/test_deletion.py`: after a request and a delete, the contact, the entitlements, the member and the support requests are gone, the provider's account is deleted, sign-in with the same address creates a **new** free member, and the audit trail holds one `contact.forgotten` entry with no address; a member who did not ask cannot be deleted; a second delete is harmless; a download record or audit entry of the deleted member holds no address (it never did) and is left to expire. Five tests.
+- Commit: `platform-api: delete a member on request, by the owner's command`.
 
 ---
 
