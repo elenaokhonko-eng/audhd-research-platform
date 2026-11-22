@@ -77,3 +77,11 @@ def test_only_grants_can_be_revoked(ent):
         ent_api.revoke(stripe_id, "no", "owner:acc-1", T0)
     with pytest.raises(LookupError):
         ent_api.revoke("nope", "no", "owner:acc-1", T0)
+
+
+def test_a_grant_for_an_unknown_contact_is_refused_and_leaves_no_trace(ent):
+    with pytest.raises(LookupError):
+        ent_api.grant("no-such-contact", "tier:paid", None, "r", "owner:acc-1", T0)
+    assert ent.store.entitlements_by_source("grant") == []
+    assert ent.store.audit_for("no-such-contact") == []
+    assert ent.bus.published == []

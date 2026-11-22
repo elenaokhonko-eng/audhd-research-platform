@@ -158,11 +158,13 @@ def grant(
         raise ValueError("a grant must end after it starts")
     runtime = get_runtime()
     contact = runtime.store.get_contact(contact_id)
+    if contact is None:
+        raise LookupError("no such contact")
     source_ref = "owner:" + hashlib.sha256((reason + now.isoformat()).encode()).hexdigest()[:12]
     entitlement = Entitlement(
         entitlement_id=entitlement_id("grant", source_ref, contact_id, grant),
         contact_id=contact_id,
-        member_uid=_platform_uid(contact) if contact else None,
+        member_uid=_platform_uid(contact),
         grant=grant,
         source="grant",
         source_ref=source_ref,
