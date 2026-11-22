@@ -92,6 +92,7 @@ def _work(
         logger.error("roster_no_file run=%s dry_run=%s", run_id, dry_run)
         raise _Stopped
 
+    counts["export_updated_at"] = int(found.updated_at.timestamp())  # tells uploads apart
     directory = FileDirectory(found.data, found.updated_at)
     missing = _missing_plan_column(found.data)
     if missing is None:
@@ -119,6 +120,8 @@ def _work(
         trial_rows=report.trial_rows,
         unreadable_dates=report.unreadable_dates,
     )
+    # The Desk's reasons are its own fixed words, never a cell value.
+    counts.update({f"rejected_{reason}": n for reason, n in report.rejected.items()})
     # The Desk's values are plan or type cells cut to 40 characters, any with an `@` redacted.
     if report.unknown_types:
         logger.warning(
@@ -139,7 +142,7 @@ def _work(
         logger.error("alert=roster_truncated run=%s dry_run=%s", run_id, dry_run)
         raise _Stopped
     if report.unknown_plans:  # a plan the Desk cannot read could be a card payer: no guess
-        counts["unknown_plans"] = len(report.unknown_plans)
+        counts["unknown_plans"] = sum(report.unknown_plans.values())  # rows
         logger.error(
             "alert=roster_refused run=%s dry_run=%s reason=unknown_plans values=%s",
             run_id,
@@ -148,6 +151,7 @@ def _work(
         )
         raise _Stopped
 
+    # Live by status, not valid_until: as Core's is_live, a source's date is no end.
     paying_by_card = {
         e.contact_id
         for e in entitlements.existing_for(["substack_stripe"])
@@ -155,7 +159,16 @@ def _work(
     }
     existing = entitlements.existing_for(["substack_roster"])
     held_since = {e.contact_id: e.valid_from for e in existing}
-    counts.update(card_payer_rows=0, card_payer_not_in_stripe=0, already_in_stripe=0)
+    roster_live = {e.contact_id for e in existing if e.status in ("active", "grace")}
+    counts.update(
+        card_payer_rows=0,
+        card_payer_not_in_stripe=0,
+        already_in_stripe=0,
+        roster_record_now_card_payer=0,
+        expired_rows=0,
+        expired_rows_with_record=0,
+        paid_rows_without_plan=0,
+    )
     states: list[SourceState] = []
     for record in listing.records:
         contact_id = entitlements.contact_id_for(record.email)
@@ -175,10 +188,22 @@ def _work(
             counts["card_payer_rows"] += 1
             if contact_id not in paying_by_card:
                 counts["card_payer_not_in_stripe"] += 1
+            if contact_id in roster_live:  # their roster record stays; the owner looks
+                counts["roster_record_now_card_payer"] += 1
             continue
         if contact_id in paying_by_card:  # Stripe already holds this reader (contracts, jobs)
             counts["already_in_stripe"] += 1
+            if contact_id in roster_live:
+                counts["roster_record_now_card_payer"] += 1
             continue
+        if record.paid_until is not None and record.paid_until <= listing.exported_at:
+            # No new record on an ended period; a held one is left as it is (unseen, not ended).
+            counts["expired_rows"] += 1
+            if contact_id in held_since:
+                counts["expired_rows_with_record"] += 1
+            continue
+        if record.type == "paid":
+            counts["paid_rows_without_plan"] += 1
         states.append(
             SourceState(
                 source="substack_roster",

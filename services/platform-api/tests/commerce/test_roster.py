@@ -224,3 +224,79 @@ def test_a_file_without_the_stripe_plan_column_fails_and_names_it(com, ent, capl
     assert "Stripe plan" in caplog.text and "@" not in caplog.text
     assert ent.store.entitlements_by_source("substack_roster") == []
     assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None
+
+
+def test_a_comp_reader_who_moved_to_card_is_counted_and_keeps_the_record(com, ent):
+    ready(com, DI)
+    commerce.roster_import(False, T0 + timedelta(hours=1))
+    commerce.stripe_reconcile(False, "schedule", T0 + timedelta(hours=2))
+    di_paid = f"{EMAIL['di']},Paid,$5 a year,2026-01-01T00:00:00.000Z,"
+    com.inbox = InMemoryRosterInbox(
+        RosterObject(name="e2.csv", data=export(di_paid), updated_at=T0 + timedelta(hours=2))
+    )
+    run = commerce.roster_import(False, T0 + timedelta(hours=3))
+    assert (run.state, run.counts["roster_record_now_card_payer"]) == ("completed", 1)
+    assert [e.status for e in ent.store.entitlements_by_source("substack_roster")] == ["active"]
+
+
+def test_a_row_whose_paid_period_ended_creates_no_record(com, ent):
+    ready(com, f"{EMAIL['di']},Comp,,,2026-01-01T00:00:00.000Z")
+    run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts["expired_rows"], run.counts["expired_rows_with_record"]) == (
+        "completed",
+        1,
+        0,
+    )
+    assert ent.store.entitlements_by_source("substack_roster") == []
+
+
+def test_a_row_whose_paid_period_ended_leaves_an_existing_record_alone(com, ent):
+    ready(com, DI)
+    commerce.roster_import(False, T0 + timedelta(hours=1))
+    ended = f"{EMAIL['di']},Comp,,,2026-01-01T00:00:00.000Z"
+    com.inbox = InMemoryRosterInbox(
+        RosterObject(name="e2.csv", data=export(ended), updated_at=T0 + timedelta(hours=2))
+    )
+    run = commerce.roster_import(False, T0 + timedelta(hours=3))
+    assert (run.counts["expired_rows_with_record"], run.counts["unseen"], run.counts["ended"]) == (
+        1,
+        1,
+        0,
+    )
+    assert [e.status for e in ent.store.entitlements_by_source("substack_roster")] == ["active"]
+
+
+def test_rejected_rows_are_counted_by_reason(com):
+    ready(com, DI, f"{EMAIL['di']},Paid,$5 a year,,")
+    run = commerce.roster_import(True, T0 + timedelta(hours=1))
+    assert (run.counts["rejected_rows"], run.counts["rejected_duplicate_email"]) == (1, 1)
+
+
+def test_paid_rows_without_a_plan_and_the_export_time_are_counted(com):
+    ready(com, f"{EMAIL['di']},Paid,,,")
+    run = commerce.roster_import(True, T0 + timedelta(hours=1))
+    assert (run.counts["paid_rows_without_plan"], run.counts["created"]) == (1, 1)
+    assert run.counts["export_updated_at"] == int(T0.timestamp())
+
+
+def test_unknown_plans_count_rows(com):
+    ed = f"{EMAIL['ed']},Paid,Founding member,,"
+    ready(com, ed, f"{EMAIL['cy']},Paid,Founding member,,")
+    run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts["unknown_plans"]) == ("failed", 2)
+
+
+def test_a_dry_run_with_an_unknown_plan_is_refused(com, ent, caplog):
+    ready(com, DI, f"{EMAIL['ed']},Paid,Founding member,,")
+    with caplog.at_level(logging.ERROR):
+        run = commerce.roster_import(True, T0 + timedelta(hours=1))
+    assert run.state == "failed" and "alert=roster_refused" in caplog.text
+    assert "dry_run=True" in caplog.text and "@" not in caplog.text
+    assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None
+
+
+def test_an_address_in_other_case_is_still_the_reader_stripe_holds(com, ent):
+    ready(com, f"{EMAIL['gus'].upper()},Comp,,,")
+    run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert run.counts["already_in_stripe"] == 1
+    assert ent.store.entitlements_by_source("substack_roster") == []
