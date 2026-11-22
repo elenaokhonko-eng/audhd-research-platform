@@ -34,6 +34,19 @@ class Member(BaseModel):
     last_seen_at: AwareDatetime
 
 
+class SupportRequest(BaseModel):
+    """A stored `support_requests/{id}` document. The note lives here and nowhere else."""
+
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    id: str
+    member_uid: str
+    kind: Literal["paid_not_recognised", "other"]
+    note: str = Field(repr=False)
+    status: Literal["open"]
+    created_at: AwareDatetime
+
+
 class TermsVersions(BaseModel):
     model_config = ConfigDict(frozen=True)
 

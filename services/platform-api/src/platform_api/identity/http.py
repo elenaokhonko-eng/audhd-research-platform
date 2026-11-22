@@ -1,18 +1,19 @@
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from platform_api.entitlements.public import access_for
 from platform_api.identity import public
 from platform_api.identity.public import MemberRef
 from platform_api.shared import clock
-from platform_api.shared.http import ApiError, current_member
+from platform_api.shared.http import ApiError, current_member, member_with_terms
 
 router = APIRouter()
 hooks_router = APIRouter()
 
 Signed = Annotated[MemberRef, Depends(current_member)]
+Termed = Annotated[MemberRef, Depends(member_with_terms)]
 
 
 class ResolveBody(BaseModel):
@@ -25,6 +26,13 @@ class ResolveBody(BaseModel):
 class TermsBody(BaseModel):
     terms_version: str
     privacy_version: str
+
+
+class SupportBody(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    kind: Literal["paid_not_recognised", "other"]
+    note: str = Field(max_length=500, repr=False)
 
 
 @router.post("/v1/session/resolve")
@@ -63,3 +71,10 @@ def accept_terms(member: Signed, body: TermsBody) -> dict[str, Any]:
 def deletion_request(member: Signed) -> dict[str, str]:
     public.request_deletion(member.uid, clock.utcnow())
     return {"status": "deletion_requested"}
+
+
+@router.post("/v1/me/support-requests")
+def support_request(member: Termed, body: SupportBody) -> dict[str, str]:
+    """The body is validated before the limiter is hit, so a refused body costs no quota."""
+    request_id = public.file_support_request(member.uid, body.kind, body.note, clock.utcnow())
+    return {"id": request_id}

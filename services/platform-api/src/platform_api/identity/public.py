@@ -4,8 +4,9 @@ No address is ever put in an exception message, a log line, an event or a respon
 is named by uid, a person by contact id, and the account page shows `email_hint` only.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
+from uuid import uuid4
 
 from platform_api.entitlements import public as entitlements
 from platform_api.identity.models import (
@@ -16,6 +17,7 @@ from platform_api.identity.models import (
     MemberView,
     SessionCookie,
     SessionResult,
+    SupportRequest,
     TermsAccepted,
     TermsVersions,
     TermsView,
@@ -31,9 +33,12 @@ __all__ = [
     "MemberRef",
     "MemberView",
     "SessionResult",
+    "SupportRequest",
     "Unauthenticated",
     "accept_terms",
     "end_sessions",
+    "file_support_request",
+    "list_support_requests",
     "member_count",
     "member_from_session",
     "member_view",
@@ -275,3 +280,32 @@ def request_deletion(uid: str, now: datetime) -> None:
 
 def member_count() -> int:
     return get_runtime().members.count()
+
+
+_SUPPORT_LIMIT = 5
+_SUPPORT_WINDOW = timedelta(days=1)
+
+
+def file_support_request(
+    uid: str, kind: Literal["paid_not_recognised", "other"], note: str, now: datetime
+) -> str:
+    """Store a request and announce it. The note stays in the store: the event has uid and kind."""
+    runtime = get_runtime()
+    wait = runtime.limiter.hit(f"support:{uid}", _SUPPORT_LIMIT, _SUPPORT_WINDOW, now)
+    if wait is not None:
+        raise ApiError(
+            429, "rate_limited", "Too many requests today; please try later.", retry_after=wait
+        )
+    request = SupportRequest(
+        id=uuid4().hex, member_uid=uid, kind=kind, note=note, status="open", created_at=now
+    )
+    runtime.members.add_support_request(request)
+    runtime.bus.publish(
+        new_event("membership.support.requested", uid, {"member_uid": uid, "kind": kind}, now=now)
+    )
+    return request.id
+
+
+def list_support_requests() -> list[SupportRequest]:
+    """Every stored request, oldest first."""
+    return get_runtime().members.support_requests()
