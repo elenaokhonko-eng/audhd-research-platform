@@ -2,6 +2,8 @@
 
 from platform_api.library.models import (
     ItemAccess,
+    ItemCard,
+    ItemDetail,
     ItemOutcome,
     ItemStatus,
     Kind,
@@ -11,9 +13,13 @@ from platform_api.library.models import (
     StoredFile,
 )
 from platform_api.library.publishing import publish
+from platform_api.library.reading import ItemNotFound, catalogue, item
 
 __all__ = [
     "ItemAccess",
+    "ItemCard",
+    "ItemDetail",
+    "ItemNotFound",
     "ItemOutcome",
     "ItemStatus",
     "Kind",
@@ -21,5 +27,7 @@ __all__ = [
     "Manifest",
     "PublishReport",
     "StoredFile",
+    "catalogue",
+    "item",
     "publish",
 ]

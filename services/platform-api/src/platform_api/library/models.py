@@ -118,3 +118,23 @@ class PublishReport(BaseModel):
     dry_run: bool
     staging_prefix: str
     items: list[ItemOutcome]
+
+
+class ItemCard(BaseModel):
+    """What a member sees on the shelf. Nothing here says where the file is."""
+
+    sku: str
+    title: str
+    kind: Kind
+    abstract: str
+    version: str
+    pages: int
+    access: ItemAccess
+    can_open: bool
+    buy_url: str | None
+
+
+class ItemDetail(BaseModel):
+    item: ItemCard
+    description: str
+    citation: str | None
