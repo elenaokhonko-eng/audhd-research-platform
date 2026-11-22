@@ -7,6 +7,8 @@
 # and is never printed: only its last four characters are shown afterwards.
 # Without --live it accepts only a test key (rk_test_). With --live it accepts only a live key (rk_live_)
 # and first asks you to type the project id again.
+# --live is accepted only for a project id ending in -prod, and a project id ending in -prod needs --live:
+# a live key holds real customers and belongs only in prod; dev holds invented people.
 # Safe to re-run: each run adds a new version; older versions stay until you disable them.
 # Exit codes: 0 stored, 1 refused or failed, 2 wrong usage.
 set -euo pipefail
@@ -25,6 +27,13 @@ case "${2:-}" in
   --live) live=1 ;;
   *) echo "Unknown option ${2}. The only option is --live." >&2; exit 2 ;;
 esac
+
+if [[ "$live" -eq 1 && "$project" != *-prod ]]; then
+  stop "Refused: --live is only for a production project (its id ends in -prod), and $project is not one. A live key reads real customers and belongs only in prod; dev holds invented people and takes a test key. Nothing was stored. Re-run without --live and a test key (rk_test_)."
+fi
+if [[ "$live" -eq 0 && "$project" == *-prod ]]; then
+  stop "Refused: $project is a production project, which takes only the live key, because prod holds real customers while a test key sees only invented people. Nothing was stored. Re-run with --live and the live restricted key (rk_live_)."
+fi
 
 # ask <prompt> <hidden 0|1>: reads one line into $answer, from the terminal or from standard input.
 ask() {
