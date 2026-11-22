@@ -16,11 +16,13 @@ export default async function AccountPage() {
       <section aria-labelledby="access-heading">
         <h2 id="access-heading">Your access</h2>
         <p>{access.tier === "paid" ? "Full access" : "Free workspace"}</p>
-        <ul>
-          {access.reasons.map((reason, index) => (
-            <li key={`${reason.grant}-${index}`}>{reasonText(reason)}</li>
-          ))}
-        </ul>
+        {access.reasons.length > 0 ? (
+          <ul>
+            {access.reasons.map((reason, index) => (
+              <li key={`${reason.grant}-${index}`}>{reasonText(reason)}</li>
+            ))}
+          </ul>
+        ) : null}
         {access.tier === "free" ? (
           <p>
             <Link href="/upgrade">See how to upgrade</Link>

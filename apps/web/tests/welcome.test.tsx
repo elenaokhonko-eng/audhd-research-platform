@@ -5,7 +5,7 @@ import { TermsStep } from "@/app/welcome/TermsStep";
 import { NotRecognised } from "@/app/welcome/NotRecognised";
 import { FakePlatformApi } from "@/lib/platform-api/fake";
 import { ApiError } from "@/lib/platform-api/errors";
-import { welcomeState, welcomeView } from "@/lib/welcome";
+import { termsCurrent, welcomeState, welcomeView } from "@/lib/welcome";
 import { WelcomeBody } from "@/app/welcome/WelcomeBody";
 import { SignOutButton } from "@/app/welcome/SignOutButton";
 
@@ -16,7 +16,23 @@ const meOf = async (name: string, accept = true) => {
   return api.me(session.cookie);
 };
 
+describe("termsCurrent", () => {
+  it("is true only when accepted and both versions match the required ones", async () => {
+    const { member } = await meOf("ana");
+    expect(termsCurrent(member)).toBe(true);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, terms_version: "old" } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, privacy_version: "old" } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, privacy_version: null } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, accepted: false } })).toBe(false);
+  });
+});
+
 describe("welcomeView", () => {
+  it("asks again when the required terms version has moved on", async () => {
+    const me = await meOf("ana");
+    const stale = { ...me, member: { ...me.member, terms: { ...me.member.terms, terms_version: "old" } } };
+    expect(welcomeView(stale, null)).toEqual({ kind: "terms" });
+  });
   it("asks for the terms first", async () => expect(welcomeView(await meOf("ana", false), null)).toEqual({ kind: "terms" }));
   it("shows ana as paid, included while paying, with a guarantee date", async () => {
     const view = welcomeView(await meOf("ana"), null);

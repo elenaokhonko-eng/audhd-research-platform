@@ -32,6 +32,14 @@ describe("guardMember", () => {
     const { load, s } = await world("ana", false);
     expect(await guardMember(s, load, "research")).toEqual({ kind: "redirect", to: "/welcome" });
   });
+  it("sends a member who accepted an older terms version to the welcome page", async () => {
+    const { load, s } = await world("ana");
+    const stale = async (x: string) => {
+      const me = await load(x);
+      return { ...me, member: { ...me.member, terms: { ...me.member.terms, terms_version: "terms-v0" } } };
+    };
+    expect(await guardMember(s, stale, "research")).toEqual({ kind: "redirect", to: "/welcome" });
+  });
   it("sends a free member who types a paid address to the upgrade page", async () => {
     const { load, s } = await world("bo");
     expect(await guardMember(s, load, "research")).toEqual({ kind: "redirect", to: "/upgrade" });

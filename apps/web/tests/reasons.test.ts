@@ -15,6 +15,9 @@ describe("reasonText", () => {
     [r({ label: "substack_status", grant: "status:substack_paid", plan_interval: null }), "You have a Substack subscription that is not billed by card. It does not include the platform by itself."],
     [r({ label: "launch_grant", source: "grant" }), "Founding member access until 1 March 2027."],
     [r({ label: "launch_grant", source: "grant", status: "expired" }), "This access ended on 1 March 2027."],
+    [r({ label: "owner_grant", source: "grant", status: "revoked", valid_until: "2099-01-01T00:00:00Z" }), "This access ended."],
+    [r({ label: "launch_grant", source: "grant", status: "revoked" }), "This access ended."],
+    [r({ label: "owner_grant", source: "grant", status: "expired" }), "This access ended on 1 March 2027."],
     [r({ label: "owner_grant", source: "grant", valid_until: null }), "Access granted by the publisher."],
     [r({ label: "purchase", source: "payhip", grant: "item:sample-map" }), "You bought this item."],
   ])("%#", (reason, text) => expect(reasonText(reason)).toBe(text));

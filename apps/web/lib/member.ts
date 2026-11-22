@@ -5,6 +5,7 @@ import { getPlatformApi } from "@/lib/platform-api/client";
 import { ApiError } from "@/lib/platform-api/errors";
 import type { Access, Member } from "@/lib/platform-api/types";
 import { readSessionCookie } from "@/lib/session";
+import { termsCurrent } from "@/lib/welcome";
 
 export type Section = "overview" | "library" | "research" | "guides" | "account";
 
@@ -38,7 +39,7 @@ export async function guardMember(
     if (error instanceof ApiError && error.code === "unauthenticated") return { kind: "redirect", to: "/join" };
     return { kind: "unavailable" };
   }
-  if (!me.member.terms.accepted) return { kind: "redirect", to: "/welcome" };
+  if (!termsCurrent(me.member)) return { kind: "redirect", to: "/welcome" };
   if (section && !me.access.sections.includes(section)) return { kind: "redirect", to: "/upgrade" };
   return { kind: "ok", me };
 }

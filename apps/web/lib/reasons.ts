@@ -25,10 +25,10 @@ export function reasonText(reason: Reason): string {
       return "You have a Substack subscription that is not billed by card. It does not include the platform by itself.";
     case "launch_grant":
       if (reason.status === "active") return `Founding member access${date ? ` until ${date}` : ""}.`;
-      return `This access ended${date ? ` on ${date}` : ""}.`;
+      return `This access ended${reason.status === "expired" && date ? ` on ${date}` : ""}.`;
     case "owner_grant":
       if (reason.status === "active") return `Access granted by the publisher${date ? ` until ${date}` : ""}.`;
-      return `This access ended${date ? ` on ${date}` : ""}.`;
+      return `This access ended${reason.status === "expired" && date ? ` on ${date}` : ""}.`;
     case "purchase":
       return "You bought this item.";
     default:
