@@ -70,7 +70,7 @@ flowchart LR
 | Workspace **Research** and **Guides** | Paid members | Every published item, filters by kind, topic and series, **Open** and **Download** |
 | Workspace **Library** | Free members | The same catalogue with **Buy** (Payhip) and **Upgrade**; **My purchases** with Open and Download |
 
-Download path: `web` asks `platform-api`; the library module asks the entitlement module `can_open(member, sku)`; on yes, it returns a signed link that works for 10 minutes and logs the download. The bucket is private and has no public links, so a shared URL stops working within minutes. A limit of 30 downloads an hour per member blocks scripted scraping.
+Download path: `web` asks `platform-api`; the library module takes the member's access (tier and bought items) from the entitlement module and applies the rule of §2.3; on yes, it returns a signed link that works for 10 minutes and logs the download. The bucket is private and has no public links, so a shared URL stops working within minutes. A limit of 30 downloads an hour per member blocks scripted scraping.
 
 Optional from Stage 2, per item: stamp each downloaded copy with the member's email in the footer. It deters sharing and costs a few hundred milliseconds per download.
 
