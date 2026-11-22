@@ -5,6 +5,11 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  // The legal pages read content/legal/*.md at build time; keep the files in the standalone output too.
+  outputFileTracingIncludes: {
+    "/terms": ["./content/legal/*"],
+    "/privacy": ["./content/legal/*"],
+  },
 };
 
 export default nextConfig;

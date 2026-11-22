@@ -9,19 +9,20 @@ async function defaultAccept(): Promise<void> {
 }
 
 export function TermsStep({
+  versions,
   accept = defaultAccept,
   reload = () => window.location.reload(),
 }: {
+  versions: { terms: string; privacy: string };
   accept?: () => Promise<void>;
   reload?: () => void;
 }) {
-  const [ticked, setTicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!ticked || busy) return;
+    if (busy) return;
     setBusy(true);
     setMessage("");
     try {
@@ -39,21 +40,15 @@ export function TermsStep({
       <h1>Before you start</h1>
       <form onSubmit={submit}>
         <p>
-          <input
-            checked={ticked}
-            id="accept-terms"
-            name="accept"
-            onChange={(event) => setTicked(event.target.checked)}
-            type="checkbox"
-          />{" "}
-          <label htmlFor="accept-terms">
-            I have read and accept the <Link href="/terms">terms</Link> and the{" "}
-            <Link href="/privacy">privacy notice</Link>
-          </label>
+          Please read the <Link href="/terms">terms of use</Link> and the <Link href="/privacy">privacy notice</Link>.
+        </p>
+        <p>By continuing you confirm that you are 18 or older and that you agree to both.</p>
+        <p>
+          Terms {versions.terms}, privacy notice {versions.privacy}.
         </p>
         <div className="button-row">
-          <button className="button button-primary" disabled={!ticked || busy} type="submit">
-            Continue
+          <button className="button button-primary" disabled={busy} type="submit">
+            I agree and continue
           </button>
         </div>
       </form>

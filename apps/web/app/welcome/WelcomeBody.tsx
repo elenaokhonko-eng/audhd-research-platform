@@ -25,7 +25,7 @@ export function WelcomeBody({ view }: { view: WelcomeView | { kind: "unavailable
   if (view.kind === "terms") {
     return (
       <>
-        <TermsStep />
+        <TermsStep versions={view.versions} />
         <section className="section-shell join">
           <SignOutButton />
         </section>

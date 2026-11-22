@@ -31,9 +31,9 @@ describe("welcomeView", () => {
   it("asks again when the required terms version has moved on", async () => {
     const me = await meOf("ana");
     const stale = { ...me, member: { ...me.member, terms: { ...me.member.terms, terms_version: "old" } } };
-    expect(welcomeView(stale, null)).toEqual({ kind: "terms" });
+    expect(welcomeView(stale, null)).toEqual({ kind: "terms", versions: { terms: "terms-v1", privacy: "privacy-v1" } });
   });
-  it("asks for the terms first", async () => expect(welcomeView(await meOf("ana", false), null)).toEqual({ kind: "terms" }));
+  it("asks for the terms first", async () => expect(welcomeView(await meOf("ana", false), null)).toEqual({ kind: "terms", versions: { terms: "terms-v1", privacy: "privacy-v1" } }));
   it("shows ana as paid, included while paying, with a guarantee date", async () => {
     const view = welcomeView(await meOf("ana"), null);
     expect(view).toMatchObject({ kind: "paid", includedWhilePaying: true });
@@ -72,36 +72,36 @@ describe("welcomeView", () => {
   });
 });
 
+const versions = { terms: "terms-v1", privacy: "privacy-v1" };
 describe("TermsStep", () => {
-  it("keeps Continue disabled until the box is ticked, then accepts", async () => {
+  it("has no checkbox and accepts on the button", async () => {
     const accept = vi.fn().mockResolvedValue(undefined);
-    render(<TermsStep accept={accept} reload={() => {}} />);
-    const button = screen.getByRole("button", { name: "Continue" });
-    expect(button).toBeDisabled();
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(button);
+    render(<TermsStep accept={accept} reload={() => {}} versions={versions} />);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(accept).toHaveBeenCalledOnce();
   });
   it("reloads after accepting", async () => {
     const reload = vi.fn();
-    render(<TermsStep accept={vi.fn().mockResolvedValue(undefined)} reload={reload} />);
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    render(<TermsStep accept={vi.fn().mockResolvedValue(undefined)} reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(reload).toHaveBeenCalledOnce();
   });
   it("says so and keeps the form when accepting fails", async () => {
     const reload = vi.fn();
-    render(<TermsStep accept={vi.fn().mockRejectedValue(new Error("x"))} reload={reload} />);
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    render(<TermsStep accept={vi.fn().mockRejectedValue(new Error("x"))} reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "I agree and continue" })).toBeEnabled();
     expect(reload).not.toHaveBeenCalled();
   });
-  it("links the terms and the privacy notice", () => {
-    render(<TermsStep accept={vi.fn()} reload={() => {}} />);
-    expect(screen.getByRole("link", { name: "terms" })).toHaveAttribute("href", "/terms");
+  it("links the terms and the privacy notice, states age and versions", () => {
+    render(<TermsStep accept={vi.fn()} reload={() => {}} versions={versions} />);
+    expect(screen.getAllByRole("link", { name: "terms of use" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "terms of use" })).toHaveAttribute("href", "/terms");
     expect(screen.getByRole("link", { name: "privacy notice" })).toHaveAttribute("href", "/privacy");
+    expect(screen.getByText(/you are 18 or older/)).toBeInTheDocument();
+    expect(screen.getByText("Terms terms-v1, privacy notice privacy-v1.")).toBeInTheDocument();
   });
 });
 
@@ -175,7 +175,7 @@ describe("WelcomeBody", () => {
     expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute("href", "/welcome");
   });
   it.each([
-    { kind: "terms" as const },
+    { kind: "terms" as const, versions: { terms: "terms-v1", privacy: "privacy-v1" } },
     { kind: "paid" as const, grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: true },
     { kind: "free" as const, checking: false },
     { kind: "other_plan" as const, planInterval: "month" as const },

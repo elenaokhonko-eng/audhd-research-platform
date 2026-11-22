@@ -40,11 +40,11 @@ describe("fake auth client", () => {
 
 describe("identityConfig", () => {
   it("is fake only outside prod", () => {
-    expect(identityConfig({ PLATFORM_API_FAKE: "1", SITE_ENV: "local" })).toEqual({ kind: "fake" });
+    expect(identityConfig({ PLATFORM_API_FAKE: "1", SITE_ENV: "local" })).toEqual({ kind: "fake", googleEnabled: true });
     expect(identityConfig({ PLATFORM_API_FAKE: "1", SITE_ENV: "prod" })).toEqual({ kind: "missing" });
   });
   it("needs both values", () => {
-    expect(identityConfig({ IDENTITY_API_KEY: "k", IDENTITY_AUTH_DOMAIN: "d.example" })).toEqual({ kind: "firebase", apiKey: "k", authDomain: "d.example" });
+    expect(identityConfig({ IDENTITY_API_KEY: "k", IDENTITY_AUTH_DOMAIN: "d.example" })).toEqual({ kind: "firebase", apiKey: "k", authDomain: "d.example", googleEnabled: false });
     expect(identityConfig({ IDENTITY_API_KEY: "k" })).toEqual({ kind: "missing" });
   });
 });
