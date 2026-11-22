@@ -1,0 +1,153 @@
+from datetime import timedelta
+
+import pytest
+
+from platform_api.entitlements import public as ent_api
+from platform_api.entitlements.models import SourceState
+from platform_api.entitlements.reconcile import Guard
+from tests.fixtures.people import EMAIL, T0
+
+
+def state(
+    name,
+    ref,
+    status="active",
+    grant="tier:paid",
+    interval="year",
+    email=None,
+    source="substack_stripe",
+):
+    return SourceState(
+        source=source,
+        source_ref=ref,
+        email=email or EMAIL[name],
+        grant=grant,
+        status=status,
+        started_at=T0 - timedelta(days=200),
+        valid_until=T0 + timedelta(days=165),
+        plan_interval=interval,
+        access_scope="substack+platform",
+        provider_time=T0,
+    )
+
+
+def run(ent, states, guard=None, run_id="r1"):
+    existing = ent.store.entitlements_by_source("substack_stripe")
+    plan = ent_api.plan_reconcile(existing, states, guard or Guard(), T0)
+    return plan, ent_api.apply_plan(plan, run_id, T0)
+
+
+def test_first_run_creates_and_second_run_changes_nothing(ent):
+    states = [
+        state("ana", "sub_a"),
+        state("hal", "sub_h", grant="status:substack_paid", interval="month"),
+    ]
+    _, first = run(ent, states)
+    plan, second = run(ent, states, run_id="r2")
+    assert (first.created, second.created, second.updated, second.ended, second.unchanged) == (
+        2,
+        0,
+        0,
+        0,
+        2,
+    )
+    record = ent.store.entitlements_by_source("substack_stripe")[0]
+    assert record.valid_from == T0 - timedelta(days=200) and record.member_uid is None
+
+
+def test_an_expired_state_ends_only_its_own_record(ent):
+    run(ent, [state("fay", "sub_f"), state("ana", "sub_a")])
+    cid = ent_api.contact_id_for(EMAIL["fay"])
+    ent_api.grant(cid, "tier:paid", T0 + timedelta(days=90), "launch", "owner:acc-1", T0)
+    _, report = run(
+        ent, [state("fay", "sub_f", status="expired"), state("ana", "sub_a")], run_id="r2"
+    )
+    by_source = {e.source: e.status for e in ent.store.entitlements_for_contacts([cid])}
+    assert report.ended == 1 and by_source == {"substack_stripe": "expired", "grant": "active"}
+
+
+def test_a_record_the_source_did_not_mention_is_left_alone_and_reported(ent):
+    run(ent, [state("ana", "sub_a"), state("gus", "sub_g")])
+    plan, report = run(ent, [state("ana", "sub_a")], run_id="r2")
+    assert (report.ended, report.unseen, len(plan.unseen)) == (0, 1, 1)
+    assert all(e.status == "active" for e in ent.store.entitlements_by_source("substack_stripe"))
+
+
+def test_the_guard_blocks_a_run_that_would_end_too_many(ent):
+    names = ["ana", "cy", "fay", "gus", "hal", "bo", "di", "ed"]
+    run(ent, [state(n, f"sub_{n}") for n in names])
+    plan, report = run(
+        ent, [state(n, f"sub_{n}", status="expired") for n in names[:6]], run_id="r2"
+    )
+    assert plan.blocked and plan.actions == [] and (plan.ends, plan.live_before) == (6, 8)
+    assert report.blocked and report.ended == 0
+    assert all(e.status == "active" for e in ent.store.entitlements_by_source("substack_stripe"))
+
+
+def test_five_ends_are_allowed(ent):
+    names = ["ana", "cy", "fay", "gus", "hal", "bo", "di", "ed"]
+    run(ent, [state(n, f"sub_{n}") for n in names])
+    plan, report = run(
+        ent, [state(n, f"sub_{n}", status="expired") for n in names[:5]], run_id="r2"
+    )
+    assert not plan.blocked and report.ended == 5
+
+
+def test_a_tier_change_is_one_event_for_a_member_and_none_for_a_stranger(ent):
+    run(ent, [state("ana", "sub_a"), state("bo", "sub_b")])
+    ent_api.claim_for_member("u-ana", ent_api.contact_id_for(EMAIL["ana"]))
+    ent.bus.published.clear()
+    run(
+        ent,
+        [state("ana", "sub_a", status="expired"), state("bo", "sub_b", status="expired")],
+        run_id="r2",
+    )
+    changed = [e for e in ent.bus.published if e.type.endswith("membership.tier.changed")]
+    assert [(e.data["member_uid"], e.data["from"], e.data["to"]) for e in changed] == [
+        ("u-ana", "paid", "free")
+    ]
+
+
+def test_an_address_changed_at_the_source_moves_an_unclaimed_record(ent):
+    run(ent, [state("ed", "sub_e")])
+    _, report = run(ent, [state("ed", "sub_e", email="ed.other@example.org")], run_id="r2")
+    old = ent.store.entitlements_for_contacts([ent_api.contact_id_for(EMAIL["ed"])])
+    new = ent.store.entitlements_for_contacts([ent_api.contact_id_for("ed.other@example.org")])
+    assert (
+        (report.moved, report.ended) == (1, 0)
+        and [e.status for e in old] == ["expired"]
+        and [e.status for e in new] == ["active"]
+    )
+
+
+def test_a_claimed_record_stays_with_its_member_when_the_address_changes(ent):
+    run(ent, [state("ana", "sub_a")])
+    cid = ent_api.contact_id_for(EMAIL["ana"])
+    ent_api.claim_for_member("u-ana", cid)
+    _, report = run(
+        ent, [state("ana", "sub_a", email="ana.new@example.org", status="grace")], run_id="r2"
+    )
+    kept = ent.store.entitlements_for_member("u-ana")
+    assert (report.moved, report.updated) == (0, 1) and [
+        (e.contact_id, e.status) for e in kept
+    ] == [(cid, "grace")]
+
+
+def test_a_reactivated_subscription_becomes_active_again(ent):
+    run(ent, [state("ana", "sub_a")])
+    run(ent, [state("ana", "sub_a", status="expired")], run_id="r2")
+    _, report = run(ent, [state("ana", "sub_a")], run_id="r3")
+    assert (
+        report.updated == 1
+        and ent.store.entitlements_by_source("substack_stripe")[0].status == "active"
+    )
+
+
+def test_the_same_reference_twice_in_one_run_is_refused(ent):
+    with pytest.raises(ValueError, match="sub_a"):
+        ent_api.plan_reconcile([], [state("ana", "sub_a"), state("bo", "sub_a")], Guard(), T0)
+
+
+def test_a_plan_and_a_report_never_print_an_address(ent):
+    plan = ent_api.plan_reconcile([], [state("ana", "sub_a")], Guard(), T0)
+    assert "@" not in repr(plan) and "@" not in ent_api.apply_plan(plan, "r1", T0).model_dump_json()

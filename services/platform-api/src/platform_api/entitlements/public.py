@@ -1,7 +1,9 @@
 import hashlib
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal
 
+from platform_api.entitlements import reconcile
 from platform_api.entitlements.access import access_from, decision_for
 from platform_api.entitlements.models import (
     Access,
@@ -15,6 +17,7 @@ from platform_api.entitlements.models import (
     entitlement_id,
     normalise_email,
 )
+from platform_api.entitlements.reconcile import Action, Guard, ReconcilePlan, ReconcileReport
 from platform_api.entitlements.runtime import get_runtime
 from platform_api.shared import clock
 from platform_api.shared.events import contains_email, new_event
@@ -24,6 +27,11 @@ __all__ = [
     "Decision",
     "Reason",
     "access_for",
+    "apply_plan",
+    "Guard",
+    "plan_reconcile",
+    "ReconcilePlan",
+    "ReconcileReport",
     "can_open",
     "claim_for_member",
     "grant",
@@ -118,13 +126,20 @@ def _member_tier(contact: Contact | None, now: datetime) -> tuple[str | None, st
 
 
 def _announce_tier_change(
-    contact_id: str, uid: str | None, before: str | None, now: datetime
-) -> None:
+    contact_id: str,
+    uid: str | None,
+    before: str | None,
+    now: datetime,
+    *,
+    run_id: str = "owner",
+    reason: str = "owner_action",
+) -> bool:
+    """Publish `membership.tier.changed` when the member's tier differs from `before`."""
     if uid is None or before is None:
-        return
+        return False
     after = access_for(uid, now).tier
     if after == before:
-        return
+        return False
     get_runtime().bus.publish(
         new_event(
             "membership.tier.changed",
@@ -134,12 +149,13 @@ def _announce_tier_change(
                 "contact_id": contact_id,
                 "from": before,
                 "to": after,
-                "run_id": "owner",
-                "reason": "owner_action",
+                "run_id": run_id,
+                "reason": reason,
             },
             now=now,
         )
     )
+    return True
 
 
 def _platform_uid(contact: Contact) -> str | None:
@@ -286,3 +302,118 @@ def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
         )
     )
     _announce_tier_change(found.contact_id, uid, tier_before, now)
+
+
+def apply_grant_policies(contact_id: str, now: datetime) -> list[str]:
+    """Hook for the launch grant policies; Task 5 replaces it. Creates nothing yet."""
+    return []
+
+
+def plan_reconcile(
+    existing: Sequence[Entitlement], states: Sequence[SourceState], guard: Guard, now: datetime
+) -> ReconcilePlan:
+    """Resolve each address to its contact id, then plan without reading or writing."""
+    return reconcile.plan(existing, [(contact_id_for(s.email), s) for s in states], guard, now)
+
+
+def _audit_entry(action: Action, run_id: str, now: datetime, partner: str | None) -> AuditEntry:
+    evidence = {"run_id": run_id, "source_ref": action.evidence_source_ref}
+    if partner is not None:
+        key = "moved_to" if action.entitlement.status == "expired" else "moved_from"
+        evidence[key] = partner
+    verb = {"create": "created", "update": "updated", "end": "ended", "move": "moved"}
+    return AuditEntry(
+        at=now,
+        actor=f"run:{run_id}",
+        action=f"entitlement.{verb[action.kind]}",
+        subject=action.entitlement.entitlement_id,
+        reason="reconcile",
+        evidence=evidence,
+    )
+
+
+def apply_plan(plan: ReconcilePlan, run_id: str, now: datetime) -> ReconcileReport:
+    """Write a plan: one write per contact, a moved record created before its old one ends.
+
+    A member's tier is compared before the first write and after the last write and the
+    grant policies, so a member gets at most one `membership.tier.changed` per run.
+    """
+    counts = {
+        kind: sum(1 for a in plan.actions if a.kind == kind) for kind in ("create", "update", "end")
+    }
+    moved = sum(1 for a in plan.actions if a.kind == "move" and a.entitlement.status != "expired")
+    report = ReconcileReport(
+        run_id=run_id,
+        created=0,
+        updated=0,
+        ended=0,
+        moved=0,
+        unchanged=plan.unchanged,
+        unseen=len(plan.unseen),
+        tier_changes=0,
+        grants_created=0,
+        blocked=plan.blocked,
+    )
+    if plan.blocked or not plan.actions:
+        return report
+
+    store = get_runtime().store
+    touched = list(dict.fromkeys(a.entitlement.contact_id for a in plan.actions))
+    before: dict[str, tuple[str, str]] = {}  # member uid -> (contact id, tier before)
+    for contact_id in touched:
+        contact = store.get_contact(contact_id)
+        uids = [_platform_uid(contact) if contact else None]
+        uids += [
+            a.entitlement.member_uid for a in plan.actions if a.entitlement.contact_id == contact_id
+        ]
+        for uid in uids:
+            if uid is not None and uid not in before:
+                before[uid] = (contact_id, access_for(uid, now).tier)
+
+    partner: dict[int, str] = {}
+    for i, a in enumerate(plan.actions):
+        if a.kind == "move" and a.entitlement.status != "expired":
+            partner[i] = plan.actions[i + 1].entitlement.entitlement_id
+            partner[i + 1] = a.entitlement.entitlement_id
+
+    first: dict[str, list[tuple[Entitlement, AuditEntry]]] = {}
+    then: dict[str, list[tuple[Entitlement, AuditEntry]]] = {}
+    for i, a in enumerate(plan.actions):
+        record = a.entitlement
+        if a.email is not None:
+            upsert_contact(a.email, ChannelsPatch())
+        creates = a.kind == "create" or (a.kind == "move" and record.status != "expired")
+        if creates and record.member_uid is None:
+            contact = store.get_contact(record.contact_id)
+            uid = _platform_uid(contact) if contact else None
+            if uid is not None:
+                record = record.model_copy(update={"member_uid": uid})
+        record = record.model_copy(update={"updated_at": now, "updated_by": f"run:{run_id}"})
+        ends_a_move = a.kind == "move" and record.status == "expired"
+        (then if ends_a_move else first).setdefault(record.contact_id, []).append(
+            (record, _audit_entry(a, run_id, now, partner.get(i)))
+        )
+    for writes in (first, then):  # never a moment with neither record of a move
+        for contact_id, pairs in writes.items():
+            store.write(contact_id, [e for e, _ in pairs], [entry for _, entry in pairs])
+
+    grants_created = 0
+    for contact_id in touched:
+        contact = store.get_contact(contact_id)
+        uid = _platform_uid(contact) if contact else None
+        if uid is not None:
+            grants_created += len(apply_grant_policies(contact_id, now))
+    tier_changes = sum(
+        _announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
+        for uid, (contact_id, tier) in before.items()
+    )
+    return report.model_copy(
+        update={
+            "created": counts["create"],
+            "updated": counts["update"],
+            "ended": counts["end"],
+            "moved": moved,
+            "tier_changes": tier_changes,
+            "grants_created": grants_created,
+        }
+    )
