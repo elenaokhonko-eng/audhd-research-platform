@@ -87,3 +87,22 @@ run "a_schedule_faster_than_the_job_is_refused" {
   }
   expect_failures = [var.schedule]
 }
+
+run "the_scheduler_calls_the_run_api_with_an_empty_body" {
+  command = plan
+  variables {
+    schedule_enabled = true
+  }
+  assert {
+    condition     = google_cloud_scheduler_job.reconcile.http_target[0].uri == "https://run.googleapis.com/v2/projects/example-dev/locations/asia-southeast1/jobs/stripe-reconcile:run" && google_cloud_scheduler_job.reconcile.http_target[0].http_method == "POST" && google_cloud_scheduler_job.reconcile.http_target[0].body == null
+    error_message = "The scheduler must POST to the job's :run with no body."
+  }
+  assert {
+    condition     = google_cloud_scheduler_job.reconcile.http_target[0].oauth_token[0].service_account_email == "scheduler@example-dev.iam.gserviceaccount.com" && google_cloud_scheduler_job.reconcile.http_target[0].oauth_token[0].scope == "https://www.googleapis.com/auth/cloud-platform"
+    error_message = "The scheduler must call with an OAuth token of its own account, scope cloud-platform."
+  }
+  assert {
+    condition     = google_cloud_scheduler_job.reconcile.paused == false
+    error_message = "Switching the schedule on unpauses it."
+  }
+}

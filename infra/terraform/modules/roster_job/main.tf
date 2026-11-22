@@ -14,9 +14,10 @@ resource "google_storage_bucket_iam_member" "reads_inbox" {
 }
 
 resource "google_cloud_run_v2_job" "this" {
-  project  = var.project_id
-  name     = local.job_name
-  location = var.region
+  project             = var.project_id
+  name                = local.job_name
+  location            = var.region
+  deletion_protection = var.deletion_protection
 
   template {
     task_count = 1

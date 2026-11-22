@@ -37,9 +37,10 @@ resource "google_secret_manager_secret_iam_binding" "readers" {
 
 # ---------------------------------------------------------------- the job
 resource "google_cloud_run_v2_job" "this" {
-  project  = var.project_id
-  name     = local.job_name
-  location = var.region
+  project             = var.project_id
+  name                = local.job_name
+  location            = var.region
+  deletion_protection = var.deletion_protection
 
   template {
     task_count = 1
@@ -47,7 +48,8 @@ resource "google_cloud_run_v2_job" "this" {
       service_account = var.job_service_account_email
       # A failed reconcile is not retried blindly; the next scheduled run starts afresh.
       max_retries = 0
-      # Under the shortest allowed schedule period (10 minutes), so two runs never overlap.
+      # Under the shortest allowed schedule period (10 minutes), so two scheduled runs never
+      # overlap. A run started by platform-api can overlap one; request_refresh guards that.
       timeout = "540s"
 
       containers {

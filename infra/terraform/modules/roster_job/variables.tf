@@ -45,3 +45,9 @@ variable "overrides_role" {
   type        = string
   description = "Role that may start a run with changed settings (roles/run.jobsExecutorWithOverrides). Bound for the owner only."
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = "Refuse terraform destroy of the job (on in prod, off in dev)."
+  default     = true
+}

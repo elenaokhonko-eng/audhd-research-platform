@@ -86,3 +86,9 @@ variable "scheduler_service_account_email" {
   type        = string
   description = "Identity Cloud Scheduler uses to start the job. It holds the runner role on this job and nothing else."
 }
+
+variable "deletion_protection" {
+  type        = bool
+  description = "Refuse terraform destroy of the job (on in prod, off in dev)."
+  default     = true
+}

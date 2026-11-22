@@ -22,6 +22,9 @@ locals {
 
   # Ruling 2 of the wave-2 plan: the narrowest predefined role with run.jobs.runWithOverrides.
   job_overrides_role = "roles/run.jobsExecutorWithOverrides"
+
+  # Terraform may destroy a job in dev, not in prod (as the other Cloud Run resources).
+  job_deletion_protection = local.platform_env == "prod"
 }
 
 module "reconcile_job" {
@@ -34,6 +37,7 @@ module "reconcile_job" {
   owner_member                    = var.owner_member
   runner_role_id                  = google_project_iam_custom_role.platform_job_runner.id
   overrides_role                  = local.job_overrides_role
+  deletion_protection             = local.job_deletion_protection
   schedule                        = var.reconcile_schedule
   schedule_enabled                = var.reconcile_schedule_enabled
   scheduler_service_account_email = google_service_account.scheduler.email
@@ -52,5 +56,6 @@ module "roster_job" {
   owner_member              = var.owner_member
   runner_role_id            = google_project_iam_custom_role.platform_job_runner.id
   overrides_role            = local.job_overrides_role
+  deletion_protection       = local.job_deletion_protection
   depends_on                = [google_project_service.enabled]
 }
