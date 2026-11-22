@@ -125,7 +125,7 @@ variable "reconcile_schedule" {
 }
 
 variable "reconcile_schedule_enabled" {
-  description = "Run the reconcile schedule. Created paused; the launch runbook switches it on after the first good real run."
+  description = "Run the reconcile schedule and let platform-api start the reconcile (\"Check again\" and the sign-in refresh). Off at first; the launch runbook switches it on after the first good real run."
   type        = bool
   default     = false
 }

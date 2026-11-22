@@ -24,6 +24,16 @@ locals {
         { path = "finished_at", order = "DESCENDING" },
       ]
     }
+    # Commerce's roster import reads the latest real reconcile: kind == ..., dry_run == false,
+    # newest finished_at first.
+    sync_runs_by_kind_dry_run = {
+      collection = "sync_runs"
+      fields = [
+        { path = "kind", order = "ASCENDING" },
+        { path = "dry_run", order = "ASCENDING" },
+        { path = "finished_at", order = "DESCENDING" },
+      ]
+    }
     downloads_by_member = {
       collection = "downloads"
       fields = [

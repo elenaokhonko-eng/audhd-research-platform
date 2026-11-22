@@ -127,7 +127,7 @@ resource "google_monitoring_alert_policy" "job_failed" {
   notification_channels = var.notification_channel_ids
 
   documentation {
-    content   = "A job stopped without finishing. Open the job's log for its last execution."
+    content   = "A job stopped without finishing. Open the job's log for its last execution. A blocked reconcile or a refused import also ends its job as failed: if a reconcile-guard-blocked or roster-refused email came at the same time, that email explains this one."
     mime_type = "text/markdown"
   }
 }

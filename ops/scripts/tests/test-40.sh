@@ -30,13 +30,13 @@ grep -q "sk_test_abc" <<<"$out" && fail "sk_ key repeated"
 ok
 
 # 3. Live and test keys do not mix; --live needs the project id typed again.
-reset; printf 'example-dev\nrk_test_abcdefghijklmnop1234' | { run example-dev --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
+reset; printf 'example-prod\nrk_test_abcdefghijklmnop1234' | { run example-prod --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
 [ "$(cat "$tmp/code")" -eq 1 ] || fail "test key with --live should exit 1"
 [ -s "$STUB_LOG" ] && fail "stub called for test key with --live"
 reset; printf 'rk_live_abcdefghijklmnop1234' | { run example-dev; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
 [ "$(cat "$tmp/code")" -eq 1 ] || fail "live key without --live should exit 1"
 [ -s "$STUB_LOG" ] && fail "stub called for live key without --live"
-reset; printf 'other-project\nrk_live_abcdefghijklmnop1234' | { run example-dev --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
+reset; printf 'other-project\nrk_live_abcdefghijklmnop1234' | { run example-prod --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
 [ "$(cat "$tmp/code")" -eq 1 ] || fail "mismatched project id should exit 1"
 [ -s "$STUB_LOG" ] && fail "stub called after project mismatch"
 reset; printf 'example-prod\nrk_live_abcdefghijklmnop1234' | { run example-prod --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
@@ -59,4 +59,17 @@ run; [ "$code" -eq 2 ] || fail "no argument should exit 2, got $code"
 grep -q "Usage:" <<<"$out" || fail "should print usage"
 ok
 run example-dev --live extra; [ "$code" -eq 2 ] || fail "a third argument should exit 2, got $code"
+
+# 6. A live key belongs only in a -prod project, and a -prod project takes only a live key.
+reset; printf 'example-dev\nrk_live_abcdefghijklmnop1234' | { run example-dev --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
+[ "$(cat "$tmp/code")" -eq 1 ] || fail "--live for a dev project should exit 1"
+[ -s "$STUB_LOG" ] && fail "stub called for --live in a dev project"
+grep -q "real customers" "$tmp/out" || fail "should explain why a live key stays out of dev"
+grep -q "rk_live_abc" "$tmp/out" && fail "live key repeated"
+reset; printf 'rk_test_abcdefghijklmnop1234' | { run example-prod; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
+[ "$(cat "$tmp/code")" -eq 1 ] || fail "a -prod project without --live should exit 1"
+[ -s "$STUB_LOG" ] && fail "stub called for a test key in a -prod project"
+grep -q "invented people" "$tmp/out" || fail "should explain why prod takes only a live key"
+ok
+
 echo "test-40: $passed passed"
