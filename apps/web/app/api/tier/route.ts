@@ -17,6 +17,7 @@ export async function GET(request: Request): Promise<Response> {
     return json(200, { tier: access.tier });
   } catch (error) {
     if (error instanceof ApiError && error.code === "unauthenticated") return json(401, { error: "unauthenticated" });
+    if (error instanceof ApiError && error.code === "terms_required") return json(409, { error: "terms_required" });
     return json(503, { error: "unavailable" });
   }
 }

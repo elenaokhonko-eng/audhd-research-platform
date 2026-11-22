@@ -45,6 +45,13 @@ describe("POST /api/refresh-access", () => {
     expect(await res.json()).toEqual({ check: "started" });
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
+  it("answers 429 with a null retry_after when the service gives none", async () => {
+    const { ApiError } = await import("@/lib/platform-api/errors");
+    const spy = vi.spyOn(fake, "refreshAccess").mockRejectedValueOnce(new ApiError(429, "rate_limited", "x"));
+    const res = await post({ origin: ORIGIN, cookie: "session=fake-session:bo" });
+    expect(await res.json()).toEqual({ error: "rate_limited", retry_after: null });
+    spy.mockRestore();
+  });
   it("refuses another origin", async () =>
     expect((await post({ origin: "https://evil.example", cookie: "session=fake-session:bo" })).status).toBe(403));
   it("refuses a visitor without a session", async () => expect((await post({ origin: ORIGIN })).status).toBe(401));
@@ -64,6 +71,12 @@ describe("GET /api/tier", () => {
     expect(await res.json()).toEqual({ tier: "free" });
   });
   it("refuses a visitor without a session", async () => expect((await get({})).status).toBe(401));
+  it("answers 409 when the terms are required", async () => {
+    fake.failNext("terms_required");
+    const res = await get({ cookie: "session=fake-session:bo" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "terms_required" });
+  });
 });
 
 describe("GET /api/promotions", () => {

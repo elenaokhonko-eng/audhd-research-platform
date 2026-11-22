@@ -38,11 +38,14 @@ export default async function Page() {
     );
   }
 
-  let options: UpgradeOptions | null = null;
-  try {
-    options = await api.upgradeOptions(session!);
-  } catch {
-    options = null;
+  const paid = guard.me.access.tier === "paid";
+  let options: UpgradeOptions | null = paid ? { routes: [], promotion: null } : null;
+  if (!paid) {
+    try {
+      options = await api.upgradeOptions(session!);
+    } catch {
+      options = null;
+    }
   }
   if (!options) {
     return (
@@ -84,9 +87,10 @@ export default async function Page() {
         </p>
         {view.url ? (
           <p>
-            <a className="button button-primary" href={view.url} rel="noreferrer" target="_blank">
+            <a aria-describedby="new-tab-note" className="button button-primary" href={view.url} rel="noreferrer" target="_blank">
               Change plan on Substack
-            </a>
+            </a>{" "}
+            <span id="new-tab-note">Opens in a new tab.</span>
           </p>
         ) : (
           <p>Open your Substack account and choose the annual plan.</p>
@@ -111,9 +115,10 @@ export default async function Page() {
       ) : null}
       {view.url ? (
         <p>
-          <a className="button button-primary" href={view.url} rel="noreferrer" target="_blank">
+          <a aria-describedby="new-tab-note" className="button button-primary" href={view.url} rel="noreferrer" target="_blank">
             Subscribe on Substack
-          </a>
+          </a>{" "}
+          <span id="new-tab-note">Opens in a new tab.</span>
         </p>
       ) : null}
       <p>Subscriptions are sold and billed by Substack. When you have subscribed, come back and press Check again.</p>

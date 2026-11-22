@@ -29,8 +29,10 @@ export function PromotionBanner() {
 
   if (!offer) return null;
   return (
-    <p className="promotion-banner">
-      <strong>{offer.badge}</strong> {offer.headline} <Link href="/upgrade">See the offer</Link>
-    </p>
+    <aside aria-label="Offer" className="promotion-banner">
+      <p>
+        <strong>{offer.badge}</strong> {offer.headline} <Link href="/upgrade">See the offer</Link>
+      </p>
+    </aside>
   );
 }

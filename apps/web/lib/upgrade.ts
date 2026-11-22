@@ -23,7 +23,7 @@ export function upgradeView(access: Access, options: UpgradeOptions): UpgradeVie
   return {
     kind: "subscribe",
     url: urlOf("substack"),
-    offer: p ? { ...p.display, ends: formatDate(p.ends_at) } : null,
+    offer: p ? { badge: p.display.badge, headline: p.display.headline, body: p.display.body, ends: formatDate(p.ends_at) } : null,
   };
 }
 

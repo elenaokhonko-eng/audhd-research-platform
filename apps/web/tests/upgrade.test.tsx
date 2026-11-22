@@ -75,4 +75,29 @@ describe("CheckAgain", () => {
     await userEvent.click(screen.getByRole("button", { name: "Check again" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Please wait a moment before checking again.");
   });
+  it("sends the browser to the welcome page when the terms are required", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respond(409, { error: "terms_required" })));
+    const navigate = vi.fn();
+    render(<CheckAgain sleep={async () => {}} onPaid={() => {}} navigate={navigate} />);
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
+  });
+  it("sends the browser to sign in when the session is gone", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => respond(401, { error: "unauthenticated" })));
+    const navigate = vi.fn();
+    render(<CheckAgain sleep={async () => {}} onPaid={() => {}} navigate={navigate} />);
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/join"));
+  });
+  it("stops polling and goes to the welcome page when the tier answers terms_required", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url === "/api/refresh-access" ? respond(200, { check: "started" }) : respond(409, { error: "terms_required" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const navigate = vi.fn();
+    render(<CheckAgain sleep={async () => {}} onPaid={() => {}} navigate={navigate} />);
+    await userEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
