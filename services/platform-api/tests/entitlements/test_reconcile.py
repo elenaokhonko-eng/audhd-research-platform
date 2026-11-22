@@ -236,3 +236,41 @@ def test_a_revoked_record_is_never_changed_by_a_plan(ent):
         )
         assert plan.actions == [] and (report.unchanged, report.unseen) == (1, 0)
     assert ent.store.entitlements_by_source("substack_stripe") == [revoked]
+
+
+# A run follows the live record of a moved subscription.
+
+
+def live_for(ent, ref):
+    return [
+        e
+        for e in ent.store.entitlements_by_source("substack_stripe")
+        if e.source_ref == ref and e.status in ("active", "grace")
+    ]
+
+
+def test_an_address_that_changes_back_leaves_no_paid_record_behind(ent):
+    other = "ed.other@example.org"
+    run(ent, [state("ed", "sub_e")])
+    run(ent, [state("ed", "sub_e", email=other)], run_id="r2")
+    plan, _ = run(ent, [state("ed", "sub_e")], run_id="r3")
+    assert plan.unseen == [] and len(live_for(ent, "sub_e")) == 1
+    run(ent, [state("ed", "sub_e", status="expired")], run_id="r4")
+    assert [e for e in live_for(ent, "sub_e") if e.grant == "tier:paid"] == []
+
+
+def test_a_grant_renamed_and_renamed_back_leaves_one_live_record(ent):
+    run(ent, [state("ana", "sub_a")])
+    run(ent, [state("ana", "sub_a", grant="status:substack_paid")], run_id="r2")
+    plan, _ = run(ent, [state("ana", "sub_a")], run_id="r3")
+    assert plan.unseen == [] and [e.grant for e in live_for(ent, "sub_a")] == ["tier:paid"]
+    run(ent, [state("ana", "sub_a", status="expired")], run_id="r4")
+    assert live_for(ent, "sub_a") == []
+
+
+def test_a_third_run_after_a_move_changes_nothing_and_sees_everything(ent):
+    other = "ed.other@example.org"
+    run(ent, [state("ed", "sub_e")])
+    run(ent, [state("ed", "sub_e", email=other)], run_id="r2")
+    plan, report = run(ent, [state("ed", "sub_e", email=other)], run_id="r3")
+    assert (plan.actions, plan.unseen, report.unchanged) == ([], [], 1)

@@ -111,6 +111,10 @@ def _ended(record: Entitlement, s: SourceState, now: datetime) -> Entitlement:
     )
 
 
+def _live(e: Entitlement) -> bool:
+    return e.status in ("active", "grace")
+
+
 def _find(
     contact_id: str,
     s: SourceState,
@@ -118,13 +122,15 @@ def _find(
     by_ref: dict[tuple[str, str], list[Entitlement]],
 ) -> Entitlement | None:
     found = by_id.get(entitlement_id(s.source, s.source_ref, contact_id, s.grant))
-    if found is not None or s.source not in _BY_REFERENCE:
+    if s.source not in _BY_REFERENCE or (found is not None and _live(found)):
         return found
     sharing = by_ref.get((s.source, s.source_ref), [])
-    if not sharing:
-        return None
-    open_ = [e for e in sharing if e.status not in ("expired", "revoked")]
-    return (open_ or sorted(sharing, key=lambda e: e.updated_at))[-1]
+    live = sorted((e for e in sharing if _live(e)), key=lambda e: e.updated_at)
+    if live:  # the subscription's live record wins over an ended one found by id
+        return live[-1]
+    if found is not None or not sharing:
+        return found
+    return sorted(sharing, key=lambda e: e.updated_at)[-1]
 
 
 def plan(
@@ -159,8 +165,11 @@ def plan(
             continue
 
         seen.add(record.entitlement_id)
-        if record.source in _BY_REFERENCE:
-            seen.update(e.entitlement_id for e in by_ref[(record.source, record.source_ref)])
+        if (
+            record.source in _BY_REFERENCE
+        ):  # ended records of the same subscription; never a live one
+            sharing = by_ref[(record.source, record.source_ref)]
+            seen.update(e.entitlement_id for e in sharing if not _live(e))
         if record.status == "revoked":
             unchanged += 1
             continue
@@ -168,7 +177,7 @@ def plan(
         claimed = record.member_uid is not None
         home = record.contact_id if claimed else contact_id  # a claim sticks (Rule 4)
         email = s.email if home == contact_id else None
-        live = record.status in ("active", "grace")
+        live = _live(record)
 
         if s.status == "expired":
             if live:
