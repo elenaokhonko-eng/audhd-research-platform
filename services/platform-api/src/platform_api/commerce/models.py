@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -27,3 +28,21 @@ class StripeSubscription(BaseModel):
     current_period_end: AwareDatetime | None
     past_due_since: AwareDatetime | None  # set only while past_due
     provider_time: AwareDatetime  # when the list call returned
+
+
+RunKind = Literal["stripe_reconcile", "roster_import"]
+RequestedBy = Literal["schedule", "member", "owner"]
+
+
+class SyncRun(BaseModel):
+    """One run of a sync job. Counts only; never an address."""
+
+    run_id: str
+    kind: RunKind
+    dry_run: bool
+    state: Literal["running", "completed", "failed"]
+    guard: Literal["passed", "blocked"] | None
+    requested_by: RequestedBy
+    counts: dict[str, int]
+    started_at: datetime
+    finished_at: datetime | None
