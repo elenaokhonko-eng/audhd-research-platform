@@ -88,8 +88,11 @@ class InMemoryRunStore:
         return self._runs.get(run_id)
 
     def recent(self, kind: RunKind | None, limit: int) -> list[SyncRun]:
+        # newest first by finish time (start time while unfinished); ties go to the later insert
+        order = {run_id: i for i, run_id in enumerate(self._runs)}
         runs = [r for r in self._runs.values() if kind is None or r.kind == kind]
-        return sorted(runs, key=lambda r: r.started_at, reverse=True)[:limit]
+        runs.sort(key=lambda r: (r.finished_at or r.started_at, order[r.run_id]), reverse=True)
+        return runs[:limit]
 
     def latest(
         self, kind: RunKind, *, completed_only: bool = False, real_only: bool = False

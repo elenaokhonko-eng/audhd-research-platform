@@ -36,21 +36,22 @@ def _would_do(plan: ReconcilePlan) -> dict[str, int]:
     }
 
 
+class _NoReader(Exception):
+    pass
+
+
 def _work(
-    dry_run: bool, run_id: str, now: datetime
-) -> tuple[Literal["passed", "blocked"], dict[str, int]]:
+    dry_run: bool, run_id: str, now: datetime, counts: dict[str, int]
+) -> Literal["passed", "blocked"]:
+    """Fills `counts` in place, so a failure keeps what was counted so far."""
     rt = get_runtime()
-    counts: dict[str, int] = {"seen": 0}
     if rt.stripe is None:
         counts["no_reader"] = 1
-        raise _NoReader(counts)
+        raise _NoReader
     subs = []
-    try:
-        for sub in rt.stripe.subscriptions():
-            subs.append(sub)
-            counts["seen"] += 1
-    except Exception as exc:
-        raise _Failed(counts) from exc
+    for sub in rt.stripe.subscriptions():
+        subs.append(sub)
+        counts["seen"] += 1
     counts.update({word: 0 for word in get_args(Skip)})
     states: list[SourceState] = []
     for sub in subs:
@@ -76,40 +77,40 @@ def _work(
             grants_created=report.grants_created,
             tier_changes=report.tier_changes,
         )
-    return ("blocked" if plan.blocked else "passed"), counts
-
-
-class _Failed(Exception):
-    def __init__(self, counts: dict[str, int]) -> None:
-        super().__init__("failed")
-        self.counts = counts
-
-
-class _NoReader(_Failed):
-    pass
+    return "blocked" if plan.blocked else "passed"
 
 
 def stripe_reconcile(dry_run: bool, requested_by: RequestedBy, now: datetime) -> SyncRun:
     rt = get_runtime()
     run_id = rt.runs.start(_KIND, dry_run, requested_by, now)
+    counts: dict[str, int] = {"seen": 0}
     try:
-        guard, counts = _work(dry_run, run_id, now)
+        guard = _work(dry_run, run_id, now, counts)
+    except Exception as exc:
+        logger.error(
+            "alert=reconcile_failed run=%s dry_run=%s error=%s",
+            run_id,
+            dry_run,
+            type(exc).__name__,
+        )
+        rt.runs.finish(run_id, "failed", None, counts, now)
+    else:
         rt.runs.finish(run_id, "completed", guard, counts, now)
         if guard == "blocked":
-            logger.error("alert=reconcile_guard_blocked run=%s", run_id)
-        rt.bus.publish(
-            new_event(
-                "commerce.reconcile.completed",
-                run_id,
-                {"run_id": run_id, "kind": _KIND, "dry_run": dry_run, "guard": guard, **counts},
-                now=now,
+            logger.error("alert=reconcile_guard_blocked run=%s dry_run=%s", run_id, dry_run)
+        try:
+            rt.bus.publish(
+                new_event(
+                    "commerce.reconcile.completed",
+                    run_id,
+                    {"run_id": run_id, "kind": _KIND, "dry_run": dry_run, "guard": guard, **counts},
+                    now=now,
+                )
             )
-        )
-    except Exception as exc:
-        failed = exc if isinstance(exc, _Failed) else None
-        cause = exc.__cause__ if failed and exc.__cause__ else exc
-        logger.error("alert=reconcile_failed run=%s error=%s", run_id, type(cause).__name__)
-        rt.runs.finish(run_id, "failed", None, failed.counts if failed else {}, now)
+        except Exception as exc:
+            logger.error(
+                "reconcile_event_not_published run=%s error=%s", run_id, type(exc).__name__
+            )
     run = rt.runs.get(run_id)
     if run is None:
         raise RuntimeError("run record missing")

@@ -73,3 +73,70 @@ def test_no_address_reaches_the_log_or_the_run_record(com, caplog):
         and "@" not in run.model_dump_json()
         and run.counts["no_address"] == 1
     )
+
+
+def test_a_failing_event_publish_leaves_the_run_completed(com, caplog):
+    class BrokenBus:
+        def publish(self, event):
+            raise RuntimeError("bus down")
+
+    com.bus = BrokenBus()
+    com.stripe = InMemoryStripeReader([sub("ana")])
+    with caplog.at_level(logging.ERROR):
+        run = commerce.stripe_reconcile(False, "schedule", T0)
+    assert (run.state, run.counts["created"]) == ("completed", 1)
+    assert "reconcile_failed" not in caplog.text and "reconcile_event_not_published" in caplog.text
+
+
+def test_a_failure_outside_the_read_keeps_its_counts_and_applies_nothing(
+    com, ent, caplog, monkeypatch
+):
+    from platform_api.commerce import reconcile
+    from platform_api.commerce.mapping import to_state
+
+    calls = []
+
+    def flaky(s, settings, now):
+        calls.append(s.id)
+        if len(calls) == 2:
+            raise RuntimeError("boom ana@example.org")
+        return to_state(s, settings, now)
+
+    monkeypatch.setattr(reconcile, "to_state", flaky)
+    com.stripe = InMemoryStripeReader([sub("ana"), sub("cy")])
+    with caplog.at_level(logging.DEBUG):
+        run = commerce.stripe_reconcile(False, "schedule", T0)
+    assert run.state == "failed" and run.counts["seen"] == 2
+    assert "RuntimeError" in caplog.text and "@" not in caplog.text
+    assert ent.store.entitlements_by_source("substack_stripe") == []
+
+
+def test_alert_lines_say_whether_it_was_a_dry_run(com, caplog):
+    com.stripe = InMemoryStripeReader([sub(n) for n in PEOPLE])
+    commerce.stripe_reconcile(False, "schedule", T0)
+    com.stripe = InMemoryStripeReader([sub(n, status="canceled") for n in PEOPLE])
+    with caplog.at_level(logging.ERROR):
+        commerce.stripe_reconcile(True, "owner", T0 + timedelta(minutes=5))
+    assert any(
+        m.startswith("alert=reconcile_guard_blocked") and "dry_run=True" in m
+        for m in caplog.messages
+    )
+
+
+def test_no_reader_fails_the_run(com, caplog):
+    com.stripe = None
+    with caplog.at_level(logging.ERROR):
+        run = commerce.stripe_reconcile(False, "schedule", T0)
+    assert (run.state, run.counts["no_reader"]) == ("failed", 1)
+    assert "reconcile_failed" in caplog.text
+
+
+def test_the_fake_run_store_breaks_ties_toward_the_latest_insert():
+    from platform_api.commerce.ports import InMemoryRunStore
+
+    store = InMemoryRunStore()
+    a = store.start("stripe_reconcile", False, "schedule", T0)
+    b = store.start("stripe_reconcile", False, "schedule", T0)
+    store.finish(a, "completed", "passed", {}, T0)
+    store.finish(b, "completed", "passed", {}, T0)
+    assert store.latest("stripe_reconcile").run_id == b
