@@ -1,4 +1,4 @@
-import type { ApiErrorCode } from "./types";
+import type { ApiErrorCode, ErrorReason } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -6,6 +6,7 @@ export class ApiError extends Error {
     readonly code: ApiErrorCode,
     message: string,
     readonly retryAfter: number | null = null,
+    readonly reason: ErrorReason | null = null,
   ) {
     super(message);
     this.name = "ApiError";
