@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -14,3 +15,28 @@ def restore_root_logger() -> Iterator[None]:
         lg.handlers[:] = handlers
         lg.setLevel(level)
         lg.propagate = propagate
+
+
+@pytest.fixture(autouse=True)
+def _fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test depends on the real date."""
+    from tests.fixtures.people import T0
+
+    try:
+        from platform_api.shared import clock
+    except ImportError:
+        return
+    monkeypatch.setattr(clock, "utcnow", lambda: T0)
+
+
+@pytest.fixture
+def ent(monkeypatch: pytest.MonkeyPatch) -> Any:
+    from platform_api.entitlements import runtime as runtime_module
+    from platform_api.entitlements.keys import LocalContactKey
+    from platform_api.entitlements.runtime import Runtime
+    from platform_api.entitlements.store import InMemoryStore
+    from platform_api.shared.bus import InMemoryBus
+
+    runtime = Runtime(InMemoryStore(), LocalContactKey(b"test"), InMemoryBus())
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    return runtime
