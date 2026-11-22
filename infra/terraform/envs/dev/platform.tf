@@ -62,6 +62,12 @@ module "platform_api" {
     PLATFORM_PUSH_SERVICE_ACCOUNT = google_service_account.pubsub_push.email
     PLATFORM_CONTACT_KEY          = module.contact_key.key_version_name
     PLATFORM_LIBRARY_BUCKET       = module.library.name
+    # Wave 2: the owner's routes, sessions, the library's staging bucket and the reconcile job
+    # platform-api may start.
+    PLATFORM_OWNER_ACCOUNTS         = join(",", var.owner_account_ids)
+    PLATFORM_SESSION_TTL_DAYS       = "14"
+    PLATFORM_LIBRARY_STAGING_BUCKET = module.library_staging.name
+    PLATFORM_RECONCILE_JOB          = module.reconcile_job.job_name
   })
   depends_on = [google_project_service.enabled]
 }

@@ -2,9 +2,10 @@
 # Every service account and every IAM binding of this root is in this file, and nothing else
 # is: reviewing who can do what is reading this file. No key file exists for any of them.
 #
-# One binding is declared through a module input rather than a resource here: who may invoke
-# the private platform-api service. The list is local.platform_api_invokers below; the module
-# in platform.tf turns it into roles/run.invoker bindings.
+# One binding is declared through a module input rather than a resource here: which service
+# accounts may invoke the private platform-api service. The list is local.platform_api_invokers
+# below; the module in platform.tf turns it into roles/run.invoker bindings. The owner's own
+# invoker binding is a resource in this file.
 #
 # The two jobs of wave2.tf carry their own resource-level bindings inside their modules, so
 # that each binding sits beside what it protects: who may read the Stripe key (on the secret),
@@ -136,6 +137,39 @@ resource "google_project_iam_custom_role" "platform_job_runner" {
     "run.executions.get",
     "run.executions.list",
   ]
+}
+
+# Sign-in accounts, as the owner's and members' routes need: create a session cookie, read an
+# account to check a session is not revoked, revoke sessions (an account update), and delete
+# an account on request. Exactly the Identity Platform permissions of those four calls.
+resource "google_project_iam_custom_role" "platform_sign_in_manager" {
+  project     = var.project_id
+  role_id     = "platformSignInManager"
+  title       = "Sign-in manager"
+  description = "Create and verify session cookies, revoke sessions, delete an account. Nothing else."
+  permissions = [
+    "firebaseauth.users.createSession",
+    "firebaseauth.users.get",
+    "firebaseauth.users.update",
+    "firebaseauth.users.delete",
+  ]
+}
+
+resource "google_project_iam_member" "platform_api_manages_sign_in" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.platform_sign_in_manager.id
+  member  = "serviceAccount:${google_service_account.platform_api.email}"
+}
+
+# The owner may call platform-api's owner routes from her terminal with her own identity token.
+# A separate binding: local.platform_api_invokers holds service accounts only. The module's
+# invoker bindings are non-authoritative members too, so the two do not overwrite each other.
+resource "google_cloud_run_v2_service_iam_member" "owner_invokes_platform_api" {
+  project  = var.project_id
+  location = var.region
+  name     = module.platform_api.name
+  role     = "roles/run.invoker"
+  member   = var.owner_member
 }
 
 # ---------------------------------------------------------------- platform-hooks
