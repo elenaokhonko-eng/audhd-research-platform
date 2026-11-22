@@ -134,3 +134,50 @@ def check_a_stored_slug_keeps_its_counts(store: EntitlementStore) -> None:
     assert stored.counts == {"arrivals": 3, "grants_created": 3}
     with pytest.raises(LookupError):
         store.add_to_campaign_count("nope", "arrivals")
+
+
+def check_a_claim_keeps_the_stored_status(store: EntitlementStore) -> None:
+    from datetime import timedelta
+
+    later = NOW + timedelta(days=1)
+    waiting = _ent("c1")
+    ended = Entitlement(
+        **{
+            **_ent("c1").model_dump(),
+            "entitlement_id": entitlement_id("grant", "campaign:y", "c1", "tier:paid"),
+            "source_ref": "campaign:y",
+            "status": "expired",
+        }
+    )
+    taken = Entitlement(
+        **{
+            **_ent("c1").model_dump(),
+            "entitlement_id": entitlement_id("grant", "campaign:z", "c1", "tier:paid"),
+            "source_ref": "campaign:z",
+            "member_uid": "u-other",
+        }
+    )
+    elsewhere = _ent("c2")
+    store.write("c1", [waiting, ended, taken], [])
+    store.write("c2", [elsewhere], [])
+
+    claimed = store.claim_records("c1", "u-ana", later)
+
+    assert sorted(claimed) == sorted([waiting.entitlement_id, ended.entitlement_id])
+    for before in (waiting, ended):
+        after = store.get_entitlement(before.entitlement_id)
+        assert after == before.model_copy(
+            update={"member_uid": "u-ana", "updated_at": later, "updated_by": "member:u-ana"}
+        )
+        [entry] = store.audit_for(before.entitlement_id)
+        assert (entry.action, entry.actor, entry.at, entry.evidence) == (
+            "entitlement.claimed",
+            "member:u-ana",
+            later,
+            {"contact_id": "c1"},
+        )
+    assert store.get_entitlement(taken.entitlement_id) == taken
+    assert store.get_entitlement(elsewhere.entitlement_id) == elsewhere
+    assert store.audit_for(taken.entitlement_id) == []
+    assert store.claim_records("c1", "u-ana", later) == []
+    assert store.claim_records("c9", "u-ana", later) == []

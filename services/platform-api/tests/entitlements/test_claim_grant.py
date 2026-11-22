@@ -258,3 +258,54 @@ def test_two_members_claiming_one_contact_at_once_leave_one_owner(ent):
     assert ent_api.claim_for_member("u-ana", cid) == []
     assert ent.store.get_contact(cid).channels["platform"]["member_uid"] == "u-other"
     assert ent.store.entitlements_for_member("u-ana") == []
+
+
+def test_a_record_a_run_ends_during_a_claim_stays_ended(ent, monkeypatch):
+    """The run lands after the claim's ownership step and before its records are written."""
+    from tests.entitlements.test_reconcile import run, state
+
+    run(ent, [state("bo", "sub_b")])
+    cid = ent_api.contact_id_for(EMAIL["bo"])
+    store = ent.store
+    merge = store.merge_contact
+    armed, ended = [], []
+
+    def end_bo() -> None:
+        if armed and not ended:
+            ended.append(True)
+            run(ent, [state("bo", "sub_b", status="expired")], run_id="r2")
+
+    def ownership(contact_id, change):
+        held = merge(contact_id, change)
+        armed.append(True)
+        return held
+
+    def after_read(method):
+        def wrapped(*args):
+            found = method(*args)
+            end_bo()  # the read is done; the run ends the record before the claim writes
+            return found
+
+        return wrapped
+
+    def before(method):
+        def wrapped(*args):
+            end_bo()  # the latest moment before a one-step claim
+            return method(*args)
+
+        return wrapped
+
+    monkeypatch.setattr(store, "merge_contact", ownership)
+    monkeypatch.setattr(
+        store, "entitlements_for_contacts", after_read(store.entitlements_for_contacts)
+    )
+    if hasattr(store, "claim_records"):
+        monkeypatch.setattr(store, "claim_records", before(store.claim_records))
+
+    claimed = ent_api.claim_for_member("u-bo", cid)
+
+    assert ended
+    [held] = [e for e in store.entitlements_by_source("substack_stripe") if e.contact_id == cid]
+    assert (held.status, held.member_uid) == ("expired", "u-bo")
+    assert claimed == [held.entitlement_id]
+    assert ent_api.access_for("u-bo", T0).tier == "free"

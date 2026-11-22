@@ -121,6 +121,7 @@ from tests.identity.test_http_member import (  # noqa: E402
 def test_the_firestore_store_passes_the_store_checks() -> None:
     from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
     from tests.entitlements.store_conformance import (
+        check_a_claim_keeps_the_stored_status,
         check_a_stored_slug_keeps_its_counts,
         check_a_write_that_mixes_contacts_is_refused_whole,
         check_an_audit_only_write_appends_entries_and_nothing_else,
@@ -134,6 +135,7 @@ def test_the_firestore_store_passes_the_store_checks() -> None:
         check_create_if_absent_creates_once,
         check_merge_contact_sees_the_stored_contact_and_may_leave_it,
         check_a_stored_slug_keeps_its_counts,
+        check_a_claim_keeps_the_stored_status,
     ):
         check(FirestoreEntitlementStore(_client()))
 
@@ -259,3 +261,22 @@ def test_two_first_sign_ins_create_one_member() -> None:
         lambda: store.create_if_absent(member.model_copy(update={"joined_via": "members"})),
     )
     assert sorted(results) == [False, True] and store.count() == 1
+
+
+def test_a_claim_and_an_end_at_once_leave_the_record_ended() -> None:
+    from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
+    from tests.fixtures.people import T0, record
+
+    client = _client()
+    claimer, runner = FirestoreEntitlementStore(client), FirestoreEntitlementStore(client)
+    live = record("bo", "stripe_year", contact_id="c-bo")
+    runner.write("c-bo", [live], [])
+    ended = live.model_copy(update={"status": "expired", "updated_by": "run:r2"})
+    _at_once(
+        lambda: claimer.claim_records("c-bo", "u-bo", T0),
+        lambda: runner.write("c-bo", [ended], []),
+    )
+    # Whichever lands first, the end is kept. (A run's whole-document write may blank a claim
+    # that landed just before it; no access is lost, since unclaimed records still count.)
+    held = runner.get_entitlement(live.entitlement_id)
+    assert held is not None and held.status == "expired"

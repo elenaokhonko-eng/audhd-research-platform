@@ -1,6 +1,7 @@
 """The storage port of the entitlements module, and an in-memory implementation."""
 
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Protocol
 
 from platform_api.entitlements.models import (
@@ -13,6 +14,18 @@ from platform_api.entitlements.models import (
 )
 
 ContactChange = Callable[[Contact | None], Contact | None]
+
+
+def claimed_audit(entitlement_id: str, contact_id: str, uid: str, now: datetime) -> AuditEntry:
+    """The audit entry of one record that `claim_records` claimed."""
+    return AuditEntry(
+        at=now,
+        actor=f"member:{uid}",
+        action="entitlement.claimed",
+        subject=entitlement_id,
+        reason=None,
+        evidence={"contact_id": contact_id},
+    )
 
 
 def check_write(contact_id: str, entitlements: Sequence[Entitlement]) -> None:
@@ -61,6 +74,17 @@ class EntitlementStore(Protocol):
 
     def create_if_absent(self, entitlement: Entitlement, audit: AuditEntry) -> bool:
         """False when the id already exists."""
+        ...
+
+    def claim_records(self, contact_id: str, uid: str, now: datetime) -> list[str]:
+        """Give the member every record of the contact that no member holds yet, in one step.
+
+        Reads each entitlement of the contact again, inside the step. A record whose
+        `member_uid` is still None gets `member_uid = uid`, `updated_at = now` and
+        `updated_by = "member:<uid>"`; its status and every other field stay as stored, so a
+        record a run ended meanwhile stays ended. One `entitlement.claimed` audit entry per
+        record claimed is written in the same step. Returns the ids claimed.
+        """
         ...
 
     def audit_for(self, subject: str) -> list[AuditEntry]: ...
@@ -149,6 +173,19 @@ class InMemoryStore:
         self._entitlements[entitlement.entitlement_id] = entitlement.model_copy()
         self._audit.append(audit.model_copy(deep=True))
         return True
+
+    def claim_records(self, contact_id: str, uid: str, now: datetime) -> list[str]:
+        claimed = [
+            e.model_copy(
+                update={"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"}
+            )
+            for e in self._entitlements.values()
+            if e.contact_id == contact_id and e.member_uid is None
+        ]
+        for e in claimed:
+            self._entitlements[e.entitlement_id] = e
+            self._audit.append(claimed_audit(e.entitlement_id, contact_id, uid, now))
+        return [e.entitlement_id for e in claimed]
 
     def audit_for(self, subject: str) -> list[AuditEntry]:
         return [a.model_copy(deep=True) for a in self._audit if a.subject == subject]

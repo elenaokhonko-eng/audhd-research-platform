@@ -329,6 +329,7 @@ def test_a_job_that_needs_the_contact_key_is_told_which_setting_is_missing(
 # The Firestore stores on the fake client: the conformance checks and the shared tests.
 
 from tests.entitlements.store_conformance import (  # noqa: E402
+    check_a_claim_keeps_the_stored_status,
     check_a_stored_slug_keeps_its_counts,
     check_a_write_that_mixes_contacts_is_refused_whole,
     check_an_audit_only_write_appends_entries_and_nothing_else,
@@ -343,6 +344,7 @@ def test_the_firestore_store_passes_the_store_checks():
         check_create_if_absent_creates_once,
         check_merge_contact_sees_the_stored_contact_and_may_leave_it,
         check_a_stored_slug_keeps_its_counts,
+        check_a_claim_keeps_the_stored_status,
     ):
         check(FirestoreEntitlementStore(FakeFirestore()))
 

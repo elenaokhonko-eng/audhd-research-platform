@@ -229,25 +229,9 @@ def claim_for_member(uid: str, contact_id: str) -> list[str]:
     contact = store.merge_contact(contact_id, take)
     if contact is None or _platform_uid(contact) != uid:
         return []
-    waiting = [e for e in store.entitlements_for_contacts([contact_id]) if e.member_uid is None]
-    claimed = [
-        e.model_copy(update={"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"})
-        for e in waiting
-    ]
-    audit = [
-        AuditEntry(
-            at=now,
-            actor=f"member:{uid}",
-            action="entitlement.claimed",
-            subject=e.entitlement_id,
-            reason=None,
-            evidence={"contact_id": contact_id},
-        )
-        for e in claimed
-    ]
-    if claimed:
-        store.write(contact_id, claimed, audit)
-    return [e.entitlement_id for e in claimed]
+    # The records are claimed in one step of the store, which reads them again: a record a
+    # run ended after the ownership step stays ended (02 section 4: no grant without a fact).
+    return store.claim_records(contact_id, uid, now)
 
 
 def grant(

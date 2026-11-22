@@ -26,3 +26,9 @@ def test_in_memory_store_merges_a_contact_in_one_step():
 
 def test_in_memory_store_keeps_the_counts_of_a_stored_campaign():
     check_a_stored_slug_keeps_its_counts(InMemoryStore())
+
+
+def test_in_memory_store_claims_waiting_records_and_keeps_their_status():
+    from tests.entitlements.store_conformance import check_a_claim_keeps_the_stored_status
+
+    check_a_claim_keeps_the_stored_status(InMemoryStore())

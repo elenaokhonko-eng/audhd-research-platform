@@ -7,6 +7,7 @@ lost to a concurrent writer runs in a transaction.
 """
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from typing import Any
 
 from google.api_core.exceptions import NotFound
@@ -23,7 +24,7 @@ from platform_api.entitlements.models import (
     LaunchConfig,
     Source,
 )
-from platform_api.entitlements.store import ContactChange, check_write
+from platform_api.entitlements.store import ContactChange, check_write, claimed_audit
 
 _IN_LIMIT = 30  # the most values Firestore takes in one `in` filter
 
@@ -119,6 +120,28 @@ class FirestoreEntitlementStore:
             transaction.set(ref, entitlement.model_dump())
             self._stage_audit(transaction, [audit])
             return True
+
+        return in_transaction(self._client, work)
+
+    def claim_records(self, contact_id: str, uid: str, now: datetime) -> list[str]:
+        query = self._entitlements.where(filter=FieldFilter("contact_id", "==", contact_id))
+
+        def work(transaction: firestore.Transaction) -> list[str]:
+            waiting = [
+                s.id
+                for s in query.stream(transaction=transaction)  # every read before any write
+                if (s.to_dict() or {}).get("member_uid") is None
+            ]
+            for eid in waiting:
+                # Only these three fields: the stored status and the rest stay as they are.
+                transaction.update(
+                    self._entitlements.document(eid),
+                    {"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"},
+                )
+            self._stage_audit(
+                transaction, [claimed_audit(eid, contact_id, uid, now) for eid in waiting]
+            )
+            return waiting
 
         return in_transaction(self._client, work)
 
