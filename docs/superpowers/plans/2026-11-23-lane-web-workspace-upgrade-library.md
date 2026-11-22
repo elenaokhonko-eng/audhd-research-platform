@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - **The server decides.** A page under `/member` calls `requireMember` (and `requireSection` where a section is needed) before it renders anything. No component hides a link as its only protection.
-- **Every POST route** follows `app/api/terms/route.ts`: refuse another origin (`isSameOrigin`), read the session with `readSessionCookie`, answer JSON with `cache-control: no-store`, map `unauthenticated` to 401 and anything unexpected to 503.
+- **Every POST route** follows `app/api/terms/route.ts`: refuse another origin (`isSameOrigin`), read the session with `readSessionCookie`, answer JSON with `cache-control: no-store`, map `unauthenticated` to 401, `terms_required` to 409 (as `app/api/support/route.ts` does; the component then sends the browser to `/welcome`) and anything unexpected to 503. Route tests accept the terms for the person in `beforeEach`.
 - **No address, name, cookie value or note** in a log line or an error message. Pages show `member.email_hint`, never an address.
 - **Nothing about an offer is written in the code**: no percentage, no price, no date. The upgrade page and the banner display what `platform-api` returns.
 - **Wording** is plain and specific; the exact sentences are in each task. Dates are shown as `23 November 2026` (`Intl.DateTimeFormat("en-GB", { dateStyle: "long", timeZone: "UTC" })`).
@@ -25,7 +25,7 @@
 
 ## Rulings by the integrator
 
-1. **The Google button is shown only when `IDENTITY_GOOGLE_ENABLED` is `1`** (a new `web` setting; this plan's pull request adds it to the contracts page). The owner may store the Google sign-in client after launch; until then the button would only fail.
+1. **The Google button is shown only when `IDENTITY_GOOGLE_ENABLED` is `1`** (a `web` setting on the contracts page, §6). The owner may store the Google sign-in client after launch; until then the button would only fail.
 2. **Workspace addresses:** `/member` (overview), `/member/library`, `/member/research`, `/member/guides`, `/member/account`. `/upgrade` is outside the workspace shell so that a link to it works from any page.
 3. **Research and Guides are views of the library catalogue**, filtered by kind: research = `meta_review`, `evidence_map`, `clinician_one_pager`; guides = `guide`, `worksheet`.
 4. **A paid route typed by a free member redirects to `/upgrade`**; it does not answer 403 or 404.
@@ -85,14 +85,14 @@ export interface ItemDetail { item: ItemCard; description: string; citation: str
 export interface SignedLink { url: string; expires_at: string }
 ```
 
-- `ApiError` gains a fifth constructor argument `reason: "paid_required" | "purchase_required" | null = null`, read from `error.reason` of the response body.
+- `ApiError` gains a fifth constructor argument `reason: "paid_required" | "purchase_required" | null = null`, read from `error.reason` of the response body; any other value becomes `null`.
 - `PlatformApi` gains: `entitlements(session): Promise<Reason[]>`, `refreshAccess(session): Promise<RefreshTicket>`, `upgradeOptions(session): Promise<UpgradeOptions>`, `activePromotions(): Promise<Promotion[]>`, `libraryItems(session): Promise<ItemCard[]>`, `libraryItem(session, sku): Promise<ItemDetail>`, `download(session, sku): Promise<SignedLink>`, `requestDeletion(session): Promise<void>`. `HttpPlatformApi` implements each against the route of contracts §2 (`refreshAccess` accepts the 202).
 - `FakePlatformApi` models them with invented data:
-  - Items: `sample-map` (evidence_map, `paid`, buy URL `https://example.org/buy/sample-map`), `sample-guide` (guide, `free_members`), `sample-book` (guide, `purchase_only`, no buy URL). `can_open` follows the access rule for the member's tier and items. `libraryItems` returns them ordered by sku.
+  - Items: `sample-map` (evidence_map, `paid`, buy URL `https://example.org/buy/sample-map`), `sample-guide` (guide, `free_members`), `sample-book` (guide, `purchase_only`, no buy URL). Their titles are "Sample book", "Sample guide" and "Sample map". `can_open` follows the access rule for the member's tier and items. `libraryItems` returns them ordered by title without regard to case, as the service does.
   - `access.sections` is `["overview", "library", "account"]` for the free tier and those plus `"research"` and `"guides"` for the paid tier (check what the first wave's fake returns and make it this).
   - `download`: allowed → `{ url: "https://files.invalid/<sku>", expires_at: now + 10 minutes }`; otherwise `ApiError(403, "forbidden", …, null, reason)`; unknown sku → 404.
   - `upgradeOptions`: as the Commerce plan's rule: paid → no routes; a member with a live `substack_status` reason → `substack_change_plan` to `https://example.org/subscribe` and no promotion; otherwise `substack` (to the promotion's URL when one is active, else `https://example.org/subscribe`) and `platform_only` unavailable.
-  - `setPromotion(promotion | null)` switches the active promotion (default none). `activePromotions` returns it as a list.
+  - `setPromotion(promotion | null)` switches the active promotion (default none). `activePromotions` returns it as a list. The fake does not check the promotion's window: the service only ever returns promotions that are active.
   - `refreshAccess`: answers `started` and, after `upgradeAfterRefresh(name)` was called for that person, makes their tier `paid` on the next `me()`; a second call within the same test answers `already_running`.
   - `requestDeletion`: ends that person's sessions; `me` then fails with `unauthenticated`.
   - Every member route except the four of contracts §1 rejects with `terms_required` until the terms are accepted.
@@ -218,8 +218,8 @@ export async function requireMember(section?: Section): Promise<{ member: Member
 ```
 
 - `guardMember`: no session → redirect `/join`; `loadMe` fails with `unauthenticated` → `/join`; any other failure → `unavailable`; terms not accepted → `/welcome`; a `section` not in `access.sections` → `/upgrade`; otherwise `ok`.
-- `requireMember` turns `redirect` into Next's `redirect()` and `unavailable` into a thrown `Error("unavailable")`, which `app/member/error.tsx` (create it) shows as "The member area cannot be reached right now. Please try again in a minute." with a "Try again" button.
-- `app/member/layout.tsx` calls `requireMember()`, renders `WorkspaceNav` from `navFor(access.sections)`, the member's `email_hint`, a sign-out button (the existing `SignOutButton`) and, when the tier is `free`, a link "Upgrade" to `/upgrade`. It exports `dynamic = "force-dynamic"` and `metadata.robots = { index: false }`.
+- `requireMember` is for pages. It calls Next's `redirect()` for a `redirect` (outside any `try`), and for `unavailable` it throws `Error("unavailable")`, which `app/member/error.tsx` (create it) shows as "The member area cannot be reached right now. Please try again in a minute." with a "Try again" button. The member is loaded through React's `cache()`, so the layout and the page make one call between them.
+- `app/member/layout.tsx` does **not** throw: an error boundary does not catch an error of the layout in its own folder. It calls `guardMember` itself, redirects on `redirect`, and on `unavailable` renders that same message in place of the workspace (without the page). Otherwise it renders `WorkspaceNav` from `navFor(access.sections)`, the member's `email_hint`, a sign-out button (the existing `SignOutButton`) and, when the tier is `free`, a link "Upgrade" to `/upgrade`. It exports `dynamic = "force-dynamic"` and `metadata.robots = { index: false }`.
 - `/member` (overview): heading "Your workspace"; one sentence by tier ("You have full access." or "You have the free workspace."); links to the sections the member has.
 
 - [ ] **Step 1: Write the failing tests**
@@ -303,6 +303,7 @@ git commit -m "web: workspace shell with a server guard and navigation from the 
 | Reason | Sentence |
 | --- | --- |
 | `substack_subscription`, status `active` | "Included with your Substack subscription[, which renews on `<date>`]." |
+| `substack_subscription`, any other status | "Your Substack subscription has ended." |
 | `substack_subscription`, status `grace` | "Included with your Substack subscription. A payment did not go through; access continues[ until `<date>`] while Substack retries." |
 | `substack_status`, interval `month` | "You pay Substack on the monthly plan. Full access to the platform comes with the annual plan." |
 | `substack_status`, interval `year` | "You pay Substack on the annual plan." |
@@ -314,7 +315,7 @@ git commit -m "web: workspace shell with a server guard and navigation from the 
 | anything else | "Access recorded." |
 
 - The page (`requireMember("account")`): heading "Account"; "Signed in as `<email_hint>`"; a section "Your access" with the tier in words ("Full access" or "Free workspace") and one list item per reason from `access.reasons`; when the tier is `free`, a link "See how to upgrade" to `/upgrade`; a section "Terms" with the accepted versions and links to `/terms` and `/privacy`; a section "Delete your account" with the sentence "This removes your account and your records within 30 days. It does not cancel a Substack subscription." and the `DeleteAccount` component.
-- `DeleteAccount`: a button "Delete my account" that first shows a confirmation ("Delete your account? You will be signed out now." with "Yes, delete it" and "Cancel"); on confirm it posts to `/api/account/delete` and, on 200, sends the browser to `/`; on failure it shows, with `role="alert"`, "That did not work. Please try again."
+- `DeleteAccount`: a button "Delete my account" that first shows a confirmation ("Delete your account? You will be signed out now." with "Yes, delete it" and "Cancel"; focus moves to "Cancel" when it appears, and back to "Delete my account" after Cancel); on confirm it posts to `/api/account/delete` and, on 200, sends the browser to `/`; on failure it shows, with `role="alert"`, "That did not work. Please try again."
 - `POST /api/account/delete`: the standard checks; calls `requestDeletion`; answers 200 `{ ok: true }` and clears the session cookie (`clearSessionCookieHeader`).
 
 - [ ] **Step 1: Write the failing tests**
@@ -363,7 +364,7 @@ describe("DeleteAccount", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete my account" }));
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Delete my account" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete my account" })).toHaveFocus();
   });
   it("posts once on confirmation and reports when it is done", async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
@@ -413,7 +414,8 @@ git commit -m "web: Account page with access explained in plain words, and accou
 
 **Files:**
 - Create: `lib/upgrade.ts`, `app/upgrade/page.tsx`, `app/upgrade/CheckAgain.tsx`, `app/components/PromotionBanner.tsx`, `app/api/refresh-access/route.ts`, `app/api/tier/route.ts`, `tests/upgrade.test.tsx`
-- Modify: `app/layout.tsx` or `app/components/Header.tsx` (show the banner on public pages), `tests/wave2-routes.test.ts`
+- Create also: `app/api/promotions/route.ts`
+- Modify: `app/components/Header.tsx` (render the banner), `tests/wave2-routes.test.ts`
 
 **Interfaces:**
 - Produces, in `lib/upgrade.ts`:
@@ -421,26 +423,27 @@ git commit -m "web: Account page with access explained in plain words, and accou
 ```ts
 export type UpgradeView =
   | { kind: "paid" }
-  | { kind: "change_plan"; url: string | null }
+  | { kind: "change_plan"; url: string | null; planInterval: "month" | "year" | null }
   | { kind: "subscribe"; url: string | null; offer: { badge: string; headline: string; body: string; ends: string | null } | null };
-export function upgradeView(tier: "free" | "paid", options: UpgradeOptions): UpgradeView;
+export function upgradeView(access: Access, options: UpgradeOptions): UpgradeView;
 export async function pollUntilPaid(opts: { tier: () => Promise<"free" | "paid" | "signed_out">; sleep: (ms: number) => Promise<void>;
   everyMs?: number; forMs?: number }): Promise<"paid" | "timeout" | "signed_out">;      // defaults 5000 and 60000
 ```
 
-- `upgradeView`: tier `paid` → `paid`. A route `substack_change_plan` → `change_plan` with its URL (`null` when not `available`). Otherwise the `substack` route's URL (`null` when missing or not `available`) and the promotion as `offer`, with `ends = formatDate(promotion.ends_at)`. The `platform_only` route is not shown while it is unavailable.
-- `pollUntilPaid`: asks `tier()` at once, then after each `sleep(everyMs)`, until it answers `paid` or `signed_out`, or `forMs` has passed (then `timeout`). A `tier()` that throws counts as "not yet".
-- `/upgrade` (server): `guardMember` without a section; `upgradeOptions`; a failure of that call shows "The upgrade options cannot be loaded right now. Please try again in a minute." Views:
+- `upgradeView`: tier `paid` → `paid`. A route `substack_change_plan` → `change_plan` with its URL (`null` when not `available`) and the `plan_interval` of the member's live `substack_status` reason (`null` for a reader whose subscription is not billed by card, such as a complimentary one). Otherwise the `substack` route's URL (`null` when missing or not `available`) and the promotion as `offer`, with `ends = formatDate(promotion.ends_at)`. The `platform_only` route is not shown while it is unavailable.
+- `pollUntilPaid`: asks `tier()` at once, then after each `sleep(everyMs)`, until it answers `paid` or `signed_out`, or the **sum of the sleeps** has reached `forMs` (then `timeout`). It never reads the clock, so a test with an instant `sleep` ends. A `tier()` that throws counts as "not yet".
+- `/upgrade` (server, `dynamic = "force-dynamic"`, not indexed): `guardMember` without a section (`unavailable` shows "This page cannot be reached right now. Please try again in a minute."); `upgradeOptions`; a failure of that call shows "The upgrade options cannot be loaded right now. Please try again in a minute." Views:
 
 | View | Shows |
 | --- | --- |
-| `paid` | Heading "You already have full access." and a link "Open your workspace" |
-| `change_plan` | Heading "You are on the monthly plan." Text "Full access to the platform comes with the annual plan. You change your plan in your Substack account; nothing is charged here." A button-link "Change plan on Substack" (external, `rel="noreferrer"`); without a URL: "Open your Substack account and choose the annual plan." Then `CheckAgain` |
+| `paid` | Heading "You already have full access.", a link "See why on your Account page" to `/member/account` and a link "Open your workspace" |
+| `change_plan` | Heading by `planInterval`: "You are on the monthly plan.", "You are on the annual plan.", or, for `null`, "Your Substack subscription does not include the platform." Text "Full access to the platform comes with the annual plan. You change your plan in your Substack account; nothing is charged here." A button-link "Change plan on Substack" (external, `rel="noreferrer"`); without a URL: "Open your Substack account and choose the annual plan." Then `CheckAgain` |
 | `subscribe` | Heading "Get full access." The offer, when there is one: its badge, headline, body and "Offer ends `<ends>`." A button-link "Subscribe on Substack". Text "Subscriptions are sold and billed by Substack. When you have subscribed, come back and press Check again." Then `CheckAgain` |
 
 - `CheckAgain` (client): a button "Check again". On press it posts to `/api/refresh-access`; 429 → `role="status"`: "Please wait a moment before checking again."; any other failure → "The check could not be started. Please try again in a minute."; otherwise it shows "Checking with Substack's payment records…" and runs `pollUntilPaid` against `GET /api/tier`; `paid` → reloads the page; `timeout` → "We did not find a paid subscription for this address yet. If you subscribed with another email address, sign in with that one, or use Tell us on the welcome page."; `signed_out` → sends the browser to `/join`. The button is disabled while a check runs.
 - `POST /api/refresh-access` → the ticket's `check` as `{ check }` (status 200), 429 with `{ error: "rate_limited", retry_after }`, the standard 401 and 503. `GET /api/tier` → `{ tier }`, or 401.
-- `PromotionBanner` (server component): calls `activePromotions()` inside `try`; nothing rendered on failure or when the list is empty; otherwise one line with the badge, the headline and a link "See the offer" to `/upgrade`. Shown in the public header, not inside `/member`. It must not make a public page fail: wrap the call so that any error renders nothing.
+- `PromotionBanner` is a **client** component, because the public pages are built ahead of time (several are client components, and `/terms` and `/privacy` are static) and a server call there would run once, at build. It is rendered by `app/components/Header.tsx`, which only public pages use. After the page loads it fetches `GET /api/promotions` and, when the list is not empty, shows one line with the first promotion's badge and headline and a link "See the offer" to `/upgrade`; on any failure it shows nothing.
+- `GET /api/promotions` → `[{ badge, headline }]` with `cache-control: public, max-age=60` (contracts §2 allows a minute); `[]`, with the same header, when the service fails.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -450,7 +453,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckAgain } from "@/app/upgrade/CheckAgain";
-import type { UpgradeOptions } from "@/lib/platform-api/types";
+import type { Access, UpgradeOptions } from "@/lib/platform-api/types";
 import { pollUntilPaid, upgradeView } from "@/lib/upgrade";
 
 const promotion = { id: "p", channel: "substack_offer", plan_interval: "year" as const, starts_at: "2026-11-26T00:00:00Z", ends_at: "2026-11-30T23:00:00Z",
@@ -458,18 +461,24 @@ const promotion = { id: "p", channel: "substack_offer", plan_interval: "year" as
 const free = (over: Partial<UpgradeOptions> = {}): UpgradeOptions => ({
   routes: [{ kind: "substack", available: true, url: "https://example.org/subscribe" }, { kind: "platform_only", available: false, url: null }], promotion: null, ...over });
 
+const access = (tier: "free" | "paid", interval?: "month" | "year" | null): Access => ({ tier, sections: [], items: [], computed_at: "2026-11-20T00:00:00Z",
+  reasons: interval === undefined ? [] : [{ grant: "status:substack_paid", source: "substack_stripe", label: "substack_status", access_scope: "substack+platform",
+    status: "active", valid_until: null, campaign: null, plan_interval: interval }] });
+const changePlan: UpgradeOptions = { routes: [{ kind: "substack_change_plan", available: true, url: "https://example.org/subscribe" }], promotion: null };
+
 describe("upgradeView", () => {
-  it("shows a paid member nothing to buy", () => expect(upgradeView("paid", { routes: [], promotion: null })).toEqual({ kind: "paid" }));
+  it("shows a paid member nothing to buy", () => expect(upgradeView(access("paid"), { routes: [], promotion: null })).toEqual({ kind: "paid" }));
   it("shows a monthly payer how to change plan and no offer", () =>
-    expect(upgradeView("free", { routes: [{ kind: "substack_change_plan", available: true, url: "https://example.org/subscribe" }], promotion: null }))
-      .toEqual({ kind: "change_plan", url: "https://example.org/subscribe" }));
+    expect(upgradeView(access("free", "month"), changePlan)).toEqual({ kind: "change_plan", url: "https://example.org/subscribe", planInterval: "month" }));
+  it("does not call a complimentary reader a monthly payer", () =>
+    expect(upgradeView(access("free", null), changePlan)).toEqual({ kind: "change_plan", url: "https://example.org/subscribe", planInterval: null }));
   it("shows a free member the subscribe route, with the offer and its end when there is one", () => {
-    expect(upgradeView("free", free())).toEqual({ kind: "subscribe", url: "https://example.org/subscribe", offer: null });
-    const withOffer = upgradeView("free", free({ routes: [{ kind: "substack", available: true, url: promotion.url }], promotion }));
+    expect(upgradeView(access("free"), free())).toEqual({ kind: "subscribe", url: "https://example.org/subscribe", offer: null });
+    const withOffer = upgradeView(access("free"), free({ routes: [{ kind: "substack", available: true, url: promotion.url }], promotion }));
     expect(withOffer).toEqual({ kind: "subscribe", url: "https://example.org/offer", offer: { badge: "Offer", headline: "A headline", body: "A body", ends: "30 November 2026" } });
   });
   it("gives no link when the route is not available", () =>
-    expect(upgradeView("free", { routes: [{ kind: "substack", available: false, url: null }], promotion: null })).toEqual({ kind: "subscribe", url: null, offer: null }));
+    expect(upgradeView(access("free"), { routes: [{ kind: "substack", available: false, url: null }], promotion: null })).toEqual({ kind: "subscribe", url: null, offer: null }));
 });
 
 describe("pollUntilPaid", () => {
@@ -519,7 +528,7 @@ describe("CheckAgain", () => {
 });
 ```
 
-Add to `tests/wave2-routes.test.ts`: `POST /api/refresh-access` answers `{ check: "started" }` for `bo`, 403 for another origin, 401 without a session, and 429 with `retry_after` when the fake is told `failNext("rate_limited")`; `GET /api/tier` answers `{ tier: "free" }` for `bo` and 401 without a session. Six tests.
+Add to `tests/wave2-routes.test.ts`: `POST /api/refresh-access` answers `{ check: "started" }` for `bo`, 403 for another origin, 401 without a session, and 429 with `retry_after` when the fake is told `failNext("rate_limited")`; `GET /api/tier` answers `{ tier: "free" }` for `bo` and 401 without a session; `GET /api/promotions` answers the fake's promotion as `[{ badge, headline }]` with `cache-control: public, max-age=60`, and `[]` when the fake is told `failNext("unavailable")`. Eight tests.
 
 `CheckAgain` takes `sleep` (default: a timer) and `onPaid` (default: `() => window.location.reload()`).
 
@@ -532,7 +541,7 @@ Expected: FAIL, cannot resolve `@/lib/upgrade`.
 
 - [ ] **Step 4: See them pass**
 
-Run the check command. Expected: 16 new tests pass (4, 3, 3 and 6).
+Run the check command. Expected: 19 new tests pass (5, 3, 3 and 8).
 
 - [ ] **Step 5: Commit**
 
@@ -562,10 +571,10 @@ export function refusalText(status: number, reason: string | null): { text: stri
 
 - `cardAction`: `can_open` → `download`; else a `buy_url` → `buy`; else access `paid` → `upgrade`; else `none`.
 - `refusalText`: 403 `paid_required` → "This item is part of full access." with the link "See how to upgrade" to `/upgrade`; 403 `purchase_required` → "This item is sold separately." and no link; 429 → "You have downloaded many files in the last hour. Please try again later."; 404 → "This item is no longer available."; anything else → "The download could not be prepared. Please try again in a minute."
-- Pages: `/member/library` (`requireMember("library")`, heading "Library", every card); `/member/research` and `/member/guides` (`requireMember("research")` / `("guides")`, the filtered view; an empty view says "Nothing here yet."); `/member/library/[sku]` (title, kind, version, pages when not 0, the description, the citation when there is one, and the card's action; an unknown sku → Next's `notFound()`). A failure to load the catalogue shows "The library cannot be loaded right now. Please try again in a minute."
+- Pages: `/member/library` (`requireMember("library")`, heading "Library", every card; when the service answers `not_found` for the list, the library is switched off: "The library opens soon."); `/member/research` and `/member/guides` (`requireMember("research")` / `("guides")`, the filtered view; an empty view says "Nothing here yet."); `/member/library/[sku]` (`requireMember("library")`; a sku that does not match the pattern below → `notFound()` without calling the service; then title, kind, version, pages when not 0, the description, the citation when there is one, and the card's action; an unknown sku → Next's `notFound()`). A failure to load the catalogue shows "The library cannot be loaded right now. Please try again in a minute."
 - `ItemList` shows per card: title (a link to its page), `KIND_LABEL`, the abstract, and its action: `DownloadButton`, or a link "Buy" (external), or a link "Upgrade to open" to `/upgrade`.
 - `DownloadButton` (client): a button "Download". On press it posts to `/api/library/<sku>/download`; on 200 it sends the browser to the returned URL (`onUrl`, default `window.location.assign`); otherwise it shows `refusalText` with `role="alert"`, and its link when there is one.
-- `POST /api/library/[sku]/download`: the standard checks; a `sku` that does not match `^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$` → 404 without calling the service; on success 200 `{ url }`; an `ApiError` 403 → 403 `{ error: "forbidden", reason }`; 404 → 404; 429 → 429; otherwise 503.
+- `POST /api/library/[sku]/download`: the standard checks; a `sku` that does not match `^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$` → 404 without calling the service; on success 200 `{ url }`, but 503 unless the returned URL parses and its protocol is `https:` (the browser is sent there, so the route checks it); an `ApiError` 403 → 403 `{ error: "forbidden", reason }`; 404 → 404; 429 → 429; otherwise 503.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -639,7 +648,7 @@ describe("ItemList and DownloadButton", () => {
 });
 ```
 
-Add to `tests/wave2-routes.test.ts`: the download route answers 200 with a URL for `ana`; 403 with `reason: "paid_required"` for `bo`; 404 for `Sample..Map` without the fake being asked (spy on `fake.download`); 403 for another origin; 401 without a session. Five tests. The route handler receives its `sku` as Next 16 passes route parameters (`{ params }: { params: Promise<{ sku: string }> }`).
+Add to `tests/wave2-routes.test.ts`: the download route answers 200 with a URL for `ana`; 403 with `reason: "paid_required"` for `bo`; 404 for `Sample..Map` without the fake being asked (spy on `fake.download`); 403 for another origin; 401 without a session; 503 when the service returns a link that is not `https:` (make the fake return `http://files.invalid/x` once). Six tests. The route handler receives its `sku` as Next 16 passes route parameters (`{ params }: { params: Promise<{ sku: string }> }`).
 
 - [ ] **Step 2: See them fail**
 
@@ -650,7 +659,7 @@ Expected: FAIL, cannot resolve `@/lib/library`.
 
 - [ ] **Step 4: See them pass**
 
-Run the check command. Expected: 18 new tests pass (4, 1, 5, 3 and 5).
+Run the check command. Expected: 19 new tests pass (4, 1, 5, 3 and 6).
 
 - [ ] **Step 5: Commit**
 
@@ -665,14 +674,14 @@ git commit -m "web: library pages, research and guides views, download with plai
 
 **Files:**
 - Create: `lib/legal.ts`, `tests/legal.test.ts`
-- Modify: `app/terms/page.tsx`, `app/privacy/page.tsx`, `app/welcome/TermsStep.tsx`, `app/join/JoinScreen.tsx` and the page that renders it, `lib/identity/config.ts`, `next.config.ts`, `package.json`, `tests/welcome.test.tsx`, `tests/join-screen.test.tsx`
+- Modify: `app/terms/page.tsx`, `app/privacy/page.tsx`, `app/welcome/TermsStep.tsx`, `app/welcome/WelcomeBody.tsx`, `lib/welcome.ts`, `app/join/JoinScreen.tsx` and the page that renders it, `lib/identity/config.ts`, `next.config.ts`, `package.json`, `tests/welcome.test.tsx`, `tests/join-screen.test.tsx`, `tests/auth-client.test.ts`, `tests/finish-sign-in.test.tsx`
 
 **Interfaces:**
-- Produces: `readLegal(name: "terms" | "privacy", dir?: string): { title: string; version: string; effectiveFrom: string; html: string }`. It reads `content/legal/<name>.md` (from `process.cwd()` unless `dir` is given), takes `title`, `version` and `effective_from` from the front matter between the first two `---` lines (a missing key throws an `Error` that names it), and renders the rest with `marked` (GitHub-style tables on).
-- `/terms` and `/privacy`: the rendered text inside `<article className="legal">`, with a line above it: "Version `<version>`, in force from `<formatDate(effectiveFrom)>`." Both pages are static (`dynamic = "force-static"`) and may be indexed.
+- Produces: `readLegal(name: "terms" | "privacy", dir?: string): { title: string; version: string; effectiveFrom: string; html: string }`. It reads `<dir>/<name>.md`, where `dir` defaults to `content/legal` under `process.cwd()`, takes `title`, `version` and `effective_from` from the front matter between the first two `---` lines (a missing key throws an `Error` that names it), and renders the rest with `marked.parse(body, { async: false, gfm: true })` (the plain call is typed as possibly a promise).
+- `/terms` and `/privacy`: the rendered text inside `<article className="legal">`, with a line below the text: "Version `<version>`, in force from `<formatDate(effectiveFrom)>`." Both pages are static (`dynamic = "force-static"`) and may be indexed.
 - `next.config.ts`: `outputFileTracingIncludes` for `/terms` and `/privacy` with `./content/legal/*`, so the files are inside the standalone output. **Read the Next.js documentation for this option in the installed version before writing it**, and check after `npm run build` that `.next/standalone/content/legal/terms.md` exists (add that check to the `build-test` job's script in a `cross-lane` pull request to the Infra lane if the workflow does not already run from `apps/web`).
-- `TermsStep`: above the button, the sentences "Please read the [terms of use](/terms) and the [privacy notice](/privacy)." and "By continuing you confirm that you are 18 or older and that you agree to both." The button reads "I agree and continue". The versions being accepted are shown: "Terms `<terms_version>`, privacy notice `<privacy_version>`."
-- `identityConfig` gains `googleEnabled: boolean` on the `firebase` and `fake` kinds: true for `fake`; for `firebase`, true only when `IDENTITY_GOOGLE_ENABLED === "1"`. `JoinScreen` takes `googleEnabled` and renders neither the Google button nor the sentence that mentions it when it is false; the spam-folder hint then reads "If it is not there after a minute, look in the spam folder."
+- `TermsStep` takes a prop `versions: { terms: string; privacy: string }`; the `terms` view of `welcomeView` gains those two values from `member.terms.required`, and `WelcomeBody` passes them on. The existing checkbox and its label are **removed** (two links with the same name would otherwise sit side by side); agreement is given by the button. Above the button, the sentences "Please read the [terms of use](/terms) and the [privacy notice](/privacy)." and "By continuing you confirm that you are 18 or older and that you agree to both." The button reads "I agree and continue". The versions being accepted are shown: "Terms `<terms_version>`, privacy notice `<privacy_version>`."
+- `identityConfig` gains `googleEnabled: boolean` on the `firebase` and `fake` kinds: true for `fake`; for `firebase`, true only when `IDENTITY_GOOGLE_ENABLED === "1"`. That field is the one source of truth: `JoinScreen` reads it from the `identity` value it already receives (no separate prop), and renders neither the Google button nor the sentence that mentions it when it is false; the spam-folder hint then reads "If it is not there after a minute, look in the spam folder."
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -717,7 +726,7 @@ describe("identityConfig, Google button", () => {
 });
 ```
 
-In `tests/welcome.test.tsx`, change the terms-step test to the new button name and add assertions that the two links point to `/terms` and `/privacy` and that the sentence about being 18 or older is present. In `tests/join-screen.test.tsx`, add two tests: with `googleEnabled={false}` there is no button named "Continue with Google" and no text containing "Continue with Google"; with `true` the button is there. Existing tests that render `JoinScreen` pass `googleEnabled` explicitly.
+In `tests/welcome.test.tsx`, change the terms-step tests to the new button name and the removed checkbox, expect `{ kind: "terms", versions: … }` from `welcomeView`, and add assertions that the two links point to `/terms` and `/privacy`, that the sentence about being 18 or older is present and that both versions are shown. In `tests/join-screen.test.tsx`, add two tests: with an identity whose `googleEnabled` is false there is no button named "Continue with Google" and no text containing "Continue with Google"; with true the button is there. Update every existing test that builds or compares an identity value (`tests/auth-client.test.ts`, `tests/finish-sign-in.test.tsx`, `tests/join-screen.test.tsx`) to include `googleEnabled`.
 
 - [ ] **Step 2: See them fail**
 
