@@ -1,6 +1,7 @@
 from datetime import datetime
 from functools import cache
 
+from platform_api.adapters import configure_runtimes
 from platform_api.app import Deps, create_app
 from platform_api.settings import Settings
 from platform_api.shared.auth import google_account_from_token, push_identity_from_token
@@ -46,6 +47,10 @@ class _LazyInbox:
     def record(self, event_id: str, *, event_type: str, received_at: datetime) -> None:
         _inbox().record(event_id, event_type=event_type, received_at=received_at)
 
+
+# Every runtime is set before the app exists; outside `local` a missing PLATFORM_CONTACT_KEY
+# stops the start here. No cloud client is made until a port is used.
+configure_runtimes(_settings, _LazyBus())
 
 app = create_app(
     _settings,

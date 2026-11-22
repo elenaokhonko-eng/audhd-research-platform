@@ -244,7 +244,25 @@ def _run_job(name: str) -> int:
         return 2
     settings = Settings()
     configure_logging(settings.service_name)
+    _configure_job_runtimes(settings)
     return job(settings)
+
+
+def _configure_job_runtimes(settings: Settings) -> None:
+    """A job runs on the runtimes the service has (`platform_api.adapters`)."""
+    from typing import cast
+
+    from platform_api.adapters import Lazy, configure_runtimes
+    from platform_api.shared.bus import EventBus
+
+    def pubsub() -> EventBus:
+        from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
+
+        from platform_api.shared.bus import PubSubBus
+
+        return PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
+
+    configure_runtimes(settings, cast(EventBus, Lazy(pubsub)))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
