@@ -116,7 +116,7 @@ Other modules and the HTTP layer use only these. Types are Pydantic models in th
 | | `active_promotions(audience: Audience, now) -> list[Promotion]` · `upgrade_options(uid, now) -> UpgradeOptions` | |
 | `library` | `catalogue(access: Access) -> list[ItemCard]` · `item(sku, access) -> ItemDetail` | |
 | | `download_link(uid: str, sku: str, now) -> SignedLink` | Raises `NotEntitled(reason)`; logs the download |
-| | `publish(manifest_dir: Path, dry_run: bool) -> PublishReport` | |
+| | `publish(staging_prefix: str, dry_run: bool, actor: str, now) -> PublishReport` | |
 
 Refinements made when the Core plan was written (2026-11-20):
 
@@ -129,11 +129,14 @@ Refinements made when the Core plan was written (2026-11-20):
 - **The owner's token is verified inside the service** (signature, issuer, verified email), not only by Cloud Run, and its account id must be in `PLATFORM_OWNER_ACCOUNTS` (comma-separated).
 - **For the owner's routes, `entitlements.public` also offers** `put_campaigns`, `list_campaigns`, `update_launch_config`, `contact_view`, `write_audit` and `audit_for`.
 - **`Join.recognition`** is `paid` when the member's tier is paid or they hold a live record from a Substack source, whatever that record unlocks.
+- **`entitlements.public` re-exports** the models other modules may use: `SourceState`, `Guard`, `Entitlement`, `ChannelsPatch`, `Access`, `Reason`, `LaunchConfig`, `Campaign`, `AuditEntry`.
+- **`content.item.published`** carries `content_id` (`library:<sku>`), `source`, `access`, `sku`, `version`, and is published whenever an item becomes published.
+- **`to_state` never ends a record on missing information:** a `past_due` subscription whose unpaid invoice date is unknown is skipped and counted. Stripe's status `paused` (a trial that ended without payment) is `expired`; an `active` subscription with paused collection stays `active`.
 - **`entitlements.public.existing_for(sources)`** returns every record of the named sources; a caller of `plan_reconcile` loads `existing` with it.
 - **`commerce`**: `stripe_reconcile(dry_run, requested_by, now)`; `last_reconcile_completed_at()`; `roster_import(dry_run, now)`; `put_promotions(promotions, actor)`. A dry run writes no contact and no entitlement; it does write its own run record. `GET /v1/admin/sync-runs?kind=&limit=` lists runs for the owner.
 - **A roster row with a plan interval is a card payer** and never becomes a roster record: Stripe is the authority for card payers. Such rows are counted for the owner. Rows without a plan interval become `status:substack_paid` records.
 - **A reader who already pays Substack on a plan without the platform** gets the route `substack_change_plan` and no promotion.
-- **`library.publish(staging_prefix, dry_run, actor, now)`** reads item folders the owner copied to `staging/<name>/` in the library bucket; each item is published or refused by itself. The library decides "may open" from the member's `Access`. `platform-cli library publish --staging-prefix <prefix> [--dry-run]` calls the admin route.
+- **`library.publish(staging_prefix, dry_run, actor, now)`** reads item folders the owner copied to a folder `<name>` of the staging bucket (`PLATFORM_LIBRARY_STAGING_BUCKET`) and copies files into the library bucket without ever overwriting one; each item is published or refused by itself. The library decides "may open" from the member's `Access`. `platform-cli library publish --staging-prefix <prefix> [--dry-run]` calls the admin route.
 - **`plan_reconcile` treats a changed grant name** for the same subscription and person as a move: the old record ends and the new one is created, outside the guard's count of ends.
 - **`PUT /v1/admin/launch`** also takes `required_terms_version`, `required_privacy_version`, `reconcile_max_age_seconds` and `substack_account_url`.
 
@@ -219,6 +222,7 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 | `PLATFORM_STRIPE_TEST_CHANNEL_METADATA` | Dev only. When true, a sandbox subscription with metadata `test_channel=substack` is classified as created by Substack, because a sandbox cannot reproduce another platform's application id. `Settings` refuses to start with this set when `PLATFORM_ENV` is `prod` |
 | `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR` | What a paying Substack reader on a monthly, respectively annual, plan is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). A reader whose plan interval is unknown (a roster row with an empty plan: complimentary, gift, billed by Apple) is always recorded as `status:substack_paid`; the owner gives such a reader the paid tier with an owner grant after review. The owner's commercial decision; set on the reconcile and roster jobs from Terraform variables |
 | `PLATFORM_LIBRARY_BUCKET` | Private bucket for library files |
+| `PLATFORM_LIBRARY_STAGING_BUCKET` | Bucket where the owner places item folders before publishing |
 | `PLATFORM_SESSION_TTL_DAYS` | Session cookie lifetime |
 
 Settings of `web` (read on the server at request time; none is prefixed `NEXT_PUBLIC_`, because one image serves dev and prod):
@@ -248,7 +252,7 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 | `platform-cli launch report` | Counts per campaign and promotion; no emails |
 | `platform-cli contact show --email-stdin` · `platform-cli grant create --email-stdin --grant tier:paid --months <n> --reason <text>` · `platform-cli grant revoke --id <id> --reason <text>` | The inspector at launch, through the admin routes. Each read and change is written to the audit log under the owner's account |
 | `platform-cli support list` | Open support requests |
-| `platform-cli library publish --dir <path> [--dry-run]` | As in [04](../architecture/04-content-library-and-search.md) |
+| `gcloud storage cp -r <item folders> gs://<staging bucket>/<name>/` then `platform-cli library publish --staging-prefix <name> [--dry-run]` | Validates each item's manifest and file and publishes it by version; prints one line per item |
 
 ## 7. Infrastructure names (Terraform outputs the other lanes read)
 

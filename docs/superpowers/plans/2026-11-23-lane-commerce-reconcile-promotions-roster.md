@@ -10,14 +10,32 @@
 
 **Spec:** [launch design](../specs/2026-11-19-launch-invites-grants-promotions-design.md) §5.3 and §5.5 · [contracts](../../contracts/stage-1-launch.md) §2, §3, §4, §5, §6, §8 · [03 commerce](../../architecture/03-commerce-and-revenue.md) §2, §3.1, §5a · [02](../../architecture/02-membership-and-entitlements.md) §4 (Rules 3 and 6, and the Stripe status table) · task cards M1 to M5.
 
-**Lane rules:** change only `services/platform-api/src/platform_api/commerce/`, its tests under `services/platform-api/tests/commerce/`, and `services/platform-api/tests/recorded/stripe/`. Branch `commerce/reconcile` from `integration/stage-1`. **Start when the Core lane's Tasks 1 to 5 are merged** (you need `entitlements.public` with `plan_reconcile`, `apply_plan`, `existing_for`, `access_for`, `launch_config`, `contact_id_for`). Tasks 1 and 4 need only Core's Task 1 and may start earlier. Changes outside your paths (`main.py`, `pyproject.toml`, `cli.py`) go in one separate pull request labelled `cross-lane`, described in Task 6.
+**Lane rules:** change only `services/platform-api/src/platform_api/commerce/`, its tests under `services/platform-api/tests/commerce/`, and `services/platform-api/tests/recorded/stripe/`. Branch `commerce/reconcile` from `integration/stage-1`. Each task has a gate on the Core lane's plan, because it uses what that plan builds:
+
+| Task | Starts when these Core tasks are merged | Because it uses |
+| --- | --- | --- |
+| 1, 2 | 1 to 5 | `SourceState`, `Guard`, `plan_reconcile`, `apply_plan`, `existing_for`, the `ent` fixture |
+| 3 | 6 | `RateLimiter`, `member_with_terms`, the `idn` fixture and the fake identity provider |
+| 4 | 6 and 8 | `access_for`, `launch_config`, `admin.public.owner`, `write_audit` |
+| 5 | 5, and this plan's Task 0 | `upsert_contact`, `ChannelsPatch`; the `substack-desk` dependency |
+| 6 | 8 and 9 | `AdminClient`, `cli.py`, the runtimes in `main.py` |
+
+While you wait for a gate, do the next task whose gate is open. Changes outside your paths are the two `cross-lane` pull requests of Task 0 and Task 6.
+
+### Task 0 (cross-lane, open it first): make `substack-desk` a dependency of the service
+
+One pull request labelled `cross-lane`, reviewed by the Infra and Core lanes, with no other change in it: in `services/platform-api/pyproject.toml`, `substack-desk` in `dependencies` and `[tool.uv.sources] substack-desk = { path = "../../packages/substack-desk", editable = true }`; `uv.lock` regenerated; the image is built **from the repository root** (the `Dockerfile` copies `packages/substack-desk` and `services/platform-api`, and the workflow's `docker build` and its path filters include `packages/substack-desk/**`), because a path outside the build folder cannot be copied. Check: the existing `test` and `image` jobs pass, and `uv run python -c "import substack_desk"` works in `services/platform-api`.
 
 ## Global Constraints
 
 - **Read-only towards Stripe.** The adapter calls list and retrieve methods only. No test and no code path calls a method that creates, updates, cancels or refunds. A test asserts this by listing the attribute names `commerce/stripe_adapter.py` uses.
 - **Tests never call Stripe, Substack or Google.** Stripe responses are JSON files in `tests/recorded/stripe/`, written in the shape of Stripe's API for the SDK version in `uv.lock`, with invented ids (`sub_test_…`, `cus_test_…`) and addresses at `example.org`.
 - **Never act on absence, never mass-expire, never grant on a guess** (02 §4, Rule 3). A failed or partial read of Stripe applies nothing.
-- **No email address** in a log line, an event, a run record, a report or an exception message. `SourceState.email` is the only place an address travels.
+- **No email address** in a log line, an event, a run record, a report or an exception message. `SourceState.email` is the only place an address travels. Every model that holds an address or a file's bytes sets `ConfigDict(hide_input_in_errors=True)`.
+- **A run never stays `running`.** Every job function wraps its work so that any exception finishes the run as `failed` (the log line names the exception's class, never its message).
+- **Alert markers are part of the log message text** (`logger.error("alert=reconcile_failed run=%s", run_id)`), not an `extra` field: the JSON formatter does not print extras.
+- Source code imports from another module only what its `public.py` offers: from `entitlements.public`, the functions named in this plan and the models `SourceState`, `Guard`, `Entitlement`, `ChannelsPatch`, `Access`, `LaunchConfig`.
+- `Runtime` gains each port's field in the task that creates the port's type, with a default of `None` or an in-memory version, so that `mypy` passes after every task.
 - **No price, percentage, date of a promotion, or Stripe id of the real account** in the repository. Promotions are records written from the owner's private file.
 - Settings of this lane are a class of its own, `commerce/settings.py: CommerceSettings(BaseSettings)` with prefix `PLATFORM_`, so that `settings.py` of the Core lane is not touched: `stripe_substack_application: str = ""`, `stripe_test_channel_metadata: bool = False` (refused when `env == "prod"`), `substack_grant_month` and `substack_grant_year` (each `Literal["tier:paid", "status:substack_paid"]`, default `status:substack_paid`), `reconcile_job: str = ""` (the job's full resource name), `roster_inbox_bucket: str = ""`, `grace_days: int = 21`.
 - Time is passed in (`now`); jobs and routes take it from `shared.clock.utcnow()`.
@@ -88,19 +106,21 @@ class StripeSubscription(BaseModel):          # what the port returns: Stripe's 
 
 Channel = Literal["substack", "platform"]
 def classify(sub: StripeSubscription, settings: CommerceSettings) -> Channel | None: ...
-def to_state(sub: StripeSubscription, settings: CommerceSettings, now: datetime) -> SourceState | None: ...
+Skip = Literal["not_substack", "no_address", "bad_address", "incomplete", "past_due_unknown"]
+def to_state(sub: StripeSubscription, settings: CommerceSettings, now: datetime) -> SourceState | Skip: ...
 ```
 
 - `classify`: `substack` when `application` equals `stripe_substack_application` (an empty setting matches nothing); also `substack` when `stripe_test_channel_metadata` is on and `metadata["test_channel"] == "substack"`. Everything else is `None` at launch (`platform` arrives with platform-only membership).
-- `to_state`, for a `substack` subscription with an address (`None` otherwise):
+- `to_state` returns a `Skip` word for a subscription it cannot turn into a state (not Substack's; no address; an address `normalise_email` refuses; the cases marked below), and otherwise:
 
 | Stripe status | State status | `valid_until` |
 | --- | --- | --- |
-| `trialing`, `active`, `paused` | `active` | `current_period_end` |
+| `trialing`, `active` (including one whose collection is paused) | `active` | `current_period_end` |
 | `past_due`, and `now` is less than `grace_days` after `past_due_since` | `grace` | `past_due_since` + `grace_days` |
-| `past_due` otherwise, or `past_due_since` unknown | `expired` | `now` |
-| `canceled`, `unpaid`, `incomplete_expired` | `expired` | `now` |
-| `incomplete` | no state (`None`) | – |
+| `past_due`, `grace_days` or more after `past_due_since` | `expired` | `now` |
+| `past_due` with `past_due_since` unknown | skipped as `past_due_unknown`: nothing ends on missing information | – |
+| `canceled`, `unpaid`, `incomplete_expired`, `paused` (the status: a trial that ended without payment) | `expired` | `now` |
+| `incomplete` | skipped as `incomplete` | – |
 
   `source = "substack_stripe"`, `source_ref = sub.id`, `started_at = start_date`, `plan_interval` is `month` or `year` (any other interval gives `None`), `grant` is `substack_grant_year` for `year` and `substack_grant_month` for everything else, `access_scope = "substack+platform"`.
 
@@ -142,7 +162,7 @@ def test_a_monthly_plan_is_recorded_as_the_setting_says():
     assert (weekly.plan_interval, weekly.grant) == (None, "status:substack_paid")
 
 
-@pytest.mark.parametrize(("status", "expected"), [("trialing", "active"), ("active", "active"), ("paused", "active"),
+@pytest.mark.parametrize(("status", "expected"), [("trialing", "active"), ("active", "active"), ("paused", "expired"),
                                                    ("canceled", "expired"), ("unpaid", "expired"), ("incomplete_expired", "expired")])
 def test_statuses(status, expected):
     assert to_state(sub(status=status), S, T0).status == expected
@@ -152,13 +172,14 @@ def test_past_due_is_grace_for_twenty_one_days_then_expired():
     in_grace = to_state(sub(status="past_due", past_due_since=T0 - timedelta(days=20)), S, T0)
     assert (in_grace.status, in_grace.valid_until) == ("grace", T0 + timedelta(days=1))
     assert to_state(sub(status="past_due", past_due_since=T0 - timedelta(days=21)), S, T0).status == "expired"
-    assert to_state(sub(status="past_due", past_due_since=None), S, T0).status == "expired"
+    assert to_state(sub(status="past_due", past_due_since=None), S, T0) == "past_due_unknown"
 
 
 def test_what_is_not_a_usable_substack_subscription_gives_no_state():
-    assert to_state(sub(status="incomplete"), S, T0) is None
-    assert to_state(sub(customer_email=None), S, T0) is None
-    assert to_state(sub(application="ca_other"), S, T0) is None and classify(sub(application=None), S) is None
+    assert to_state(sub(status="incomplete"), S, T0) == "incomplete"
+    assert to_state(sub(customer_email=None), S, T0) == "no_address"
+    assert to_state(sub(customer_email="not an address"), S, T0) == "bad_address"
+    assert to_state(sub(application="ca_other"), S, T0) == "not_substack" and classify(sub(application=None), S) is None
     assert classify(sub(), CommerceSettings(stripe_substack_application="")) is None
 
 
@@ -239,8 +260,8 @@ def stripe_reconcile(dry_run: bool, requested_by: RequestedBy, now: datetime) ->
 def last_reconcile_completed_at() -> datetime | None: ...
 ```
 
-- `stripe_reconcile`, in order: start the run record; read **all** subscriptions into a list (a `StripeReadError` at any point → finish `failed` with what was counted so far, apply nothing, log one line at ERROR with `alert="reconcile_failed"`, return); map each with `to_state` and count `seen`, `not_substack`, `no_address`, `incomplete`; `plan_reconcile(existing_for(["substack_stripe"]), states, Guard(), now)`; when `dry_run`, apply nothing; otherwise `apply_plan`; finish `completed` with `guard` and the counts (`created`, `updated`, `ended`, `moved`, `unchanged`, `unseen`, `grants_created`, `tier_changes`, and for a dry run the numbers the plan would give); publish `commerce.reconcile.completed` (`run_id`, `kind`, `dry_run`, `guard`, counts); a blocked guard logs one line at ERROR with `alert="reconcile_guard_blocked"`.
-- `tests/commerce/conftest.py`: fixture `com` builds the runtime with in-memory ports on top of the `ent` fixture, and `seed_stripe(com, *subs)`.
+- `stripe_reconcile`, in order: start the run record; read **all** subscriptions into a list (a `StripeReadError` at any point → finish `failed` with what was counted so far, apply nothing, log one line at ERROR with the marker `alert=reconcile_failed`, return); map each with `to_state` and count `seen` and one count per `Skip` word; `plan_reconcile(existing_for(["substack_stripe"]), states, Guard(), now)`; when `dry_run`, apply nothing; otherwise `apply_plan`; finish `completed` with `guard` and the counts (`created`, `updated`, `ended`, `moved`, `unchanged`, `unseen`, `grants_created`, `tier_changes`, and for a dry run the numbers the plan would give); publish `commerce.reconcile.completed` (`run_id`, `kind`, `dry_run`, `guard`, counts); a blocked guard logs one line at ERROR with the marker `alert=reconcile_guard_blocked`. The owner's listing uses a further port method, `RunStore.recent(kind: RunKind | None, limit: int) -> list[SyncRun]`.
+- `tests/commerce/conftest.py`: fixture `com` sets the runtime on top of the `ent` fixture: `CommerceSettings(stripe_substack_application="ca_test_substack", substack_grant_year="tier:paid", reconcile_job="projects/p/locations/l/jobs/stripe-reconcile")`, `bus=ent.bus`, in-memory versions of every port that exists so far, and `stripe=None` until a test sets it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -342,7 +363,7 @@ git commit -m "commerce: stripe reconcile with dry run, run records, guard and f
 
 **Interfaces:**
 - Produces: `JobStarter` (Protocol: `def start(self, job: str) -> None`; raises `JobStartError`) and `InMemoryJobStarter` (`started: list[str]`); `RefreshTicket(check: Literal["fresh", "started", "already_running"], last_completed_at: datetime | None, next_allowed_at: datetime)`; `class RateLimited(Exception)` with `retry_after: int`; `commerce.public.request_refresh(uid: str | None, now: datetime) -> RefreshTicket`; route `POST /v1/me/refresh-access` → 202 with the ticket (uses `member_with_terms` from `shared.http`; `RateLimited` → 429 `rate_limited`; `JobStartError` → 503 `unavailable`).
-- `request_refresh`, in order: for a member (`uid` not `None`), the limits one a minute and six an hour through `Runtime.limiter` (keys `refresh:<uid>:m` and `refresh:<uid>:h`; the minute is checked first, and a refused request counts toward neither); the last real completed run finished less than 60 seconds ago → `fresh`; `runs.acquire_start_slot("stripe_reconcile", now, gap=60 seconds)` is false → `already_running`; otherwise `jobs.start(settings.reconcile_job)` → `started`. `next_allowed_at` is `now` + 60 seconds. With no job starter configured (`None`) the answer is `fresh` and nothing starts.
+- `request_refresh`, in order: for a member (`uid` not `None`), the limits one a minute and six an hour through `Runtime.limiter` (keys `refresh:<uid>:m` and `refresh:<uid>:h`; the minute is checked first, so a request refused by the minute limit does not count toward the hour); the last real completed run finished less than 60 seconds ago → `fresh`; `runs.acquire_start_slot("stripe_reconcile", now, gap=60 seconds)` is false → `already_running`; otherwise `jobs.start(settings.reconcile_job)` → `started`. `next_allowed_at` is `now` + 60 seconds. With no job starter configured (`None`) the answer is `fresh` and nothing starts.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -403,7 +424,7 @@ def test_the_route_answers_202_and_maps_the_limit(com, member_client):
     assert again.status_code == 429 and again.json()["error"]["retry_after"] > 0
 ```
 
-`member_client(name)` is a fixture in `tests/commerce/conftest.py`: it signs the person in through `/v1/session/resolve` with the fake identity provider of the Core lane, accepts the terms, and returns the test client and the header.
+`member_client(name)` is a fixture in `tests/commerce/conftest.py`, on top of `com` and `idn`. It first makes sign-in possible: it reads the stored launch config and writes it back with `join_open=True`, `required_terms_version="t1"`, `required_privacy_version="p1"` and every other field unchanged, and stores a default campaign (`slug="members"`, `audience="public"`, no grant policy, `is_default=True`) if none exists. Then it signs the person in through `/v1/session/resolve` with the fake identity provider, accepts the terms, and returns the test client and the header.
 
 - [ ] **Step 2: See them fail**
 
@@ -451,11 +472,11 @@ def put_promotions(promotions: list[Promotion], actor: str) -> int: ...
 def count_upgrades(created: Sequence[Entitlement], existing: Sequence[Entitlement], now: datetime) -> int: ...
 ```
 
-- `PromotionStore` port: `list()`, `put_all(promotions)` (keeps the counts of an id that exists), `count_once(promotion_id, contact_id) -> bool` (atomic: true the first time only).
+- `PromotionStore` port: `list()`, `put_all(promotions)` (keeps the counts of an id that exists), `count_once(promotion_id, contact_id) -> bool` (atomic: the first time only, it adds one to `counts["upgrades_in_window"]` and returns true).
 - `active_promotions`: empty while `promotions_open` is off; otherwise the promotions with `starts_at <= now < ends_at` whose `audience` contains the one asked for; `substack_offer` without a URL is never shown.
-- `upgrade_options`: tier `paid` → no routes, no promotion. A member with a live reason labelled `substack_status` → one route `substack_change_plan` (`url` = `substack_account_url`; `available` false when that is empty) and no promotion (ruling 4). Anyone else → `substack` (`url` = the active promotion's URL when there is one for `free_members`, else `substack_account_url`) and `platform_only` with `available: false`; `promotion` = the first active one for `free_members`.
+- `upgrade_options`: tier `paid` → no routes, no promotion. A member with a live reason labelled `substack_status` → one route `substack_change_plan` (`url` = `substack_account_url`; `available` false when that is empty) and no promotion (ruling 4). Anyone else → `substack` (`url` = the active promotion's URL when there is one for `free_members`, else `substack_account_url`; `available` is false and `url` is `null` when neither exists) and `platform_only` with `available: false`; `promotion` = the first active one for `free_members`.
 - `count_upgrades`, called by `stripe_reconcile` after a real apply with the plan's created `substack_stripe` records: for each promotion (open or ended), a created record whose `valid_from` is inside the window, for a contact that had no `substack_stripe` or `substack_roster` record live at `starts_at` among `existing`, is counted once per promotion and contact (`count_once`): `counts["upgrades_in_window"]` + 1 and the event `commerce.promotion.upgrade_counted` (`promotion_id`, `contact_id`, `channel`, `source_ref`).
-- Routes: `GET /v1/public/promotions/active` (audience `guests`; header `Cache-Control: public, max-age=60`), `GET /v1/me/upgrade-options` (`member_with_terms`), `PUT /v1/admin/promotions` `{promotions: [...]}` (dependency `owner`; validation: unique ids, `starts_at < ends_at`, a URL that starts with `https://` for `substack_offer`; → `{written}`).
+- Routes: `GET /v1/public/promotions/active` (audience `guests`; header `Cache-Control: public, max-age=60`), `GET /v1/me/upgrade-options` (`member_with_terms`), `PUT /v1/admin/promotions` `{promotions: [...]}` (dependency `owner`; validation: unique ids, `starts_at < ends_at`, a URL that starts with `https://` for `substack_offer`; → `{written}`), and `GET /v1/admin/promotions` → `{promotions: [{id, channel, starts_at, ends_at, counts}]}`. Both write an audit entry through `entitlements.public.write_audit` (subject `admin`, actions `promotions.written` and `admin.read`): every owner call is audited, reads included.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -540,7 +561,7 @@ def test_the_public_route_is_cacheable_for_a_minute(open_shop, owner_client):
     assert r.status_code == 200 and r.headers["cache-control"] == "public, max-age=60" and "promotions" in r.json()
 ```
 
-`signed_in(name)` (returns the uid after a sign-in, with the fixture people's Stripe records already reconciled: `ana` annual, `hal` monthly) and `owner_client` (a test client whose `Authorization` header passes the `owner` dependency) are fixtures in `tests/commerce/conftest.py`, built from the Core lane's test helpers. Route handlers use the frozen clock (`T0`), which is outside the promotion's window, so the public route answers an empty list here.
+`signed_in(name)` (runs one reconcile at `T0` with `sub("ana")` and `sub("hal", interval="month")` the first time it is called, then signs the person in the way `member_client` does, which keeps `promotions_open` and `substack_account_url` as `open_shop` set them, and returns the uid) and `owner_client` (a test client whose `Authorization` header passes the `owner` dependency) are fixtures in `tests/commerce/conftest.py`, built from the Core lane's test helpers. Route handlers use the frozen clock (`T0`), which is outside the promotion's window, so the public route answers an empty list here.
 
 - [ ] **Step 2: See them fail**
 
@@ -572,10 +593,10 @@ git commit -m "commerce: promotions in their window, upgrade options per member,
 - Consumes: `substack_desk.adapters.export_file.FileDirectory`, `ExportHeaderError`; `entitlements.public.existing_for`, `contact_id_for`, `upsert_contact`, `plan_reconcile`, `apply_plan`.
 - Produces: `RosterInbox` (Protocol: `def newest(self) -> RosterObject | None`, with `RosterObject(name: str, data: bytes = Field(repr=False), updated_at: datetime)`) and `InMemoryRosterInbox`; `commerce.public.roster_import(dry_run: bool, now: datetime) -> SyncRun`.
 - `roster_import`, in order:
-  1. Refuse (run `failed`, count `refused_no_recent_reconcile: 1`, ERROR line with `alert="roster_refused"`) unless the latest real `stripe_reconcile` run is `completed`, its guard `passed`, and it finished less than 24 hours ago.
+  1. Refuse (run `failed`, count `refused_no_recent_reconcile: 1`, ERROR line with the marker `alert=roster_refused`) unless the latest real `stripe_reconcile` run is `completed`, its guard `passed`, and it finished less than 24 hours ago.
   2. No object in the inbox → `failed`, `no_file: 1`.
-  3. `FileDirectory(object.data, object.updated_at).list_paid()`. `ExportHeaderError` → `failed`, `bad_header: 1`, and the ERROR line names the missing columns. `complete` false → `failed`, `truncated: 1`, `alert="roster_truncated"`, nothing applied.
-  4. For every record: `upsert_contact(email, ChannelsPatch(substack={"type", "plan_interval", "last_seen_in_roster": now}))` (not in a dry run). A record with a plan interval → count `card_payer_rows`, and `card_payer_not_in_stripe` when its contact has no live `substack_stripe` record; no state (ruling 2). A record without one → a state: `source="substack_roster"`, `source_ref="roster"`, `grant="status:substack_paid"`, `status="active"`, `started_at = record.since or listing.exported_at`, `valid_until = record.paid_until`, `plan_interval=None`.
+  3. `FileDirectory(object.data, object.updated_at).list_paid()`. `ExportHeaderError` → `failed`, `bad_header: 1`, and the ERROR line names the missing columns. `complete` false → `failed`, `truncated: 1`, the marker `alert=roster_truncated`, nothing applied.
+  4. For every record: `upsert_contact(email, ChannelsPatch(substack={"type": record.type, "plan_interval": record.plan_interval, "last_seen_in_roster": now.isoformat()}))` (not in a dry run). A record with a plan interval → count `card_payer_rows`, and `card_payer_not_in_stripe` when its contact has no live `substack_stripe` record; no state (ruling 2). A record without one → a state: `source="substack_roster"`, `source_ref="roster"`, `grant="status:substack_paid"`, `status="active"`, `started_at` = `record.since`, else the `valid_from` of the roster record this person already has, else `listing.exported_at` (so a second upload of a file without dates changes nothing), `valid_until = record.paid_until`, `plan_interval=None`.
   5. `plan_reconcile(existing_for(["substack_roster"]), states, Guard(), now)`; apply unless dry run. No state is ever `expired`, so the import ends nothing; records the file does not mention are `unseen`.
   6. Finish with the plan's counts plus `rows`, `rejected_rows` and the Desk report's `free_rows` and `trial_rows`. The Desk report's `unknown_types` and `unknown_plans` are logged at WARNING (values, not addresses).
 
@@ -672,7 +693,7 @@ def test_a_missing_column_fails_and_names_it(com, caplog):
 - [ ] **Step 2: See them fail**
 
 Run: `uv run pytest tests/commerce/test_roster.py -v`
-Expected: FAIL, `No module named 'platform_api.commerce.roster'` (after the cross-lane change of Task 6 has added `substack-desk` to `pyproject.toml`; open that pull request first if it is not merged).
+Expected: FAIL, `No module named 'platform_api.commerce.roster'` (Task 0 must be merged, or `substack_desk` cannot be imported).
 
 - [ ] **Step 3: Implement**
 
@@ -694,13 +715,13 @@ git commit -m "commerce: roster import for readers Stripe cannot see; refuses wi
 **Files:**
 - Create: `commerce/stripe_adapter.py`, `commerce/adapters.py`, `tests/commerce/test_adapters.py`, `tests/recorded/stripe/subscriptions_page_1.json`, `subscriptions_page_2.json`
 - Modify: `commerce/jobs.py`, `commerce/http.py`
-- Cross-lane pull request (label `cross-lane`, reviewed by the Core lane): `pyproject.toml` (`substack-desk` as a path dependency: `[tool.uv.sources] substack-desk = { path = "../../packages/substack-desk", editable = true }`), `main.py` (build the `commerce` runtime lazily; set `identity`'s `request_refresh` to `lambda uid, now: "fresh" if commerce.request_refresh(None, now).check == "fresh" else "started"` and `last_reconcile_at` to `commerce.last_reconcile_completed_at`), `cli.py` (command `runs show [--kind]`).
+- Cross-lane pull request (label `cross-lane`, reviewed by the Core lane): `main.py` (build the `commerce` runtime lazily; set `identity`'s `request_refresh` to a function that calls `commerce.request_refresh(None, now)`, answers `"fresh"` for `fresh` and `"started"` otherwise, and answers `"fresh"` when a `JobStartError` is raised, so that a job that cannot start never fails a sign-in; set `last_reconcile_at` to `commerce.last_reconcile_completed_at`), `admin/client.py` (methods `sync_runs`, `promotions_put`, `promotions_list`), `cli.py` (commands `runs show [--kind]` and `promo apply --file`; `launch report` also prints each promotion's counts).
 
 **Interfaces:**
-- `stripe_adapter.py`: `StripeSdkReader(api_key: str)`: one `stripe.StripeClient`; `subscriptions()` lists with `status="all"`, `limit=100`, expanding the customer and the latest invoice, following pages to the end; builds `StripeSubscription` (`interval` from the first item's price; `current_period_end` from the subscription or, where the API version has moved it, from its first item; `past_due_since` = the latest invoice's creation time when the status is `past_due`); any `stripe.StripeError` → `StripeReadError` whose message is the error's class name only. **Before writing it, read Stripe's API reference for the SDK version in `uv.lock`** and write the two recorded pages in exactly that shape; state the API version in a comment at the top of the adapter. The recorded pages hold four subscriptions: first one made by Substack's application, then one by another application, one with a deleted customer (no address), and one `past_due` with a latest invoice.
+- `stripe_adapter.py`: `StripeSdkReader(api_key: str)`: one `stripe.StripeClient`; `subscriptions()` calls `client.v1.subscriptions.list` with `status="all"`, `limit=100`, expanding the customer and the latest invoice, and **pages by hand**: while the page says `has_more`, it asks again with `starting_after` = the last id (the SDK's automatic paging would bypass the stand-in used in tests). It builds `StripeSubscription` (`interval` from the first item's price; `current_period_end` from the first subscription item, where the pinned API version keeps it; `past_due_since` = the latest invoice's creation time when the status is `past_due`). Any `stripe.StripeError`, and any error while building a `StripeSubscription` (an unknown status, a missing field), becomes `StripeReadError` whose message is the exception's class name only. Read items with `sub["items"]`: attribute access returns the dictionary's own method. **Before writing it, read Stripe's API reference for the SDK version in `uv.lock`** and write the two recorded pages in exactly that shape, page 1 with `"has_more": true`; state the API version in a comment at the top of the adapter. The recorded pages hold four subscriptions: first one made by Substack's application, then one by another application, one with a deleted customer (no address), and one `past_due` with a latest invoice.
 - `FirestoreRunStore`, `FirestorePromotionStore` (collections `sync_runs`, `promotions`, `promotion_upgrades`, and the document `config/reconcile_slot` for `acquire_start_slot`, written in a transaction), `CloudRunJobStarter(client)` (`JobsClient.run_job(name=<job>)`; it does not wait for the job), `BucketRosterInbox(client, bucket)` (the most recently updated object).
-- `commerce/jobs.py`: `JOBS = {"stripe-reconcile": …, "roster-import": …}`. Each builds the runtime it needs, reads `PLATFORM_JOB_DRY_RUN` (`1` → dry run) and `PLATFORM_JOB_REQUESTED_BY` (default `schedule`) from the environment, runs, prints the run as one JSON line, and returns `0` for `completed` with guard `passed`, `1` for `failed`, `2` for a blocked guard. `stripe-reconcile` reads the key from the environment variable named on the contracts page (§6); the API service has no such variable, and `request_refresh` never builds a `StripeSdkReader`.
-- `GET /v1/admin/sync-runs?kind=&limit=` (dependency `owner`; `limit` at most 20) → `{runs: [SyncRun]}`.
+- `commerce/jobs.py`: `JOBS = {"stripe-reconcile": …, "roster-import": …}`. Each builds the runtime it needs, reads `PLATFORM_JOB_DRY_RUN` (`1` → dry run) and `PLATFORM_JOB_REQUESTED_BY` (default `schedule`) from the environment, runs, prints the run as one JSON line, and returns `0` for `completed` with guard `passed`, `1` for `failed`, `2` for a blocked guard. `stripe-reconcile` reads the name of the secret from `PLATFORM_STRIPE_KEY_SECRET` (contracts §6) and fetches the key from Secret Manager at start (`adapters.read_secret(name) -> str`, never logged); the API service's identity cannot read that secret, and `request_refresh` never builds a `StripeSdkReader`.
+- `GET /v1/admin/sync-runs?kind=&limit=` (dependency `owner`; `limit` at most 20; audited as `admin.read`) → `{runs: [SyncRun]}`, from `RunStore.recent`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -763,7 +784,7 @@ def test_a_failure_on_the_second_page_is_one_error_without_details():
 def test_the_stripe_adapter_only_reads():
     tree = ast.parse(Path(adapters.__file__).read_text())
     called = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    assert not called & {"create", "modify", "update", "delete", "cancel", "refund", "pause", "resume"}
+    assert not called & {"create", "modify", "update", "delete", "cancel", "refund", "pause", "resume"}   # so no dict.update() in this file either
 
 
 def test_the_recorded_pages_hold_only_invented_people():
@@ -771,7 +792,7 @@ def test_the_recorded_pages_hold_only_invented_people():
     assert "@" not in text.replace("@example.org", "") and "sub_test_" in text and '"livemode": false' in text
 
 
-def test_the_jobs_are_registered_and_importing_them_creates_no_client():
+def test_the_jobs_are_registered():
     from platform_api.cli import build_registry
     assert {"stripe-reconcile", "roster-import", "selfcheck"} <= set(build_registry())
 ```
@@ -781,7 +802,7 @@ def test_the_jobs_are_registered_and_importing_them_creates_no_client():
 - [ ] **Step 2: See them fail**
 
 Run: `uv run pytest tests/commerce/test_adapters.py -v`
-Expected: FAIL, `No module named 'platform_api.commerce.adapters'`.
+Expected: FAIL, `No module named 'platform_api.commerce.stripe_adapter'`.
 
 - [ ] **Step 3: Implement; open the cross-lane pull request**
 
@@ -801,5 +822,5 @@ git commit -m "commerce: Stripe, Firestore, Cloud Run and bucket adapters; the t
 ## Exit test for this plan
 
 1. The check command passes in CI on the branch and on the cross-lane branch.
-2. The hand-over lists for the Infra lane: the two jobs and their environment variables; that only `stripe-reconcile` gets the Stripe key; the permission the API service needs to start that one job; the settings `PLATFORM_STRIPE_SUBSTACK_APPLICATION`, `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR`, `PLATFORM_RECONCILE_JOB`, `PLATFORM_ROSTER_INBOX_BUCKET`; the Firestore index on `sync_runs` (`kind`, `finished_at`); and the four log markers to alert on (`reconcile_failed`, `reconcile_guard_blocked`, `roster_refused`, `roster_truncated`).
-3. The hand-over lists for the owner what to check at Gate 2 against the sandbox: that a recorded page matches a real list response, and how Substack's application id is read from one real subscription (a read-only call; the id goes into Terraform variables, not into this repository).
+2. The hand-over lists for the Infra lane: the two jobs and their environment variables; that only `stripe-reconcile` gets the Stripe key; the permission the API service needs to start that one job; the settings `PLATFORM_STRIPE_KEY_SECRET` (on the reconcile job only), `PLATFORM_STRIPE_SUBSTACK_APPLICATION`, `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR`, `PLATFORM_RECONCILE_JOB`, `PLATFORM_ROSTER_INBOX_BUCKET`; the Firestore indexes on `sync_runs` (`kind`, `finished_at`; and `kind`, `state`, `dry_run`, `finished_at`); and the four log markers to alert on (`reconcile_failed`, `reconcile_guard_blocked`, `roster_refused`, `roster_truncated`).
+3. The hand-over lists for the owner what to check at Gate 2 against the sandbox: that a recorded page matches a real list response, whether the account leaves an unpaid subscription `past_due` across several invoices (the 21 days are counted from the latest unpaid invoice), and how Substack's application id is read from one real subscription (a read-only call; the id goes into Terraform variables, not into this repository).
