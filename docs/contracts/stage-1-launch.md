@@ -129,6 +129,11 @@ Refinements made when the Core plan was written (2026-11-20):
 - **The owner's token is verified inside the service** (signature, issuer, verified email), not only by Cloud Run, and its account id must be in `PLATFORM_OWNER_ACCOUNTS` (comma-separated).
 - **For the owner's routes, `entitlements.public` also offers** `put_campaigns`, `list_campaigns`, `update_launch_config`, `contact_view`, `write_audit` and `audit_for`.
 - **`Join.recognition`** is `paid` when the member's tier is paid or they hold a live record from a Substack source, whatever that record unlocks.
+- **`entitlements.public.existing_for(sources)`** returns every record of the named sources; a caller of `plan_reconcile` loads `existing` with it.
+- **`commerce`**: `stripe_reconcile(dry_run, requested_by, now)`; `last_reconcile_completed_at()`; `roster_import(dry_run, now)`; `put_promotions(promotions, actor)`. A dry run writes no contact and no entitlement; it does write its own run record. `GET /v1/admin/sync-runs?kind=&limit=` lists runs for the owner.
+- **A roster row with a plan interval is a card payer** and never becomes a roster record: Stripe is the authority for card payers. Such rows are counted for the owner. Rows without a plan interval become `status:substack_paid` records.
+- **A reader who already pays Substack on a plan without the platform** gets the route `substack_change_plan` and no promotion.
+- **`library.publish(staging_prefix, dry_run, actor, now)`** reads item folders the owner copied to `staging/<name>/` in the library bucket; each item is published or refused by itself. The library decides "may open" from the member's `Access`. `platform-cli library publish --staging-prefix <prefix> [--dry-run]` calls the admin route.
 - **`plan_reconcile` treats a changed grant name** for the same subscription and person as a move: the old record ends and the new one is created, outside the guard's count of ends.
 - **`PUT /v1/admin/launch`** also takes `required_terms_version`, `required_privacy_version`, `reconcile_max_age_seconds` and `substack_account_url`.
 
@@ -235,8 +240,9 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 
 | Owner command | Does |
 | --- | --- |
-| `platform-cli stripe reconcile [--dry-run]` | Starts the job and prints counts by action, the unseen list's size and the guard decision |
-| `platform-cli roster import --file <csv> [--dry-run]` | Uploads the export to the roster inbox and starts the `roster-import` job |
+| `gcloud run jobs execute stripe-reconcile --wait` (with `--update-env-vars PLATFORM_JOB_DRY_RUN=1` for a dry run) | Runs the job; the runbook has the exact command. At launch this replaces a `platform-cli` wrapper |
+| `gcloud storage cp <csv> gs://<roster inbox>/` then `gcloud run jobs execute roster-import --wait` | Places the export in the roster inbox and runs the import; dry run as above |
+| `platform-cli runs show [--kind stripe_reconcile \| roster_import]` | Prints the latest runs: counts by action, the unseen list's size and the guard decision |
 | `platform-cli campaign apply --file <yaml>` · `platform-cli promo apply --file <yaml>` | Validates and writes campaigns and promotions |
 | `platform-cli launch set --join-open true \| false` (and `--library-open`, `--promotions-open`) | The layer switches |
 | `platform-cli launch report` | Counts per campaign and promotion; no emails |
