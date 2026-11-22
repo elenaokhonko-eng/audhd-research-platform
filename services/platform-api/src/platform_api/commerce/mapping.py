@@ -20,6 +20,15 @@ def classify(sub: StripeSubscription, settings: CommerceSettings) -> Channel | N
     return None
 
 
+def _grant(interval: str | None, settings: CommerceSettings) -> str:
+    # contracts §6: an unknown plan interval is always a status, whatever the settings say
+    if interval == "year":
+        return settings.substack_grant_year
+    if interval == "month":
+        return settings.substack_grant_month
+    return "status:substack_paid"
+
+
 def to_state(
     sub: StripeSubscription, settings: CommerceSettings, now: datetime
 ) -> SourceState | Skip:
@@ -46,9 +55,7 @@ def to_state(
         status, valid_until = "expired", now
 
     interval = sub.interval if sub.interval in ("month", "year") else None
-    grant = (
-        settings.substack_grant_year if sub.interval == "year" else settings.substack_grant_month
-    )
+    grant = _grant(sub.interval, settings)
     return SourceState(
         source="substack_stripe",
         source_ref=sub.id,

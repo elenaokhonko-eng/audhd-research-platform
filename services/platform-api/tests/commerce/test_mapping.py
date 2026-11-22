@@ -108,3 +108,15 @@ def test_a_subscription_never_prints_an_address_held_in_its_metadata():
 def test_grace_days_must_be_at_least_one():
     with pytest.raises(ValueError):
         CommerceSettings(grace_days=0)
+
+
+def test_an_unknown_interval_is_always_a_status_whatever_the_settings_say():
+    both = CommerceSettings(
+        stripe_substack_application="ca_test_substack",
+        substack_grant_month="tier:paid",
+        substack_grant_year="tier:paid",
+    )
+    weekly = to_state(sub("hal", interval="week"), both, T0)
+    none = to_state(sub("hal", interval=None), both, T0)
+    assert (weekly.plan_interval, weekly.grant) == (None, "status:substack_paid")
+    assert none.grant == "status:substack_paid"

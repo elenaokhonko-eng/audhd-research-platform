@@ -1,6 +1,7 @@
 """Read every Stripe subscription, map it, and hand the states to the entitlement engine.
 
-Fail safe: a read that fails anywhere applies nothing, and a run never stays `running`.
+Fail safe: a failed read applies nothing; a failure while applying may have applied
+some writes (the run's `applying` count says so). And a run never stays `running`.
 Logs name counts and exception classes only, never an address or an exception's text.
 """
 
@@ -53,6 +54,7 @@ def _work(
         subs.append(sub)
         counts["seen"] += 1
     counts.update({word: 0 for word in get_args(Skip)})
+    counts.update(states_active=0, states_grace=0, states_expired=0, no_period_end=0)
     states: list[SourceState] = []
     for sub in subs:
         state = to_state(sub, rt.settings, now)
@@ -60,12 +62,17 @@ def _work(
             counts[state] += 1
         else:
             states.append(state)
+            counts[f"states_{state.status}"] += 1
+            if sub.status in ("trialing", "active") and sub.current_period_end is None:
+                counts["no_period_end"] += 1
     plan = entitlements.plan_reconcile(
         entitlements.existing_for(["substack_stripe"]), states, Guard(), now
     )
+    counts.update(guard_ends=plan.ends, live_before=plan.live_before)
     if dry_run:
         counts.update(_would_do(plan))
     else:
+        counts["applying"] = 1  # from here a failure may have applied some writes
         report = entitlements.apply_plan(plan, run_id, now)
         counts.update(
             created=report.created,

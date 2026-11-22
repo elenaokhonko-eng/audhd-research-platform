@@ -37,11 +37,17 @@ def test_a_dry_run_writes_no_record_but_reports_what_it_would_do(com, ent):
 
 def test_a_read_that_fails_halfway_applies_nothing(com, ent, caplog):
     com.stripe = InMemoryStripeReader([sub(n) for n in PEOPLE])
-    commerce.stripe_reconcile(False, "schedule", T0)
+    first = commerce.stripe_reconcile(False, "schedule", T0)
     com.stripe = InMemoryStripeReader([sub(n, status="canceled") for n in PEOPLE], fail_after=3)
     with caplog.at_level(logging.ERROR):
         run = commerce.stripe_reconcile(False, "schedule", T0 + timedelta(minutes=5))
     assert run.state == "failed" and "reconcile_failed" in caplog.text
+    assert run.counts["seen"] == 3
+    assert [
+        e.data["run_id"]
+        for e in ent.bus.published
+        if e.type.endswith("commerce.reconcile.completed")
+    ] == [first.run_id]
     assert all(e.status == "active" for e in ent.store.entitlements_by_source("substack_stripe"))
 
 
@@ -52,6 +58,7 @@ def test_the_guard_blocks_a_mass_cancellation_and_alerts(com, ent, caplog):
     with caplog.at_level(logging.ERROR):
         run = commerce.stripe_reconcile(False, "schedule", T0 + timedelta(minutes=5))
     assert (run.state, run.guard, run.counts["ended"]) == ("completed", "blocked", 0)
+    assert (run.counts["guard_ends"], run.counts["live_before"]) == (8, 8)
     assert "reconcile_guard_blocked" in caplog.text
     assert all(e.status == "active" for e in ent.store.entitlements_by_source("substack_stripe"))
 
@@ -108,6 +115,7 @@ def test_a_failure_outside_the_read_keeps_its_counts_and_applies_nothing(
         run = commerce.stripe_reconcile(False, "schedule", T0)
     assert run.state == "failed" and run.counts["seen"] == 2
     assert "RuntimeError" in caplog.text and "@" not in caplog.text
+    assert "dry_run=False" in caplog.text
     assert ent.store.entitlements_by_source("substack_stripe") == []
 
 
@@ -140,3 +148,34 @@ def test_the_fake_run_store_breaks_ties_toward_the_latest_insert():
     store.finish(a, "completed", "passed", {}, T0)
     store.finish(b, "completed", "passed", {}, T0)
     assert store.latest("stripe_reconcile").run_id == b
+
+
+def test_a_failure_while_applying_is_marked_part_applied(com, monkeypatch):
+    from platform_api.entitlements import public as entitlements
+
+    def boom(plan, run_id, now):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(entitlements, "apply_plan", boom)
+    com.stripe = InMemoryStripeReader([sub("ana")])
+    run = commerce.stripe_reconcile(False, "schedule", T0)
+    assert run.state == "failed" and run.counts["applying"] == 1
+
+
+def test_every_state_is_counted_by_status_and_adds_up_to_seen(com):
+    com.stripe = InMemoryStripeReader(
+        [sub("ana"), sub("cy", status="canceled"), sub("ed", customer_email=None)]
+    )
+    run = commerce.stripe_reconcile(False, "schedule", T0)
+    c = run.counts
+    skips = ("not_substack", "no_address", "bad_address", "incomplete", "past_due_unknown")
+    assert (c["states_active"], c["states_expired"], c["states_grace"]) == (1, 1, 0)
+    assert c["seen"] == c["states_active"] + c["states_grace"] + c["states_expired"] + sum(
+        c[k] for k in skips
+    )
+
+
+def test_an_active_subscription_without_a_period_end_is_counted(com):
+    com.stripe = InMemoryStripeReader([sub("ana", current_period_end=None), sub("cy")])
+    run = commerce.stripe_reconcile(False, "schedule", T0)
+    assert (run.counts["no_period_end"], run.counts["states_active"]) == (1, 2)
