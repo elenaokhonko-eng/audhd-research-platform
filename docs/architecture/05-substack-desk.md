@@ -58,9 +58,21 @@ flowchart LR
   DOM <--> SUB[(Substack private endpoints)]
 ```
 
+The tree above is the layout the package grows into. **What exists after Stage 1's launch track** is the part the platform needs first:
+
+```
+src/substack_desk/
+├─ models.py              SubscriberRecord, DirectoryListing
+├─ ports.py               SubscriberDirectory (the one port the platform calls)
+├─ capabilities.py        CAPABILITIES, require(), CapabilityDisabled, UnknownCapability
+└─ adapters/export_file.py   FileDirectory: reads Substack's subscriber export; ExportReport, ExportHeaderError
+```
+
+The ports named in the tree (`CredentialStore`, `EventSink`, `BlobStore`, `KeyValueStore`, `Clock`) arrive in Stage 2 with the first feature that needs each. The reader of the export file is an adapter (`adapters/export_file.py`), not part of a `subscribers/` folder: every way of answering "who is subscribed" is an adapter behind `SubscriberDirectory`.
+
 Three rules keep it liftable, each checked in CI:
 
-1. **No import from the platform.** An import-linter contract fails the build if `substack_desk` imports `platform_api`.
+1. **No import from the platform.** A test in the package (`tests/test_boundary.py`) fails if any file of `substack_desk` imports `platform_api`. The check lives in the package, not in the platform's import-linter configuration, so it travels with the package when it moves to its own repository.
 2. **Installs and tests alone.** A CI job installs only `packages/substack-desk` into a clean environment and runs its tests.
 3. **Nothing about one publication in code.** Publication address, limits and feature switches come from `DeskSettings`.
 
@@ -86,7 +98,7 @@ The rest of the platform depends on narrow ports, not on the Desk directly: `Sub
 | Comps, gifts, special offers and discounts | Capture first | – | 2 |
 | Moderation: hide, mute, ban | Undecided by the owner; capture first | – | Later |
 
-The matrix lives in `capabilities.py` as data. The cockpit reads it, so a capability that is off shows a "Do this in Substack" link instead of a button.
+The matrix lives in `capabilities.py` as data: one record per capability with `name` (for example `subscriber_directory.file`), `surface` (`upload`, `official` or `private`: where the data comes from), `enabled` and a `note`. Code asks `require(name)` before it uses a capability and gets `CapabilityDisabled` when it is switched off. Stage 1 has two entries: the export file (on) and the Publisher API (off until the publication has it and the adapter exists). The table above is the plan for the rest; a row becomes a record when its code is written. The cockpit reads the records, so a capability that is off shows a "Do this in Substack" link instead of a button.
 
 ## 4. The change feed
 
@@ -176,7 +188,7 @@ desk = SubstackDesk(settings, credentials=..., events=..., blobs=..., kv=...)
 for sub in desk.subscribers.iter_roster():        # Subscriber(email, type, plan_interval, since, activity_rating)
     ...
 draft = desk.posts.create_draft(DraftInput(title=..., markdown=..., audience="paid", paywall_after=3))
-desk.posts.schedule(draft.id, when)               # raises CapabilityOff if the sentinel switched it off
+desk.posts.schedule(draft.id, when)               # raises CapabilityDisabled if the sentinel switched it off
 note = desk.notes.create(NoteInput(text=..., link=...))
 events = desk.feed.poll()                         # list[DeskEvent]; also sent through EventSink
 report = desk.contracts.run_sentinel()            # SentinelReport(healthy=[...], drifted=[...])
