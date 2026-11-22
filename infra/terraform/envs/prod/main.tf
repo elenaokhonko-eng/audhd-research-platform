@@ -17,6 +17,7 @@ locals {
     "secretmanager.googleapis.com",
     "pubsub.googleapis.com",
     "firestore.googleapis.com",
+    "cloudscheduler.googleapis.com",
   ]
 }
 

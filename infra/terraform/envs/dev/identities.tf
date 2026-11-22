@@ -5,6 +5,11 @@
 # One binding is declared through a module input rather than a resource here: who may invoke
 # the private platform-api service. The list is local.platform_api_invokers below; the module
 # in platform.tf turns it into roles/run.invoker bindings.
+#
+# The two jobs of wave2.tf carry their own resource-level bindings inside their modules, so
+# that each binding sits beside what it protects: who may read the Stripe key (on the secret),
+# who may start each job and who may change a run's settings (on the job), and the roster
+# job's read access to the roster inbox. Their inputs (identities, roles, the owner) are here.
 
 locals {
   # Pub/Sub's own service agent. It moves undeliverable messages to the dead-letter topics.
@@ -15,6 +20,12 @@ locals {
     google_service_account.web_runtime.email,
     google_service_account.pubsub_push.email,
   ]
+
+  # The two wave-2 jobs. Static keys, so for_each is known at plan time while the emails are not.
+  platform_job_identities = {
+    job_stripe   = google_service_account.job_stripe.email
+    job_substack = google_service_account.job_substack.email
+  }
 }
 
 # ---------------------------------------------------------------- service accounts
@@ -57,6 +68,29 @@ resource "google_service_account" "pubsub_push" {
   depends_on   = [google_project_service.enabled]
 }
 
+# The stripe-reconcile job (wave2.tf). The only identity that may read the Stripe key; that
+# binding is on the secret, in modules/reconcile_job.
+resource "google_service_account" "job_stripe" {
+  account_id   = "job-stripe"
+  display_name = "stripe-reconcile job (reads the Stripe key)"
+  depends_on   = [google_project_service.enabled]
+}
+
+# The roster-import job (wave2.tf). Its read access to the roster inbox is in modules/roster_job.
+resource "google_service_account" "job_substack" {
+  account_id   = "job-substack"
+  display_name = "roster-import job"
+  depends_on   = [google_project_service.enabled]
+}
+
+# Cloud Scheduler starts stripe-reconcile with a token of this identity. Its one permission is
+# the runner role on that job (modules/reconcile_job).
+resource "google_service_account" "scheduler" {
+  account_id   = "scheduler"
+  display_name = "Cloud Scheduler (starts stripe-reconcile only)"
+  depends_on   = [google_project_service.enabled]
+}
+
 # ---------------------------------------------------------------- platform-api
 resource "google_project_iam_member" "platform_api_firestore" {
   project = var.project_id
@@ -87,6 +121,23 @@ resource "google_kms_crypto_key_iam_member" "platform_api_signs_contact_id" {
   member        = "serviceAccount:${google_service_account.platform_api.email}"
 }
 
+# Starting a job and following its runs, nothing else: no change to a run's settings (that is
+# roles/run.jobsExecutorWithOverrides, the owner's alone), no cancel, no edit. Bound on a job,
+# never on the project, in modules/reconcile_job and modules/roster_job. run.executions.list
+# lets platform-api tell whether a reconcile is already running.
+resource "google_project_iam_custom_role" "platform_job_runner" {
+  project     = var.project_id
+  role_id     = "platformJobRunner"
+  title       = "Job runner"
+  description = "Start a Cloud Run job and follow its executions. Nothing else."
+  permissions = [
+    "run.jobs.run",
+    "run.jobs.get",
+    "run.executions.get",
+    "run.executions.list",
+  ]
+}
+
 # ---------------------------------------------------------------- platform-hooks
 # Publishes to the inbound topic only. It reads nothing.
 resource "google_pubsub_topic_iam_member" "platform_hooks_publishes_inbound" {
@@ -102,6 +153,33 @@ resource "google_pubsub_topic_iam_member" "job_selfcheck_publishes_events" {
   topic   = module.event_bus.platform_events_topic
   role    = "roles/pubsub.publisher"
   member  = "serviceAccount:${google_service_account.job_selfcheck.email}"
+}
+
+# ---------------------------------------------------------------- job-stripe and job-substack
+# What the reconcile and the roster import both need: Firestore, signing with the contact key,
+# publishing platform events. Each job's other grants live with the job: the Stripe key
+# (job-stripe) in modules/reconcile_job, the roster inbox (job-substack) in modules/roster_job,
+# and who may start each job, also there.
+resource "google_project_iam_member" "jobs_firestore" {
+  for_each = local.platform_job_identities
+  project  = var.project_id
+  role     = "roles/datastore.user"
+  member   = "serviceAccount:${each.value}"
+}
+
+resource "google_kms_crypto_key_iam_member" "jobs_sign_contact_id" {
+  for_each      = local.platform_job_identities
+  crypto_key_id = module.contact_key.key_id
+  role          = google_project_iam_custom_role.platform_contact_key_user.id
+  member        = "serviceAccount:${each.value}"
+}
+
+resource "google_pubsub_topic_iam_member" "jobs_publish_events" {
+  for_each = local.platform_job_identities
+  project  = var.project_id
+  topic    = module.event_bus.platform_events_topic
+  role     = "roles/pubsub.publisher"
+  member   = "serviceAccount:${each.value}"
 }
 
 # ---------------------------------------------------------------- Pub/Sub service agent
@@ -151,6 +229,8 @@ resource "google_service_account_iam_member" "deployer_acts_as_platform" {
     platform_api   = google_service_account.platform_api.name
     platform_hooks = google_service_account.platform_hooks.name
     job_selfcheck  = google_service_account.job_selfcheck.name
+    job_stripe     = google_service_account.job_stripe.name
+    job_substack   = google_service_account.job_substack.name
   }
   service_account_id = each.value
   role               = "roles/iam.serviceAccountUser"
@@ -197,7 +277,7 @@ resource "google_service_account_iam_member" "github_impersonates_deployer" {
 
 # ---------------------------------------------------------------- buckets
 # platform-api reads the library and copies published files into it, and reads what waits in
-# staging. The import job's access to roster_inbox is bound in Wave 2.
+# staging. The import job's access to roster_inbox is bound in modules/roster_job (wave2.tf).
 resource "google_storage_bucket_iam_member" "platform_api_reads" {
   for_each = {
     library         = module.library.name
