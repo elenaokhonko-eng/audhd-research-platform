@@ -17,12 +17,13 @@ export default async function MemberLayout({ children }: { children: ReactNode }
     return (
       <div className="member-shell">
         <div className="member-main">
-          <div className="member-content">
+          <main className="member-content">
+            <h1>Member area</h1>
             <p role="status">The member area cannot be reached right now. Please try again in a minute.</p>
             <p>
               <Link href="/member">Try again</Link>
             </p>
-          </div>
+          </main>
         </div>
       </div>
     );
