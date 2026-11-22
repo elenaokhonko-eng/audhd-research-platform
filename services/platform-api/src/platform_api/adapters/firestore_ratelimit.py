@@ -1,6 +1,8 @@
 """Rate limits on Firestore: `rate_limits/{key}:{window seconds}`, a window start and a count.
 
 The key is a member uid and an action (for example `support:<uid>`), never an address.
+A document also carries `expires_at`, the end of its window plus two days, for Firestore's
+time-to-live policy.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -9,6 +11,8 @@ from google.cloud import firestore
 
 from platform_api.adapters import in_transaction
 from platform_api.shared.ratelimit import count_hit
+
+LIMIT_AFTERLIFE = timedelta(days=2)  # `expires_at` is the end of the window plus this
 
 
 class FirestoreRateLimiter:
@@ -32,8 +36,14 @@ class FirestoreRateLimiter:
             )
             (start, used), wait = count_hit(held, limit, window, now)
             if wait is None:
+                window_start = datetime.fromtimestamp(start, UTC)
                 transaction.set(
-                    ref, {"window_start": datetime.fromtimestamp(start, UTC), "count": used}
+                    ref,
+                    {
+                        "window_start": window_start,
+                        "count": used,
+                        "expires_at": window_start + window + LIMIT_AFTERLIFE,
+                    },
                 )
             return wait
 

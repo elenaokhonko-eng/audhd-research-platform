@@ -280,3 +280,43 @@ def test_a_claim_and_an_end_at_once_leave_the_record_ended() -> None:
     # that landed just before it; no access is lost, since unclaimed records still count.)
     held = runner.get_entitlement(live.entitlement_id)
     assert held is not None and held.status == "expired"
+
+
+def _expiries(client: Any, collection: str) -> list[Any]:
+    return [s.to_dict().get("expires_at") for s in client.collection(collection).stream()]
+
+
+def test_an_audit_entry_on_firestore_expires_two_years_after_it() -> None:
+    from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
+    from platform_api.entitlements.models import AuditEntry
+    from tests.fixtures.people import T0
+
+    client = _client()
+    entry = AuditEntry(
+        at=T0, actor="owner:acc-1", action="admin.read", subject="admin", reason=None, evidence={}
+    )
+    FirestoreEntitlementStore(client).write("", [], [entry])
+    assert _expiries(client, "audit_log") == [T0 + timedelta(days=730)]
+
+
+def test_a_support_request_on_firestore_expires_a_year_after_it() -> None:
+    from platform_api.adapters.firestore_members import FirestoreMemberStore
+    from platform_api.identity.models import SupportRequest
+    from tests.fixtures.people import T0
+
+    client = _client()
+    FirestoreMemberStore(client).add_support_request(
+        SupportRequest(
+            id="r1", member_uid="u-ana", kind="other", note="n", status="open", created_at=T0
+        )
+    )
+    assert _expiries(client, "support_requests") == [T0 + timedelta(days=365)]
+
+
+def test_a_rate_limit_on_firestore_expires_two_days_after_its_window() -> None:
+    from platform_api.adapters.firestore_ratelimit import FirestoreRateLimiter
+    from tests.fixtures.people import T0
+
+    client = _client()
+    FirestoreRateLimiter(client).hit("support:u-ana", 3, timedelta(days=1), T0)
+    assert _expiries(client, "rate_limits") == [T0 + timedelta(days=3)]

@@ -2,12 +2,13 @@
 
 `contacts/{contact_id}`, `entitlements/{entitlement_id}`, `audit_log/{auto}`,
 `campaigns/{slug}` and `config/launch`. Documents are the models' fields as they dump
-(`Campaign` by alias, so its `copy` is stored as `copy`). Every change that must not be
+(`Campaign` by alias, so its `copy` is stored as `copy`); an audit entry also carries
+`expires_at`, for Firestore's time-to-live policy, which reads ignore. Every change that must not be
 lost to a concurrent writer runs in a transaction.
 """
 
 from collections.abc import Iterable, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from google.api_core.exceptions import NotFound
@@ -27,6 +28,7 @@ from platform_api.entitlements.models import (
 from platform_api.entitlements.store import ContactChange, check_write, claimed_audit
 
 _IN_LIMIT = 30  # the most values Firestore takes in one `in` filter
+AUDIT_LIFETIME = timedelta(days=730)  # an audit entry's `expires_at` is its `at` plus this
 
 
 def _data(snapshot: Any) -> dict[str, Any] | None:
@@ -151,7 +153,8 @@ class FirestoreEntitlementStore:
         self, transaction: firestore.Transaction, entries: Iterable[AuditEntry]
     ) -> None:
         for entry in entries:
-            transaction.set(self._audit.document(), entry.model_dump())
+            data = {**entry.model_dump(), "expires_at": entry.at + AUDIT_LIFETIME}
+            transaction.set(self._audit.document(), data)
 
     def audit_for(self, subject: str) -> list[AuditEntry]:
         query = self._audit.where(filter=FieldFilter("subject", "==", subject))

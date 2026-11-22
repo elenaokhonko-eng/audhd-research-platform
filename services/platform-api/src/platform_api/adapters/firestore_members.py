@@ -1,11 +1,18 @@
-"""The member store on Firestore: `members/{uid}` and `support_requests/{id}`."""
+"""The member store on Firestore: `members/{uid}` and `support_requests/{id}`.
 
+A support request also carries `expires_at`, for Firestore's time-to-live policy; reads
+ignore it.
+"""
+
+from datetime import timedelta
 from typing import Any
 
 from google.cloud import firestore
 
 from platform_api.adapters import in_transaction
 from platform_api.identity.models import Member, SupportRequest
+
+SUPPORT_LIFETIME = timedelta(days=365)  # a request's `expires_at` is its `created_at` plus this
 
 
 class FirestoreMemberStore:
@@ -37,7 +44,8 @@ class FirestoreMemberStore:
         return int(result[0][0].value)
 
     def add_support_request(self, request: SupportRequest) -> None:
-        self._support.document(request.id).set(request.model_dump())
+        data = {**request.model_dump(), "expires_at": request.created_at + SUPPORT_LIFETIME}
+        self._support.document(request.id).set(data)
 
     def support_requests(self) -> list[SupportRequest]:
         """Oldest first."""

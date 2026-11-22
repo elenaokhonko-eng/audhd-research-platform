@@ -473,3 +473,47 @@ from tests.identity.test_http_member import (  # noqa: E402
 from tests.identity.test_sessions import (  # noqa: E402
     test_ana_is_recognised_claims_her_record_and_gets_the_grant,  # noqa: F401
 )
+
+# Lifetimes (plan Task 9, contracts section 4): Firestore deletes a document after expires_at.
+
+
+def _expiries(db: FakeFirestore, collection: str) -> list[Any]:
+    return [data.get("expires_at") for (name, _), data in db.docs.items() if name == collection]
+
+
+def test_every_audit_entry_expires_two_years_after_it_was_written():
+    from tests.entitlements.store_conformance import _audit
+    from tests.fixtures.people import record
+
+    db = FakeFirestore()
+    store = FirestoreEntitlementStore(db)
+    entry = _audit("x").model_copy(update={"at": T0})
+    store.write("c-ana", [record("ana", "stripe_year")], [entry])
+    store.write("", [], [entry])
+    store.create_if_absent(record("bo", "owner_grant", contact_id="c-ana"), entry)
+    store.write("c-cy", [record("cy", "stripe_year", contact_id="c-cy")], [])
+    assert len(store.claim_records("c-cy", "u-cy", T0 + timedelta(days=1))) == 1
+    assert _expiries(db, "audit_log") == [T0 + timedelta(days=730)] * 3 + [T0 + timedelta(days=731)]
+    assert len(store.audit_for("x")) == 3  # the extra field is ignored on the way back
+
+
+def test_a_support_request_expires_a_year_after_it_was_made():
+    from platform_api.identity.models import SupportRequest
+
+    db = FakeFirestore()
+    store = FirestoreMemberStore(db)
+    store.add_support_request(
+        SupportRequest(
+            id="r1", member_uid="u-ana", kind="other", note="n", status="open", created_at=T0
+        )
+    )
+    assert _expiries(db, "support_requests") == [T0 + timedelta(days=365)]
+    assert [r.id for r in store.support_requests()] == ["r1"]
+
+
+def test_a_rate_limit_expires_two_days_after_its_window_ends():
+    db = FakeFirestore()
+    limiter = FirestoreRateLimiter(db)
+    limiter.hit("support:u-ana", 3, timedelta(days=1), T0 + timedelta(hours=1))
+    # Windows are aligned to the epoch: this one runs from T0 to T0 + 1 day.
+    assert _expiries(db, "rate_limits") == [T0 + timedelta(days=3)]
