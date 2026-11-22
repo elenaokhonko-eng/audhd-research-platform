@@ -318,3 +318,78 @@ def test_a_member_recognised_by_a_run_gets_the_grant_and_one_tier_event(ent):
     assert [(e.data["member_uid"], e.data["from"], e.data["to"]) for e in changed] == [
         ("u-bo", "free", "paid")
     ]
+
+
+# existing_for, and the guard counts renames.
+
+
+def test_existing_for_returns_every_record_of_the_named_sources_whatever_its_status(ent):
+    run(ent, [state("ana", "sub_a"), state("bo", "sub_b"), state("cy", "sub_c")])
+    run(
+        ent,
+        [state("ana", "sub_a"), state("bo", "sub_b", status="expired"), state("cy", "sub_c")],
+        run_id="r2",
+    )
+    [cy] = [
+        e for e in ent.store.entitlements_by_source("substack_stripe") if e.source_ref == "sub_c"
+    ]
+    ent.store.write(cy.contact_id, [cy.model_copy(update={"status": "revoked"})], [])
+    ent_api.grant(
+        ent_api.contact_id_for(EMAIL["ana"]), "tier:paid", None, "launch", "owner:acc-1", T0
+    )
+    found = ent_api.existing_for(["substack_stripe", "substack_stripe"])
+    assert sorted((e.source_ref, e.status) for e in found) == [
+        ("sub_a", "active"),
+        ("sub_b", "expired"),
+        ("sub_c", "revoked"),
+    ]
+    assert ent_api.existing_for(["platform_stripe"]) == []
+
+
+def test_existing_for_feeds_a_second_identical_run_that_changes_nothing(ent):
+    states = [
+        state("ana", "sub_a"),
+        state("hal", "sub_h", grant="status:substack_paid", interval="month"),
+    ]
+    for run_id in ("r1", "r2"):
+        plan = ent_api.plan_reconcile(
+            ent_api.existing_for(["substack_stripe"]), states, Guard(), T0
+        )
+        report = ent_api.apply_plan(plan, run_id, T0)
+    assert (plan.actions, plan.unseen, report.unchanged) == ([], [], 2)
+
+
+NAMES = ["ana", "cy", "fay", "gus", "hal", "bo", "di", "ed"]
+
+
+def renaming(ent, how_many):
+    run(ent, [state(n, f"sub_{n}") for n in NAMES])
+    for n in NAMES:
+        ent_api.claim_for_member(f"u-{n}", ent_api.contact_id_for(EMAIL[n]))
+    ent.bus.published.clear()
+    states = [state(n, f"sub_{n}", grant="status:substack_paid") for n in NAMES[:how_many]]
+    return run(ent, states + [state(n, f"sub_{n}") for n in NAMES[how_many:]], run_id="r2")
+
+
+def test_the_guard_blocks_a_mass_grant_rename(ent):
+    stamped = []
+    store_write = ent.store.write
+
+    def spy(contact_id, entitlements, audit):
+        stamped.extend(e.updated_by for e in entitlements)
+        store_write(contact_id, entitlements, audit)
+
+    ent.store.write = spy
+    plan, report = renaming(ent, 6)
+    assert plan.blocked and plan.actions == [] and plan.ends == 0
+    assert (report.blocked, report.moved, ent.bus.published) == (True, 0, [])
+    assert "run:r2" not in stamped
+    assert all(
+        e.grant == "tier:paid" and e.status == "active"
+        for e in ent.store.entitlements_by_source("substack_stripe")
+    )
+
+
+def test_five_grant_renames_of_eight_are_allowed(ent):
+    plan, report = renaming(ent, 5)
+    assert not plan.blocked and report.moved == 5

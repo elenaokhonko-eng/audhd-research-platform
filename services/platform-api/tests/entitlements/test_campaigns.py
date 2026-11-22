@@ -264,3 +264,23 @@ def test_the_owner_sees_a_contact_with_reasons_and_audit_but_no_address(ent):
 def test_the_cut_off_alone_keeps_out_a_reader_who_started_paying_after_it():
     late_ok = campaign(grant=POLICY.model_copy(update={"plan_intervals": None}))
     assert [len(due(n, held=holdings(n), c=late_ok)) for n in ("cy", "hal")] == [0, 1]
+
+
+@pytest.mark.parametrize("slug", ["..", "__x__", "A B", "a" * 41])
+def test_a_slug_outside_the_pattern_is_never_looked_up(ent, slug):
+    ent.store.put_launch_config(OPEN)
+    ent.store.put_campaigns(
+        [campaign(), campaign("members", audience="public", grant=None, is_default=True)]
+    )
+    asked = []
+    get_campaign = ent.store.get_campaign
+
+    def spy(name):
+        asked.append(name)
+        return get_campaign(name)
+
+    ent.store.get_campaign = spy
+    assert ent_api.campaign_by_slug(slug, T0).slug == "members" and asked == []
+    if slug != "..":  # ".." is folded into the path by the client before it is sent
+        body = TestClient(create_app(Settings())).get(f"/v1/public/campaigns/{slug}").json()
+        assert (body["slug"], body["audience"]) == (None, "public") and asked == []

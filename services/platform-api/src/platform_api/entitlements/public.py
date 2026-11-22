@@ -7,6 +7,7 @@ from platform_api.entitlements import reconcile
 from platform_api.entitlements.access import _reason, access_from, decision_for, is_live
 from platform_api.entitlements.campaigns import grants_from
 from platform_api.entitlements.models import (
+    _SLUG,
     Access,
     AuditEntry,
     Campaign,
@@ -20,6 +21,7 @@ from platform_api.entitlements.models import (
     LaunchConfig,
     Reason,
     ReasonEntry,
+    Source,
     SourceState,
     entitlement_id,
     normalise_email,
@@ -35,6 +37,8 @@ __all__ = [
     "Reason",
     "access_for",
     "apply_plan",
+    "existing_for",
+    "Source",
     "Guard",
     "plan_reconcile",
     "ReconcilePlan",
@@ -392,7 +396,9 @@ def put_campaigns(campaigns: list[Campaign], actor: str) -> int:
 def campaign_by_slug(slug: str | None, now: datetime) -> Campaign:
     """The named campaign; an unknown slug, None or "default" give the default campaign."""
     store = get_runtime().store
-    found = store.get_campaign(slug) if slug and slug != "default" else None
+    found = None
+    if slug is not None and slug != "default" and _SLUG.fullmatch(slug):  # never look up junk
+        found = store.get_campaign(slug)
     if found is not None:
         return found
     for c in store.list_campaigns():
@@ -531,6 +537,13 @@ def contact_view(contact_id: str, now: datetime) -> ContactView | None:
         reasons=reasons,
         audit=audit,
     )
+
+
+def existing_for(sources: Sequence[Source]) -> list[Entitlement]:
+    """Every record of the named sources, whatever its status: the `existing` of a run."""
+    store = get_runtime().store
+    found = [e for source in dict.fromkeys(sources) for e in store.entitlements_by_source(source)]
+    return list({e.entitlement_id: e for e in found}.values())
 
 
 def plan_reconcile(

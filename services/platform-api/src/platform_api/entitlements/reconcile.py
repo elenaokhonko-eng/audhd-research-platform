@@ -1,8 +1,8 @@
 """What a source says now, turned into a plan of writes. Pure: nothing is read or written.
 
 Fail safe (02 §4, Rule 3): a record no state mentions is left alone and listed in
-`unseen`; a plan that would end, or move between contacts, more records than the
-guard allows is `blocked` and carries no actions.
+`unseen`; a plan that would end or move (to another contact or grant name) more
+records than the guard allows is `blocked` and carries no actions.
 """
 
 from collections.abc import Sequence
@@ -148,7 +148,7 @@ def plan(
 
     actions: list[Action] = []
     seen: set[str] = set()
-    unchanged = ends = moves_between_contacts = 0
+    unchanged = ends = moves = 0
 
     for contact_id, s in resolved:
         record = _find(contact_id, s, by_id, by_ref)
@@ -217,7 +217,7 @@ def plan(
                     evidence_source_ref=s.source_ref,
                 )
             )
-            moves_between_contacts += home != record.contact_id
+            moves += 1  # a rename moves a live record too; both are under the guard
             continue
 
         target = record.model_copy(
@@ -244,7 +244,7 @@ def plan(
 
     live_before = sum(1 for e in existing if _guarded(e.grant) and is_live(e, now))
     limit = max(guard.max_ends, guard.max_fraction * live_before)
-    blocked = ends > limit or moves_between_contacts > limit
+    blocked = ends > limit or moves > limit
     return ReconcilePlan(
         actions=[] if blocked else actions,
         unchanged=unchanged,
