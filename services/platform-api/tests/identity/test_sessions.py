@@ -235,3 +235,44 @@ def test_a_member_is_created_only_when_absent(idn):
     assert idn.members.create_if_absent(member) is True
     assert idn.members.create_if_absent(member.model_copy(update={"joined_via": "x"})) is False
     assert idn.members.get("u-ana") == member
+
+
+def _land_during_the_sign_in(monkeypatch, idn, act):
+    """`act(uid)` runs right after the sign-in has read the member, before it writes."""
+    members = idn.members
+    get = members.get
+
+    def read_then_act(uid):
+        found = get(uid)
+        monkeypatch.setattr(members, "get", get)
+        act(uid)
+        return found
+
+    monkeypatch.setattr(members, "get", read_then_act)
+
+
+def test_a_deletion_that_lands_during_a_sign_in_stands_and_no_cookie_is_issued(
+    world, idn, monkeypatch
+):
+    from platform_api.identity import public as identity
+
+    sign_in(world, "bo")
+    _land_during_the_sign_in(monkeypatch, idn, lambda uid: identity.request_deletion(uid, T0))
+    issued = idn.provider._count
+    r = sign_in(world, "bo")
+    assert r.status_code == 401 and "session" not in r.json()
+    stored = idn.members.get("u-bo")
+    assert (stored.status, stored.deletion_requested_at) == ("deletion_requested", T0)
+    assert idn.provider._count == issued
+
+
+def test_terms_accepted_during_a_sign_in_are_kept(world, idn, monkeypatch):
+    from platform_api.identity import public as identity
+
+    sign_in(world, "ana")
+    _land_during_the_sign_in(
+        monkeypatch, idn, lambda uid: identity.accept_terms(uid, "t1", "p1", T0)
+    )
+    r = sign_in(world, "ana")
+    assert r.status_code == 200 and r.json()["member"]["terms"]["accepted"] is True
+    assert idn.members.get("u-ana").terms_accepted.terms_version == "t1"

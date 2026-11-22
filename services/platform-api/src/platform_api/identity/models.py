@@ -32,6 +32,7 @@ class Member(BaseModel):
     status: Literal["active", "deletion_requested"]
     created_at: AwareDatetime
     last_seen_at: AwareDatetime
+    deletion_requested_at: AwareDatetime | None = None
 
 
 class SupportRequest(BaseModel):

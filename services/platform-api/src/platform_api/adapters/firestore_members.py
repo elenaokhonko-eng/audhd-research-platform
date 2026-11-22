@@ -11,6 +11,7 @@ from google.cloud import firestore
 
 from platform_api.adapters import in_transaction
 from platform_api.identity.models import Member, SupportRequest
+from platform_api.identity.store import MemberChange
 
 SUPPORT_LIFETIME = timedelta(days=365)  # a request's `expires_at` is its `created_at` plus this
 
@@ -27,6 +28,22 @@ class FirestoreMemberStore:
 
     def put(self, member: Member) -> None:
         self._members.document(member.uid).set(member.model_dump())
+
+    def merge_member(self, uid: str, change: MemberChange) -> Member | None:
+        ref = self._members.document(uid)
+
+        def work(transaction: firestore.Transaction) -> Member | None:
+            snapshot = ref.get(transaction=transaction)
+            held = Member.model_validate(snapshot.to_dict()) if snapshot.exists else None
+            changed = change(held)
+            if changed is None:
+                return held
+            if changed.uid != uid:
+                raise ValueError("a change may not move a member to another uid")
+            transaction.set(ref, changed.model_dump())
+            return changed
+
+        return in_transaction(self._client, work)
 
     def create_if_absent(self, member: Member) -> bool:
         ref = self._members.document(member.uid)

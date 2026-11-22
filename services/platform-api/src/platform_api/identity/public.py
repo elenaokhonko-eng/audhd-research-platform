@@ -24,6 +24,7 @@ from platform_api.identity.models import (
 )
 from platform_api.identity.provider import InvalidToken
 from platform_api.identity.runtime import get_runtime
+from platform_api.identity.store import MemberChange
 from platform_api.shared.events import new_event
 from platform_api.shared.http import ApiError
 
@@ -88,6 +89,15 @@ def _check(uid: str, now: datetime) -> tuple[Literal["fresh", "started"], dateti
     return ("fresh" if answer == "fresh" else "started"), last
 
 
+def _seen_at(now: datetime) -> MemberChange:
+    def seen(held: Member | None) -> Member | None:
+        if held is None or held.status != "active":
+            return None  # nothing to stamp: the caller refuses the sign-in
+        return held.model_copy(update={"last_seen_at": now})
+
+    return seen
+
+
 def resolve_session(id_token: str, campaign_slug: str | None, now: datetime) -> SessionResult:
     """Turn a verified sign-in token into a member, their access and a session cookie."""
     runtime = get_runtime()
@@ -133,8 +143,11 @@ def resolve_session(id_token: str, campaign_slug: str | None, now: datetime) -> 
             if member is None or member.status != "active":
                 raise Unauthenticated("the sign-in was refused")
     if not first:
-        member = member.model_copy(update={"last_seen_at": now})
-        runtime.members.put(member)
+        # Field by field in one step of the store: a deletion request or a terms acceptance
+        # that landed since the read above is kept, and a deletion stops this sign-in.
+        member = runtime.members.merge_member(uid, _seen_at(now))
+        if member is None or member.status != "active":
+            raise Unauthenticated("the sign-in was refused")
 
     # The first writer of a contact's member_uid keeps it: another uid claims nothing.
     owns_contact = _owner_of(contact_id, now) == uid
@@ -272,15 +285,37 @@ def accept_terms(uid: str, terms_version: str, privacy_version: str, now: dateti
             422, "validation_failed", "These are not the terms and privacy notice now in force."
         )
     accepted = TermsAccepted(terms_version=terms_version, privacy_version=privacy_version, at=now)
-    member = _member(uid).model_copy(update={"terms_accepted": accepted})
-    get_runtime().members.put(member)
-    return _view(member)
+
+    def accept(held: Member | None) -> Member | None:
+        return held.model_copy(update={"terms_accepted": accepted}) if held else None
+
+    return _view(_merged(uid, accept))
+
+
+def _merged(uid: str, change: MemberChange) -> Member:
+    member = get_runtime().members.merge_member(uid, change)
+    if member is None:
+        raise LookupError("no such member")
+    return member
 
 
 def request_deletion(uid: str, now: datetime) -> None:
-    """Mark the member for deletion and end every session they hold. They cannot sign in again."""
-    member = _member(uid).model_copy(update={"status": "deletion_requested"})
-    get_runtime().members.put(member)
+    """Mark the member for deletion and end every session they hold. They cannot sign in again.
+
+    `deletion_requested_at` keeps the time of the first request.
+    """
+
+    def delete(held: Member | None) -> Member | None:
+        if held is None:
+            return None
+        return held.model_copy(
+            update={
+                "status": "deletion_requested",
+                "deletion_requested_at": held.deletion_requested_at or now,
+            }
+        )
+
+    _merged(uid, delete)
     end_sessions(uid)
 
 

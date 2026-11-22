@@ -320,3 +320,12 @@ def test_a_rate_limit_on_firestore_expires_two_days_after_its_window() -> None:
     client = _client()
     FirestoreRateLimiter(client).hit("support:u-ana", 3, timedelta(days=1), T0)
     assert _expiries(client, "rate_limits") == [T0 + timedelta(days=3)]
+
+
+def test_the_firestore_member_store_passes_the_store_checks() -> None:
+    from platform_api.adapters.firestore_members import FirestoreMemberStore
+    from tests.identity.store_conformance import (
+        check_merge_member_sees_the_stored_member_and_may_leave_it,
+    )
+
+    check_merge_member_sees_the_stored_member_and_may_leave_it(FirestoreMemberStore(_client()))

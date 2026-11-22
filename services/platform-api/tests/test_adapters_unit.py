@@ -474,6 +474,17 @@ from tests.identity.test_sessions import (  # noqa: E402
     test_ana_is_recognised_claims_her_record_and_gets_the_grant,  # noqa: F401
 )
 
+
+def test_the_firestore_member_store_passes_the_store_checks():
+    from tests.identity.store_conformance import (
+        check_merge_member_sees_the_stored_member_and_may_leave_it,
+    )
+
+    check_merge_member_sees_the_stored_member_and_may_leave_it(
+        FirestoreMemberStore(FakeFirestore())
+    )
+
+
 # Lifetimes (plan Task 9, contracts section 4): Firestore deletes a document after expires_at.
 
 
