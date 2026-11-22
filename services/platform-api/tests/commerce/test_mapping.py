@@ -99,3 +99,12 @@ def test_the_sandbox_marker_works_only_when_switched_on_and_never_in_prod():
 
 def test_a_subscription_never_prints_its_address():
     assert "@" not in repr(sub()) and "@" not in repr(to_state(sub(), S, T0))
+
+
+def test_a_subscription_never_prints_an_address_held_in_its_metadata():
+    assert "@" not in repr(sub(metadata={"note": EMAIL["ana"]}))
+
+
+def test_grace_days_must_be_at_least_one():
+    with pytest.raises(ValueError):
+        CommerceSettings(grace_days=0)

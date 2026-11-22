@@ -20,7 +20,7 @@ class StripeSubscription(BaseModel):
         "paused",
     ]
     application: str | None  # the Connect application that created it
-    metadata: dict[str, str]
+    metadata: dict[str, str] = Field(repr=False)
     customer_email: str | None = Field(default=None, repr=False)
     interval: Literal["day", "week", "month", "year"] | None
     start_date: AwareDatetime

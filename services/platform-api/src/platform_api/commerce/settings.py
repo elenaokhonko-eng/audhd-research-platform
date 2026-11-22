@@ -1,6 +1,6 @@
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 Grant = Literal["tier:paid", "status:substack_paid"]
@@ -18,7 +18,7 @@ class CommerceSettings(BaseSettings):
     substack_grant_year: Grant = "status:substack_paid"
     reconcile_job: str = ""
     roster_inbox_bucket: str = ""
-    grace_days: int = 21
+    grace_days: int = Field(default=21, ge=1)
 
     @model_validator(mode="after")
     def _no_sandbox_marker_in_prod(self) -> Self:
