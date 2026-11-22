@@ -1,7 +1,8 @@
 """The owner's routes, as `platform-cli` calls them.
 
 An address goes only in a POST body, never in a URL. Every call carries the owner's Google
-identity token.
+identity token twice: in X-Serverless-Authorization for Cloud Run's own check, and in
+Authorization for the service's.
 """
 
 import json
@@ -44,7 +45,12 @@ class AdminClient:
         self._http = http if http is not None else httpx.Client(timeout=60.0)
 
     def _call(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-        headers = {"Authorization": f"Bearer {self._token()}"}
+        # S1.0 plan, Global Constraints: "Cloud Run checks the caller's identity token for
+        # private services and strips its signature before the request reaches the container".
+        # Cloud Run takes X-Serverless-Authorization for that check when it is present and
+        # leaves Authorization as sent, so the service can still verify the signature itself.
+        bearer = f"Bearer {self._token()}"
+        headers = {"X-Serverless-Authorization": bearer, "Authorization": bearer}
         content = None
         if body is not None:
             headers["Content-Type"] = "application/json"

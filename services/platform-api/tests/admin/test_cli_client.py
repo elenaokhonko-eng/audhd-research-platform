@@ -142,3 +142,17 @@ def test_grant_create_reads_one_line_of_stdin_and_prints_no_address(monkeypatch,
     assert sent == ['{"email":"ana@example.org","grant":"tier:paid","reason":"comp","months":6}']
     out = capsys.readouterr()
     assert out.out == "entitlement_id: e1\n" and "@" not in out.err
+
+
+def test_the_client_sends_the_token_for_cloud_run_and_for_the_service():
+    seen = {}
+
+    def handler(request):
+        seen.update(
+            serverless=request.headers.get("x-serverless-authorization"),
+            auth=request.headers.get("authorization"),
+        )
+        return httpx.Response(200, json={"campaigns": [], "members": 0})
+
+    client(handler).launch_report()
+    assert seen == {"serverless": "Bearer tok", "auth": "Bearer tok"}
