@@ -43,12 +43,31 @@ class Lazy:
         return getattr(self._built, name)
 
 
-def configure_runtimes(settings: "Settings", bus: "EventBus") -> None:
+_NO_KEY = (
+    "PLATFORM_CONTACT_KEY is not set: it names the Cloud KMS key version that turns an "
+    "address into a contact id"
+)
+
+
+class _MissingKey:
+    """The contact key of a process started without one: any use says which setting is missing."""
+
+    @property
+    def version(self) -> str:
+        raise RuntimeError(_NO_KEY)
+
+    def mac(self, data: bytes) -> bytes:
+        raise RuntimeError(_NO_KEY)
+
+
+def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: bool) -> None:
     """Set the runtimes of `entitlements` and `identity` for this process.
 
     In `local`: the in-memory stores and a local contact key. Elsewhere: Firestore, the
-    Cloud KMS key named by PLATFORM_CONTACT_KEY, and Identity Platform; a missing key stops
-    the start with a message that names the setting. The identity provider is Identity
+    Cloud KMS key named by PLATFORM_CONTACT_KEY, and Identity Platform. When the key is not
+    set, `key_required` (the api service) stops the start with a message that names the
+    setting; otherwise (hooks, jobs) the first use of the key raises that message. The
+    identity provider is Identity
     Platform in every environment (in `local`, through its emulator when one is set).
     `request_refresh` and `last_reconcile_at` stay None until the Commerce lane wires them.
     """
@@ -72,17 +91,15 @@ def configure_runtimes(settings: "Settings", bus: "EventBus") -> None:
         key = LocalContactKey(b"local-only")
     else:
         key_name = settings.contact_key.strip()
-        if not key_name:
-            raise RuntimeError(
-                "PLATFORM_CONTACT_KEY is not set: it names the Cloud KMS key version that "
-                "turns an address into a contact id, and the service cannot start without it."
-            )
+        if not key_name and key_required:
+            raise RuntimeError(_NO_KEY + ", and this service cannot start without it.")
         from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
         from platform_api.adapters.firestore_members import FirestoreMemberStore
         from platform_api.adapters.firestore_ratelimit import FirestoreRateLimiter
         from platform_api.adapters.kms import KmsContactKey, version_of
 
-        version_of(key_name)  # a name that is not a key version stops the start here
+        if key_name:
+            version_of(key_name)  # a name that is not a key version stops the start here
 
         @cache
         def client() -> "firestore.Client":
@@ -98,7 +115,11 @@ def configure_runtimes(settings: "Settings", bus: "EventBus") -> None:
         store = cast(EntitlementStore, Lazy(lambda: FirestoreEntitlementStore(client())))
         members = cast(MemberStore, Lazy(lambda: FirestoreMemberStore(client())))
         limiter = cast(RateLimiter, Lazy(lambda: FirestoreRateLimiter(client())))
-        key = cast(ContactKey, _KeyWithVersion(version_of(key_name), Lazy(kms_key)))
+        key = (
+            cast(ContactKey, _KeyWithVersion(version_of(key_name), Lazy(kms_key)))
+            if key_name
+            else cast(ContactKey, _MissingKey())
+        )
 
     def provider() -> FirebaseIdentityProvider:
         import firebase_admin  # type: ignore[import-untyped]

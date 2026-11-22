@@ -48,9 +48,9 @@ class _LazyInbox:
         _inbox().record(event_id, event_type=event_type, received_at=received_at)
 
 
-# Every runtime is set before the app exists; outside `local` a missing PLATFORM_CONTACT_KEY
-# stops the start here. No cloud client is made until a port is used.
-configure_runtimes(_settings, _LazyBus())
+# Every runtime is set before the app exists. Outside `local` a missing PLATFORM_CONTACT_KEY
+# stops the api service here; hooks starts without it. No cloud client is made until used.
+configure_runtimes(_settings, _LazyBus(), key_required=_settings.app_mode == "api")
 
 app = create_app(
     _settings,

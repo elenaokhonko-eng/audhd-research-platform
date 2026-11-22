@@ -416,3 +416,30 @@ def test_a_write_that_fails_midway_still_announces_what_landed_and_raises(ent):
     paid = {u for u in ("u-ana", "u-gus") if ent_api.access_for(u, T0).tier == "paid"}
     announced = {e.data["member_uid"] for e in ent.bus.published if e.type.endswith("tier.changed")}
     assert len(paid) == 1 and announced == paid
+
+
+def test_a_failed_run_raises_its_first_error_when_a_follow_up_fails_too(ent, monkeypatch):
+    from platform_api.entitlements.store import InMemoryStore
+
+    class StoreDown(Exception):
+        pass
+
+    class FailsOnSecondWrite(InMemoryStore):
+        writes = 0
+
+        def write(self, contact_id, entitlements, audit):
+            if entitlements:
+                self.writes += 1
+                if self.writes == 2:
+                    raise StoreDown()
+            super().write(contact_id, entitlements, audit)
+
+    def policies_fail(contact_id, now):
+        raise LookupError("follow-up failed")
+
+    ent.store = FailsOnSecondWrite()
+    monkeypatch.setattr(ent_api, "apply_grant_policies", policies_fail)
+    for name in ("ana", "gus"):
+        ent_api.upsert_contact(EMAIL[name], ChannelsPatch(platform={"member_uid": f"u-{name}"}))
+    with pytest.raises(StoreDown):
+        run(ent, [state("ana", "sub_a"), state("gus", "sub_g")])

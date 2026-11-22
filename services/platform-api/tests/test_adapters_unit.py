@@ -268,10 +268,62 @@ def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):
     monkeypatch.setattr(commerce_jobs, "JOBS", {"probe": job})
     assert cli.main(["job", "probe"]) == 0 and len(seen) == 1
 
+
+def test_hooks_mode_starts_without_the_contact_key(monkeypatch, restore_root_logger):
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    monkeypatch.setenv("PLATFORM_APP_MODE", "hooks")
+    monkeypatch.delenv("PLATFORM_CONTACT_KEY", raising=False)
+    main = _reload_main(monkeypatch)
+    from fastapi.testclient import TestClient
+
+    assert TestClient(main.app).get("/health").status_code == 200
+
+
+def _no_key_job(monkeypatch, job):
+    from platform_api import cli
+    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api.entitlements import runtime as ent_runtime
+    from platform_api.identity import runtime as id_runtime
+
+    monkeypatch.setattr(ent_runtime, "_runtime", None)
+    monkeypatch.setattr(id_runtime, "_runtime", None)
     monkeypatch.setenv("PLATFORM_ENV", "dev")
     monkeypatch.delenv("PLATFORM_CONTACT_KEY", raising=False)
+    monkeypatch.setattr(commerce_jobs, "JOBS", {"probe": job})
+    return cli.main(["job", "probe"])
+
+
+def test_the_selfcheck_job_runs_without_the_contact_key(monkeypatch, restore_root_logger):
+    import google.cloud.pubsub_v1 as pubsub
+
+    sent = []
+
+    class FakePublisher:
+        def topic_path(self, project, topic):
+            return f"projects/{project}/topics/{topic}"
+
+        def publish(self, topic, data, **attrs):
+            sent.append(attrs["ce-type"])
+            return type("F", (), {"result": lambda self: "m-1"})()
+
+    monkeypatch.setattr(pubsub, "PublisherClient", FakePublisher)
+    from platform_api.jobs import JOBS
+
+    assert _no_key_job(monkeypatch, JOBS["selfcheck"]) == 0
+    assert sent == ["org.audhdneurobiology.platform.selfcheck.ran"]
+
+
+def test_a_job_that_needs_the_contact_key_is_told_which_setting_is_missing(
+    monkeypatch, restore_root_logger
+):
+    from platform_api.entitlements import public as ent_api
+
+    def job(settings):
+        ent_api.contact_id_for("ana@example.org")
+        return 0
+
     with pytest.raises(RuntimeError, match="PLATFORM_CONTACT_KEY"):
-        cli.main(["job", "probe"])
+        _no_key_job(monkeypatch, job)
 
 
 # The Firestore stores on the fake client: the conformance checks and the shared tests.

@@ -1,5 +1,6 @@
 import hashlib
-from collections.abc import Sequence
+import logging
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Literal
 
@@ -30,6 +31,8 @@ from platform_api.entitlements.reconcile import Action, Guard, ReconcilePlan, Re
 from platform_api.entitlements.runtime import get_runtime
 from platform_api.shared import clock
 from platform_api.shared.events import contains_email, new_event
+
+_log = logging.getLogger(__name__)
 
 __all__ = [
     "Access",
@@ -598,6 +601,51 @@ def _audit_entry(action: Action, run_id: str, now: datetime, partner: str | None
     )
 
 
+def _guarded(step: Callable[[], int], guarded: bool) -> int:
+    """Run one follow-up of a failed run: its failure is logged by type only, and skipped."""
+    if not guarded:
+        return step()
+    try:
+        return step()
+    except Exception as exc:
+        _log.error("a follow-up of a failed run failed: %s", type(exc).__name__)
+        return 0
+
+
+def _follow_up(
+    written: set[str],
+    touched: list[str],
+    before: dict[str, tuple[str, str]],
+    run_id: str,
+    now: datetime,
+    *,
+    guarded: bool = False,
+) -> tuple[int, int]:
+    """The grant policies of the written contacts, then the tier announcements."""
+    store = get_runtime().store
+    grants_created = 0
+    for contact_id in touched:
+        if contact_id not in written:
+            continue
+
+        def grants(contact_id: str = contact_id) -> int:
+            contact = store.get_contact(contact_id)
+            uid = _platform_uid(contact) if contact else None
+            return len(apply_grant_policies(contact_id, now)) if uid is not None else 0
+
+        grants_created += _guarded(grants, guarded)
+    tier_changes = 0
+    for uid, (contact_id, tier) in before.items():
+
+        def announce(contact_id: str = contact_id, uid: str = uid, tier: str = tier) -> int:
+            return int(
+                _announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
+            )
+
+        tier_changes += _guarded(announce, guarded)
+    return grants_created, tier_changes
+
+
 def apply_plan(plan: ReconcilePlan, run_id: str, now: datetime) -> ReconcileReport:
     """Write a plan: one write per contact, a moved record created before its old one ends.
 
@@ -665,19 +713,12 @@ def apply_plan(plan: ReconcilePlan, run_id: str, now: datetime) -> ReconcileRepo
             for contact_id, pairs in writes.items():
                 store.write(contact_id, [e for e, _ in pairs], [entry for _, entry in pairs])
                 written.add(contact_id)
-    finally:
-        # Also when a write fails partway: what landed gets its grants and its tier events,
-        # and the failure is then raised.
-        grants_created = 0
-        for contact_id in touched:
-            contact = store.get_contact(contact_id) if contact_id in written else None
-            uid = _platform_uid(contact) if contact else None
-            if uid is not None:
-                grants_created += len(apply_grant_policies(contact_id, now))
-        tier_changes = sum(
-            _announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
-            for uid, (contact_id, tier) in before.items()
-        )
+    except Exception:
+        # A write failed partway: what landed still gets its grants and its tier events,
+        # and then the write's own error is raised, whatever a follow-up does.
+        _follow_up(written, touched, before, run_id, now, guarded=True)
+        raise
+    grants_created, tier_changes = _follow_up(written, touched, before, run_id, now)
     return report.model_copy(
         update={
             "created": counts["create"],

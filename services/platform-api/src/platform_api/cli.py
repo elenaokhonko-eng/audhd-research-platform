@@ -262,7 +262,8 @@ def _configure_job_runtimes(settings: Settings) -> None:
 
         return PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
 
-    configure_runtimes(settings, cast(EventBus, Lazy(pubsub)))
+    # A job that never uses the contact key (selfcheck) runs without PLATFORM_CONTACT_KEY.
+    configure_runtimes(settings, cast(EventBus, Lazy(pubsub)), key_required=False)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
