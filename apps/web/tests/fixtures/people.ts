@@ -12,6 +12,7 @@ const substackSubscription: Reason = {
   status: "active",
   valid_until: null,
   campaign: null,
+  plan_interval: "year",
 };
 
 const launchGrant: Reason = {
@@ -22,17 +23,20 @@ const launchGrant: Reason = {
   status: "active",
   valid_until: LAUNCH_GRANT_UNTIL,
   campaign: "founding",
+  plan_interval: null,
 };
 
-const substackStatus: Reason = {
-  grant: "tier:paid",
-  source: "substack_roster",
+// A paying reader whose Substack plan does not include the platform (contracts 0.4).
+const statusReason = (source: Reason["source"], planInterval: Reason["plan_interval"]): Reason => ({
+  grant: "status:substack_paid",
+  source,
   label: "substack_status",
   access_scope: "substack+platform",
   status: "active",
   valid_until: null,
   campaign: null,
-};
+  plan_interval: planInterval,
+});
 
 export interface Person {
   name: string;
@@ -53,10 +57,10 @@ const person = (name: string, tier: "free" | "paid", reasons: Reason[]): Person 
 export const people: Person[] = [
   person("ana", "paid", [substackSubscription, launchGrant]),
   person("bo", "free", []),
-  person("cy", "paid", [substackSubscription]),
-  person("di", "paid", [substackStatus]),
+  person("cy", "free", [statusReason("substack_stripe", "month")]),
+  person("di", "free", [statusReason("substack_roster", null)]),
   person("ed", "free", []),
   person("fay", "paid", [launchGrant]),
   person("gus", "paid", [substackSubscription]),
-  person("hal", "paid", [substackSubscription]),
+  person("hal", "free", [statusReason("substack_stripe", "month")]),
 ];

@@ -25,8 +25,25 @@ describe("welcomeView", () => {
   });
   it("shows fay as paid through the grant alone", async () =>
     expect(welcomeView(await meOf("fay"), null)).toMatchObject({ kind: "paid", includedWhilePaying: false }));
-  it("shows hal as paid with no guarantee date", async () =>
-    expect(welcomeView(await meOf("hal"), null)).toEqual({ kind: "paid", grantUntil: null, includedWhilePaying: true }));
+  it("shows hal as a paying reader whose plan does not include the platform", async () =>
+    expect(welcomeView(await meOf("hal"), null)).toEqual({ kind: "other_plan", planInterval: "month" }));
+  it("shows di as free, with no plan interval to show", async () =>
+    expect(welcomeView(await meOf("di"), null)).toEqual({ kind: "free", checking: false }));
+  it("shows an annual status reason as the annual plan", async () => {
+    const me = await meOf("hal");
+    me.access.reasons = me.access.reasons.map((r) => ({ ...r, plan_interval: "year" as const }));
+    expect(welcomeView(me, null)).toEqual({ kind: "other_plan", planInterval: "year" });
+  });
+  it("shows a status reason that is neither active nor in grace as free", async () => {
+    const me = await meOf("hal");
+    me.access.reasons = me.access.reasons.map((r) => ({ ...r, status: "ended" }));
+    expect(welcomeView(me, null)).toEqual({ kind: "free", checking: false });
+  });
+  it("shows a status reason in grace as the plan", async () => {
+    const me = await meOf("hal");
+    me.access.reasons = me.access.reasons.map((r) => ({ ...r, status: "grace" }));
+    expect(welcomeView(me, null)).toEqual({ kind: "other_plan", planInterval: "month" });
+  });
   it("ignores a launch grant whose end date does not parse", async () => {
     const me = await meOf("ana");
     me.access.reasons = me.access.reasons.map((r) => (r.label === "launch_grant" ? { ...r, valid_until: "not-a-date" } : r));
@@ -145,6 +162,7 @@ describe("WelcomeBody", () => {
     { kind: "terms" as const },
     { kind: "paid" as const, grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: true },
     { kind: "free" as const, checking: false },
+    { kind: "other_plan" as const, planInterval: "month" as const },
   ])("offers Sign out in the $kind view", (view) => {
     render(<WelcomeBody view={view} />);
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
@@ -152,6 +170,24 @@ describe("WelcomeBody", () => {
   it("shows the guarantee date in the paid view", () => {
     render(<WelcomeBody view={{ kind: "paid", grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: false }} />);
     expect(screen.getByText("Your access is guaranteed until 31 January 2027.")).toBeInTheDocument();
+  });
+});
+
+describe("WelcomeBody other_plan", () => {
+  it("shows the monthly plan with both links and no recognition form", () => {
+    render(<WelcomeBody view={{ kind: "other_plan", planInterval: "month" }} />);
+    expect(screen.getByRole("heading", { name: "You are on the monthly plan." })).toBeInTheDocument();
+    expect(screen.getByText("Full access to the platform comes with the annual plan.")).toBeInTheDocument();
+    expect(screen.getByText("Until you change your plan, you have the free workspace.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See how to change your plan" })).toHaveAttribute("href", "/upgrade");
+    expect(screen.getByRole("link", { name: "Open your workspace" })).toHaveAttribute("href", "/member");
+    expect(screen.queryByText("Paying on Substack already?")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  });
+  it("omits the annual-plan sentence for the annual plan", () => {
+    render(<WelcomeBody view={{ kind: "other_plan", planInterval: "year" }} />);
+    expect(screen.getByRole("heading", { name: "You are on the annual plan." })).toBeInTheDocument();
+    expect(screen.queryByText("Full access to the platform comes with the annual plan.")).not.toBeInTheDocument();
   });
 });
 
