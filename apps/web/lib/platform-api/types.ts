@@ -37,6 +37,7 @@ export interface Reason {
   status: string;
   valid_until: string | null;
   campaign: string | null;
+  plan_interval: "month" | "year" | null;
 }
 
 export interface Access {
