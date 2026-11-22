@@ -17,7 +17,11 @@ class EntitlementStore(Protocol):
     def write(
         self, contact_id: str, entitlements: Sequence[Entitlement], audit: Sequence[AuditEntry]
     ) -> None:
-        """One atomic unit per contact: all of it or none."""
+        """One atomic unit per contact: all of it or none.
+
+        Every entitlement's `contact_id` must equal the `contact_id` argument; otherwise
+        ValueError is raised and nothing is written (neither entitlements nor audit entries).
+        """
         ...
 
     def create_if_absent(self, entitlement: Entitlement, audit: AuditEntry) -> bool:
