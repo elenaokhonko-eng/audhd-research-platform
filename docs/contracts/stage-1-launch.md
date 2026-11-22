@@ -129,6 +129,8 @@ Refinements made when the Core plan was written (2026-11-20):
 - **The owner's token is verified inside the service** (signature, issuer, verified email), not only by Cloud Run, and its account id must be in `PLATFORM_OWNER_ACCOUNTS` (comma-separated).
 - **For the owner's routes, `entitlements.public` also offers** `put_campaigns`, `list_campaigns`, `update_launch_config`, `contact_view`, `write_audit` and `audit_for`.
 - **`Join.recognition`** is `paid` when the member's tier is paid or they hold a live record from a Substack source, whatever that record unlocks.
+- **Records with a stated lifetime carry `expires_at`**, a timestamp Firestore's time-to-live policy acts on. The code that creates the record writes it: `downloads` and `support_requests` 365 days after creation, `audit_log` 730 days after the entry, `rate_limits` 2 days after the window ends. The lifetimes are those of the privacy notice.
+- **Deleting a member (task card C8):** `identity.public.delete_member(uid, actor, now)` and `platform-cli member delete --uid <uid>` remove the member record, the contact record and the entitlements of a member whose status is `deletion_requested`, and write one audit entry under the coded id. `platform-cli member deletions` lists the requests that are waiting.
 - **`entitlements.public` re-exports** the models other modules may use: `SourceState`, `Guard`, `Entitlement`, `ChannelsPatch`, `Access`, `Reason`, `LaunchConfig`, `Campaign`, `AuditEntry`.
 - **`content.item.published`** carries `content_id` (`library:<sku>`), `source`, `access`, `sku`, `version`, and is published whenever an item becomes published.
 - **`to_state` never ends a record on missing information:** a `past_due` subscription whose unpaid invoice date is unknown is skipped and counted. Stripe's status `paused` (a trial that ended without payment) is `expired`; an `active` subscription with paused collection stays `active`.
@@ -234,6 +236,7 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 | `PLATFORM_API_URL` | Where `platform-api` is; also the audience of the identity token `web` sends |
 | `PLATFORM_API_FAKE` | `1` replaces `platform-api` and sign-in with fakes built on the shared test people. Refused when `SITE_ENV` is `prod` |
 | `IDENTITY_API_KEY`, `IDENTITY_AUTH_DOMAIN` | Identity Platform's public client values, from Terraform outputs `identity_api_key` and `identity_auth_domain` |
+| `IDENTITY_GOOGLE_ENABLED` | `1` shows the "Continue with Google" button. Set by Terraform once the owner has stored the Google sign-in client; until then only the emailed link is offered |
 | `SIGNIN_SENDER_HINT` | Optional. The address sign-in emails come from, shown to the reader |
 
 | Job (`platform-cli job <name>`) | Runs | Schedule |
