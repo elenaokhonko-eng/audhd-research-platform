@@ -2,7 +2,8 @@
 # Checks the owner's launch and operations runbooks (docs/runbooks/launch.md, operations.md):
 # both exist; every ops/scripts/NN-*.sh they name exists; every platform-cli command they name
 # is one of the contract's (docs/contracts/stage-1-launch.md section 6 and its refinements);
-# and neither holds an address outside example.org, a Stripe key prefix (rk_live_, sk_) or a
+# and neither holds an address outside example.org, a Stripe key prefix (rk_live_, sk_), a Stripe
+# object id (ca_, acct_, cus_, sub_, pi_, in_, price_, prod_ and 8 or more letters or digits) or a
 # 12-digit number (the shape of a project number).
 # The checks are first run against invented bad pages, so a check that stops catching fails too.
 set -euo pipefail
@@ -53,6 +54,9 @@ check_page() {
   if grep -qE '(^|[^A-Za-z0-9_])(rk_live_|sk_)' "$page"; then
     problem "$name holds a string starting rk_live_ or sk_"
   fi
+  if grep -qE '(^|[^A-Za-z0-9_])(ca|acct|cus|sub|pi|in|price|prod)_[A-Za-z0-9]{8,}' "$page"; then
+    problem "$name holds a Stripe object id"
+  fi
   if grep -qE '(^|[^0-9])[0-9]{12}([^0-9]|$)' "$page"; then
     problem "$name holds a 12-digit number"
   fi
@@ -77,11 +81,13 @@ expect_caught "a command word with no subcommand" 'Then platform-cli prints the 
 expect_caught "an address outside example.org" 'Write to someone@example.com'
 expect_caught "a live restricted key prefix" 'the key rk_live_abc'
 expect_caught "a secret key prefix" 'never paste sk_test_abc'
+expect_caught "a Stripe application id" 'stripe_substack_application = "ca_Ab12Cd34Ef56"'
+expect_caught "a Stripe customer id" 'customer cus_Q1w2E3r4T5y6'
 expect_caught "a 12-digit number" 'project number 123456789012'
 problems=()
 printf '%s\n' 'bash ops/scripts/40-stripe-key.sh example-dev' 'platform-cli job stripe-reconcile' \
   'platform-cli runs show --kind stripe_reconcile' 'printf %s you@example.org | platform-cli contact show --email-stdin' \
-  'a task_count of 1; 2026-11-23' > "$tmp/clean.md"
+  'a task_count of 1; 2026-11-23; an id starting ca_ and nothing more' > "$tmp/clean.md"
 check_page "$tmp/clean.md" "$root"
 [[ "${#problems[@]}" -eq 0 ]] || fail "a clean page was refused: ${problems[*]}"
 ok

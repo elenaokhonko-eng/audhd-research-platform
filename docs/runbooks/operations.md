@@ -14,13 +14,13 @@ Once per Cloud Shell session: choose the project, make `platform-cli` available,
 cd ~/audhd-research-platform
 PROJECT="<your project>"
 ENV="${PROJECT##*-}"            # prod or dev: the Terraform root of that project
-command -v uv >/dev/null || python3 -m pip install --user --quiet uv
-alias platform-cli='uv run --project "$HOME/audhd-research-platform/services/platform-api" platform-cli'
+[ -x ~/.venvs/uv/bin/uv ] || { python3 -m venv ~/.venvs/uv && ~/.venvs/uv/bin/pip install --quiet uv; }
+alias platform-cli='~/.venvs/uv/bin/uv run --project "$HOME/audhd-research-platform/services/platform-api" platform-cli'
 terraform -chdir="infra/terraform/envs/$ENV" init -input=false -backend-config="bucket=$PROJECT-tfstate" >/dev/null
 export PLATFORM_API_URL="$(terraform -chdir="infra/terraform/envs/$ENV" output -raw platform_api_url)"
 ```
 
-`uv` is the Python tool the platform uses; the first `platform-cli` command of a session takes a minute while it installs the platform's packages. `platform-cli` signs each request with your own identity token (`gcloud auth print-identity-token`), so it works only for the accounts in that project's `owner_account_ids`.
+`uv` is the Python tool the platform uses; it is installed once into its own folder, `~/.venvs/uv`, because Cloud Shell may refuse a package installed for the whole user; the first `platform-cli` command of a session takes a minute while it installs the platform's packages. `platform-cli` signs each request with your own identity token (`gcloud auth print-identity-token`), so it works only for the accounts in that project's `owner_account_ids`.
 
 ## Look someone up
 
@@ -134,7 +134,7 @@ gcloud secrets versions disable <old version number> --secret stripe-read-key --
 
 ## Delete a member's account on request
 
-The command arrives with the Core lane's task card C8 and is not available yet. When it is merged: a member asks for deletion from their Account page; you list the waiting requests and delete each one. It removes the member record, the contact record and the entitlements, and writes one audit entry under the coded id.
+The command arrives with the Core lane's task card C8 and is not available yet. When it is merged: a member asks for deletion from their Account page; you list the waiting requests and delete each one. It removes the member record, the contact record and the entitlements, and writes one audit entry under the coded id. **It cannot be undone**: there is no copy to restore from, so check the uid against `member deletions` before you press Enter.
 
 ```bash
 platform-cli member deletions

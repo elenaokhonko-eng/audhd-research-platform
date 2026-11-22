@@ -69,7 +69,14 @@ What the plan should show, all in the dev project:
 
 ```bash
 gh workflow run platform-api.yml --ref integration/stage-1
-gh run watch "$(gh run list --workflow platform-api.yml --branch integration/stage-1 --limit 1 --json databaseId -q '.[0].databaseId')"
+sleep 10; date -u +%FT%TZ
+gh run list --workflow platform-api.yml --branch integration/stage-1 --limit 1 --json databaseId,createdAt -q '.[0] | "\(.databaseId) \(.createdAt)"'
+```
+
+GitHub takes a few seconds to list a new run. The last command prints the newest run's id and start time; the time must be within a minute of the time `date` printed (UTC). If it is older, the new run is not listed yet: wait a few seconds and run the last command again. Then follow the run:
+
+```bash
+gh run watch <run id>
 ```
 
 The jobs work only once the Commerce lane's job code is merged on `integration/stage-1`; until then a run of either job fails with "unknown job".
@@ -184,7 +191,7 @@ To see that every metric exists: `gcloud logging metrics list --project audhd-ne
 | --- | --- |
 | `40-stripe-key.sh`: a refusal | Read it: it says why nothing was stored (a full secret key, a live key, a cut-off paste). Re-run with the right key. |
 | `41-...`: `ACCESS IS WIDER THAN job-stripe ALONE` | Someone added a binding on the secret by hand. Do not remove it by hand: report it; the fix is in Terraform. |
-| The dry run fails with `PERMISSION_DENIED` on the overrides | Your account lacks the right to start a run with changed settings: the apply of section 1 did not finish. Apply again. |
+| The dry run fails with `PERMISSION_DENIED` on the overrides | Either `gcloud` is using an account that is not the project's owner (check with `gcloud config get-value account`; switch with `gcloud config set account <your account>`), or the apply of section 1 did not finish (apply again). |
 | The dry run fails with "unknown job" | The Commerce lane's job code is not in the image yet (section 1 d). |
 | `platform-cli` says the account is not allowed | `owner_account_ids` in dev's settings file is not your id, or dev was not applied after you added it. |
 
@@ -242,7 +249,7 @@ reconcile_schedule_enabled  = false
 terraform -chdir=infra/terraform/envs/prod apply
 ```
 
-The plan should show only the two jobs updated in place (their settings). Nothing is created or destroyed.
+The plan should show only the two jobs updated in place (their settings), and the scheduler job, if you changed the schedule. Nothing is created or destroyed.
 
 **5. Tag and approve the production deploy.** A tag starting with `v` on the commit of `main` you want deploys both the website and the platform, after your approval:
 
@@ -326,7 +333,7 @@ platform-cli launch set --join-open true
 
 Sign in on `https://audhdneurobiology.org` with your own two addresses, one that pays on Substack and one that does not. Check what each sees: the paid one the paid workspace and the reasons on the Account page, the free one the free workspace and the upgrade route. If anything is wrong, close the layer again at once (`platform-cli launch set --join-open false`) and report what you saw.
 
-If you do not want to keep the two test members, ask for deletion from each account's Account page, then remove them:
+If you do not want to keep the two test members, ask for deletion from each account's Account page, then remove them. **A deletion cannot be undone**: check the uid before you press Enter.
 
 ```bash
 platform-cli member deletions
