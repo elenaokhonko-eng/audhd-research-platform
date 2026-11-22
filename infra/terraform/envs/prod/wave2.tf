@@ -68,3 +68,14 @@ module "firestore_schema" {
   database   = google_firestore_database.default.name
   depends_on = [google_firestore_database.default]
 }
+
+# Alerts of the launch: a failed or blocked reconcile, a refused or truncated import, a failed job
+# execution, API errors and an address in the logs. Each emails the owner. In dev the log filters
+# also accept the log platform-test, so ops/scripts/42-raise-test-alert.sh can raise each one.
+module "platform_alerts" {
+  source                   = "../../modules/platform_alerts"
+  project_id               = var.project_id
+  notification_channel_ids = [google_monitoring_notification_channel.email.id]
+  accept_test_log          = local.platform_env == "dev"
+  depends_on               = [google_project_service.enabled]
+}
