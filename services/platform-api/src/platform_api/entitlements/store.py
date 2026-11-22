@@ -3,7 +3,14 @@
 from collections.abc import Sequence
 from typing import Protocol
 
-from platform_api.entitlements.models import AuditEntry, Contact, Entitlement, Source
+from platform_api.entitlements.models import (
+    AuditEntry,
+    Campaign,
+    Contact,
+    Entitlement,
+    LaunchConfig,
+    Source,
+)
 
 
 class EntitlementStore(Protocol):
@@ -21,6 +28,10 @@ class EntitlementStore(Protocol):
 
         Every entitlement's `contact_id` must equal the `contact_id` argument; otherwise
         ValueError is raised and nothing is written (neither entitlements nor audit entries).
+
+        `write("", [], entries)`, an empty contact_id with no entitlements, appends the audit
+        entries only and touches no contact. An empty contact_id with any entitlement is
+        refused with ValueError and nothing is written.
         """
         ...
 
@@ -29,6 +40,21 @@ class EntitlementStore(Protocol):
         ...
 
     def audit_for(self, subject: str) -> list[AuditEntry]: ...
+    def get_campaign(self, slug: str) -> Campaign | None: ...
+    def list_campaigns(self) -> list[Campaign]: ...
+    def put_campaigns(self, campaigns: Sequence[Campaign]) -> None:
+        """Writes each campaign under its slug, as given; campaigns not named stay."""
+        ...
+
+    def add_to_campaign_count(self, slug: str, key: str, by: int = 1) -> None:
+        """Atomic increment; a missing key starts at zero. LookupError for an unknown slug."""
+        ...
+
+    def get_launch_config(self) -> LaunchConfig:
+        """The stored switches, or the defaults (everything closed) when none are stored."""
+        ...
+
+    def put_launch_config(self, config: LaunchConfig) -> None: ...
 
 
 class InMemoryStore:
@@ -38,6 +64,8 @@ class InMemoryStore:
         self._contacts: dict[str, Contact] = {}
         self._entitlements: dict[str, Entitlement] = {}
         self._audit: list[AuditEntry] = []
+        self._campaigns: dict[str, Campaign] = {}
+        self._launch = LaunchConfig()
 
     def get_contact(self, contact_id: str) -> Contact | None:
         found = self._contacts.get(contact_id)
@@ -70,6 +98,8 @@ class InMemoryStore:
     def write(
         self, contact_id: str, entitlements: Sequence[Entitlement], audit: Sequence[AuditEntry]
     ) -> None:
+        if not contact_id and entitlements:
+            raise ValueError("records need a contact; only audit entries may go without one")
         if any(e.contact_id != contact_id for e in entitlements):
             raise ValueError("every record in one write belongs to one contact")
         staged = [e.model_copy() for e in entitlements]
@@ -87,3 +117,27 @@ class InMemoryStore:
 
     def audit_for(self, subject: str) -> list[AuditEntry]:
         return [a.model_copy(deep=True) for a in self._audit if a.subject == subject]
+
+    def get_campaign(self, slug: str) -> Campaign | None:
+        found = self._campaigns.get(slug)
+        return found.model_copy(deep=True) if found else None
+
+    def list_campaigns(self) -> list[Campaign]:
+        return [c.model_copy(deep=True) for c in self._campaigns.values()]
+
+    def put_campaigns(self, campaigns: Sequence[Campaign]) -> None:
+        for c in campaigns:
+            self._campaigns[c.slug] = c.model_copy(deep=True)
+
+    def add_to_campaign_count(self, slug: str, key: str, by: int = 1) -> None:
+        found = self._campaigns.get(slug)
+        if found is None:
+            raise LookupError("no such campaign")
+        counts = {**found.counts, key: found.counts.get(key, 0) + by}
+        self._campaigns[slug] = found.model_copy(update={"counts": counts})
+
+    def get_launch_config(self) -> LaunchConfig:
+        return self._launch.model_copy()
+
+    def put_launch_config(self, config: LaunchConfig) -> None:
+        self._launch = config.model_copy()

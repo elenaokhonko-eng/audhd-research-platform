@@ -1,9 +1,10 @@
 """Entitlement records. Frozen; every datetime is timezone-aware."""
 
 import hashlib
-from typing import Literal
+import re
+from typing import Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Source = Literal["substack_stripe", "substack_roster", "platform_stripe", "payhip", "grant"]
 Status = Literal["active", "grace", "expired", "revoked"]
@@ -121,6 +122,103 @@ class Decision(BaseModel):
 
     allowed: bool
     reason: Literal["paid_required", "purchase_required"] | None
+
+
+class ReasonEntry(BaseModel):
+    """One record of a contact and why it counts, for the owner's view."""
+
+    model_config = ConfigDict(frozen=True)
+
+    entitlement_id: str
+    reason: Reason
+
+
+class ContactView(BaseModel):
+    """What the owner sees of one contact. Never the address."""
+
+    model_config = ConfigDict(frozen=True)
+
+    contact_id: str
+    channels: dict[str, dict[str, object]]
+    has_member: bool
+    reasons: list[ReasonEntry]
+    audit: list[AuditEntry]
+
+
+class GrantPolicy(BaseModel):
+    """When a campaign gives a launch grant (design 5.4)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grant: Literal["tier:paid"]
+    months: int | None  # required when starts is "at_claim"
+    starts: Literal["at_claim", "fixed"]
+    fixed_until: AwareDatetime | None  # required when starts is "fixed"
+    requires_live_source: list[Source]
+    paid_since_before: AwareDatetime | None
+    plan_intervals: list[PlanInterval] | None
+
+    @model_validator(mode="after")
+    def _complete(self) -> Self:
+        if self.starts == "at_claim" and (self.months is None or self.months < 1):
+            raise ValueError("a policy that starts at the claim needs a number of months")
+        if self.starts == "fixed" and self.fixed_until is None:
+            raise ValueError("a policy with a fixed end needs fixed_until")
+        if "grant" in self.requires_live_source:
+            raise ValueError("a grant never earns another grant")
+        return self
+
+
+_SLUG = re.compile(r"[a-z0-9-]{1,40}")  # used with fullmatch: "$" would allow a final newline
+
+
+class Campaign(BaseModel):
+    model_config = ConfigDict(frozen=True, populate_by_name=True)
+
+    slug: str
+    audience: Literal["substack_paid", "substack_free", "public"]
+    opens_at: AwareDatetime | None
+    closes_at: AwareDatetime | None
+    is_default: bool
+    grant: GrantPolicy | None
+    # headline, body, cta. The plain name would shadow BaseModel.copy; dump with by_alias=True.
+    copy_: dict[str, str] = Field(alias="copy")
+    counts: dict[str, int]  # arrivals, recognised_paid, grants_created
+
+    @field_validator("slug")
+    @classmethod
+    def _slug(cls, value: str) -> str:
+        if not _SLUG.fullmatch(value) or value == "default":
+            raise ValueError(
+                "a slug is 1 to 40 lower-case letters, digits or hyphens, and not 'default'"
+            )
+        return value
+
+
+class GrantSpec(BaseModel):
+    """A launch grant that is due: who, from which campaign, until when, on what evidence."""
+
+    model_config = ConfigDict(frozen=True)
+
+    campaign: str
+    contact_id: str
+    grant: str
+    valid_until: AwareDatetime
+    evidence_entitlement_id: str
+
+
+class LaunchConfig(BaseModel):
+    """The `config/launch` document: the owner's switches."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    join_open: bool = False
+    library_open: bool = False
+    promotions_open: bool = False
+    reconcile_max_age_seconds: int = 900
+    required_terms_version: str = ""
+    required_privacy_version: str = ""
+    substack_account_url: str = ""
 
 
 def entitlement_id(source: str, source_ref: str, contact_id: str, grant: str) -> str:
