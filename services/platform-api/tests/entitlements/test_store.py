@@ -45,3 +45,24 @@ def check_a_write_that_mixes_contacts_is_refused_whole(store: EntitlementStore) 
 
 def test_in_memory_store_refuses_a_write_that_mixes_contacts():
     check_a_write_that_mixes_contacts_is_refused_whole(InMemoryStore())
+
+
+def check_an_audit_only_write_appends_entries_and_nothing_else(store: EntitlementStore) -> None:
+    entry = AuditEntry(
+        at=NOW,
+        actor="owner:acc-1",
+        action="launch.switched",
+        subject="config/launch",
+        reason=None,
+        evidence={"changed": "join_open"},
+    )
+    store.write("", [], [entry])
+    assert store.audit_for("config/launch") == [entry]
+    stray = _ent("")
+    with pytest.raises(ValueError):
+        store.write("", [stray], [])
+    assert store.get_entitlement(stray.entitlement_id) is None
+
+
+def test_in_memory_store_takes_an_audit_only_write_and_refuses_records_without_a_contact():
+    check_an_audit_only_write_appends_entries_and_nothing_else(InMemoryStore())

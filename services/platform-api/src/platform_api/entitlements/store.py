@@ -28,6 +28,10 @@ class EntitlementStore(Protocol):
 
         Every entitlement's `contact_id` must equal the `contact_id` argument; otherwise
         ValueError is raised and nothing is written (neither entitlements nor audit entries).
+
+        `write("", [], entries)`, an empty contact_id with no entitlements, appends the audit
+        entries only and touches no contact. An empty contact_id with any entitlement is
+        refused with ValueError and nothing is written.
         """
         ...
 
@@ -94,6 +98,8 @@ class InMemoryStore:
     def write(
         self, contact_id: str, entitlements: Sequence[Entitlement], audit: Sequence[AuditEntry]
     ) -> None:
+        if not contact_id and entitlements:
+            raise ValueError("records need a contact; only audit entries may go without one")
         if any(e.contact_id != contact_id for e in entitlements):
             raise ValueError("every record in one write belongs to one contact")
         staged = [e.model_copy() for e in entitlements]
