@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from platform_api.commerce.ports import RunStore, StripeReader
+from platform_api.commerce.ports import RosterInbox, RunStore, StripeReader
 from platform_api.commerce.settings import CommerceSettings
 from platform_api.shared.bus import EventBus
 
@@ -13,6 +13,7 @@ class Runtime:
     stripe: StripeReader | None
     runs: RunStore
     bus: EventBus
+    inbox: RosterInbox | None = None
 
 
 _runtime: Runtime | None = None

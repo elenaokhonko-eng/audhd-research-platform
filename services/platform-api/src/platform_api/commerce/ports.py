@@ -3,6 +3,8 @@ from collections.abc import Iterable, Iterator
 from datetime import datetime
 from typing import Literal, Protocol
 
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+
 from platform_api.commerce.models import RequestedBy, RunKind, StripeSubscription, SyncRun
 
 
@@ -37,6 +39,32 @@ class RunStore(Protocol):
     def recent(self, kind: RunKind | None, limit: int) -> list[SyncRun]: ...
 
     def get(self, run_id: str) -> SyncRun | None: ...
+
+
+class RosterObject(BaseModel):
+    """The owner's export file as found in the roster inbox. Its bytes are never shown."""
+
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    name: str
+    data: bytes = Field(repr=False)
+    updated_at: AwareDatetime
+
+
+class RosterInbox(Protocol):
+    def newest(self) -> RosterObject | None:
+        """The most recently placed export, or None when the inbox is empty."""
+        ...
+
+
+class InMemoryRosterInbox:
+    def __init__(self, *objects: RosterObject) -> None:
+        self._objects = list(objects)
+
+    def newest(self) -> RosterObject | None:
+        if not self._objects:
+            return None
+        return max(self._objects, key=lambda o: o.updated_at)
 
 
 class InMemoryStripeReader:
