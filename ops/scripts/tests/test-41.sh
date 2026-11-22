@@ -30,6 +30,7 @@ run example-dev
 [ "$code" -eq 1 ] || fail "second accessor: expected exit 1, got $code"
 grep -q "@example.org" <<<"$out" && fail "address of a person printed"
 grep -q "ONLY job-stripe" <<<"$out" && fail "must not confirm"
+grep -q "roles/secretmanager.secretAccessor: 2 member(s)" <<<"$out" || fail "should show the accessor role with its count"
 ok
 
 # 3. An extra role on the secret.

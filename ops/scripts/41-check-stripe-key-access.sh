@@ -23,14 +23,14 @@ policy="$(gcloud secrets get-iam-policy stripe-read-key --project "$project" --f
 
 # One line per role on the secret: "<role> <member count>".
 roles="$(jq -r '(.bindings // [])[] | select((.members // []) | length > 0) | "\(.role) \(.members | length)"' <<<"$policy")"
-accessors="$(jq -r --arg a "$accessor" '(.bindings // [])[] | select(.role == $a) | .members[]' <<<"$policy" | sort)"
+accessors="$(jq -r --arg a "$accessor" '(.bindings // [])[] | select(.role == $a) | (.members // [])[]' <<<"$policy" | sort)"
 other_roles="$(jq -r --arg a "$accessor" '(.bindings // [])[] | select(.role != $a and ((.members // []) | length > 0)) | .role' <<<"$policy")"
 
 echo "Secret stripe-read-key in $project, roles with members:"
 if [[ -n "$roles" ]]; then sed 's/^/  /; s/ \([0-9][0-9]*\)$/: \1 member(s)/' <<<"$roles"; else echo "  none"; fi
 
 # The project's own policy: information only; the secret's policy decides the exit code.
-if pol="$(gcloud projects get-iam-policy "$project" --format=json)"; then
+if pol="$(gcloud projects get-iam-policy "$project" --format=json 2>/dev/null)" && jq -e . >/dev/null 2>&1 <<<"$pol"; then
   echo "At project level, these roles can also read every secret (information, not a failure):"
   for r in roles/owner roles/secretmanager.admin "$accessor"; do
     n="$(jq -r --arg r "$r" '[(.bindings // [])[] | select(.role == $r) | (.members // [])[]] | length' <<<"$pol")"

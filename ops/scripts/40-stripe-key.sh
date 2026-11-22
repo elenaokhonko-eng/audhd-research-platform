@@ -10,12 +10,13 @@
 # Safe to re-run: each run adds a new version; older versions stay until you disable them.
 # Exit codes: 0 stored, 1 refused or failed, 2 wrong usage.
 set -euo pipefail
+set +x # tracing would print the key
 
 say() { printf '\n\033[1;36m== %s\033[0m\n' "$*"; }
 stop() { printf '\n\033[1;31m%s\033[0m\n' "$*" >&2; exit 1; }
 
 project="${1:-}"; live=0
-if [[ -z "$project" ]]; then
+if [[ -z "$project" || $# -gt 2 ]]; then
   echo "Usage: bash ops/scripts/40-stripe-key.sh <project_id> [--live]" >&2
   exit 2
 fi

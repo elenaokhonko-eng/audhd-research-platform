@@ -14,7 +14,7 @@ passed=0; ok() { passed=$((passed + 1)); }
 reset; printf 'rk_test_abcdefghijklmnop1234' | { run example-dev; [ "$code" -eq 0 ] || fail "good key: exit $code: $out"; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
 out="$(cat "$tmp/out")"
 grep -q "^secrets versions add stripe-read-key --project example-dev --data-file=-\$" "$STUB_LOG" || fail "stub not called as expected"
-[ "$(cat "$STUB_STDIN")" = "rk_test_abcdefghijklmnop1234" ] || fail "key not passed on stdin"
+printf '%s' 'rk_test_abcdefghijklmnop1234' | cmp -s - "$STUB_STDIN" || fail "gcloud must receive exactly the key bytes (no newline added)"
 grep -q "STORED a new version of stripe-read-key in example-dev" <<<"$out" || fail "should confirm"
 grep -q "1234" <<<"$out" || fail "should show the last four"
 grep -q "rk_test_abc" <<<"$out" && fail "key printed"
@@ -42,6 +42,7 @@ reset; printf 'other-project\nrk_live_abcdefghijklmnop1234' | { run example-dev 
 reset; printf 'example-prod\nrk_live_abcdefghijklmnop1234' | { run example-prod --live; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
 [ "$(cat "$tmp/code")" -eq 0 ] || fail "good live key should exit 0: $(cat "$tmp/out")"
 grep -q -- "--project example-prod" "$STUB_LOG" || fail "live key not stored"
+printf '%s' 'rk_live_abcdefghijklmnop1234' | cmp -s - "$STUB_STDIN" || fail "gcloud must receive exactly the live key bytes"
 ok
 
 # 4. Empty, short or odd values are refused.
@@ -49,7 +50,7 @@ for bad in '' 'rk_test_short' 'rk_test_abcdefghijklmnop12 34' 'rk_test_abcdefghi
   reset; printf '%s' "$bad" | { run example-dev; echo "$out" > "$tmp/out"; echo "$code" > "$tmp/code"; }
   [ "$(cat "$tmp/code")" -eq 1 ] || fail "value '$bad' should exit 1"
   [ -s "$STUB_LOG" ] && fail "stub called for '$bad'"
-  [ -n "$bad" ] && grep -q "rk_test_" "$tmp/out" && fail "refused value repeated"
+  [ -n "$bad" ] && grep -qF -- "$bad" "$tmp/out" && fail "refused value repeated"
 done
 ok
 
@@ -57,4 +58,5 @@ ok
 run; [ "$code" -eq 2 ] || fail "no argument should exit 2, got $code"
 grep -q "Usage:" <<<"$out" || fail "should print usage"
 ok
+run example-dev --live extra; [ "$code" -eq 2 ] || fail "a third argument should exit 2, got $code"
 echo "test-40: $passed passed"
