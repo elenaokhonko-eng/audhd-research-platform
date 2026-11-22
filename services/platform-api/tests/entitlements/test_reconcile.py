@@ -151,3 +151,88 @@ def test_the_same_reference_twice_in_one_run_is_refused(ent):
 def test_a_plan_and_a_report_never_print_an_address(ent):
     plan = ent_api.plan_reconcile([], [state("ana", "sub_a")], Guard(), T0)
     assert "@" not in repr(plan) and "@" not in ent_api.apply_plan(plan, "r1", T0).model_dump_json()
+
+
+# Controller rulings, pinned.
+
+
+def test_a_move_creates_the_new_record_before_it_ends_the_old_one(ent):
+    run(ent, [state("ed", "sub_e")])
+    writes = []
+    store_write = ent.store.write
+
+    def spy(contact_id, entitlements, audit):
+        writes.append([(e.contact_id, e.status) for e in entitlements])
+        store_write(contact_id, entitlements, audit)
+
+    ent.store.write = spy
+    plan, report = run(ent, [state("ed", "sub_e", email="ed.other@example.org")], run_id="r2")
+    old_cid, new_cid = (
+        ent_api.contact_id_for(EMAIL["ed"]),
+        ent_api.contact_id_for("ed.other@example.org"),
+    )
+    assert [a.kind for a in plan.actions] == ["move", "move"] and report.moved == 1
+    assert writes == [[(new_cid, "active")], [(old_cid, "expired")]]
+    [new] = ent.store.entitlements_for_contacts([new_cid])
+    [entry] = ent.store.audit_for(new.entitlement_id)
+    assert (entry.actor, new.updated_by) == ("run:r2", "run:r2") and "moved_from" in entry.evidence
+
+
+def test_a_tier_change_from_a_run_carries_exactly_the_agreed_data(ent):
+    run(ent, [state("ana", "sub_a")])
+    cid = ent_api.contact_id_for(EMAIL["ana"])
+    ent_api.claim_for_member("u-ana", cid)
+    ent.bus.published.clear()
+    _, report = run(ent, [state("ana", "sub_a", status="expired")], run_id="r7")
+    [event] = [e for e in ent.bus.published if e.type.endswith("membership.tier.changed")]
+    assert report.tier_changes == 1
+    assert event.data == {
+        "member_uid": "u-ana",
+        "contact_id": cid,
+        "from": "paid",
+        "to": "free",
+        "reason": "reconcile",
+        "run_id": "r7",
+    }
+
+
+def test_too_many_moves_between_contacts_block_the_plan(ent):
+    names = ["ana", "cy", "fay", "gus", "hal", "bo", "di", "ed"]
+    run(ent, [state(n, f"sub_{n}") for n in names])
+    moved = [state(n, f"sub_{n}", email=f"{n}.other@example.org") for n in names[:6]]
+    plan, report = run(ent, moved + [state(n, f"sub_{n}") for n in names[6:]], run_id="r2")
+    assert plan.blocked and plan.actions == [] and plan.ends == 0
+    assert (report.blocked, report.moved) == (True, 0)
+    assert (
+        ent.store.entitlements_for_contacts([ent_api.contact_id_for("ana.other@example.org")]) == []
+    )
+    assert all(e.status == "active" for e in ent.store.entitlements_by_source("substack_stripe"))
+
+
+def test_a_renamed_grant_under_a_claimed_contact_ends_the_old_record_and_creates_the_new(ent):
+    run(ent, [state("ana", "sub_a")])
+    cid = ent_api.contact_id_for(EMAIL["ana"])
+    ent_api.claim_for_member("u-ana", cid)
+    _, report = run(ent, [state("ana", "sub_a", grant="status:substack_paid")], run_id="r2")
+    held = sorted(
+        (e.contact_id, e.grant, e.status, e.member_uid)
+        for e in ent.store.entitlements_for_member("u-ana")
+    )
+    assert (report.moved, report.ended, report.created) == (1, 0, 0)
+    assert held == [
+        (cid, "status:substack_paid", "active", "u-ana"),
+        (cid, "tier:paid", "expired", "u-ana"),
+    ]
+
+
+def test_a_revoked_record_is_never_changed_by_a_plan(ent):
+    run(ent, [state("ana", "sub_a")])
+    [record] = ent.store.entitlements_by_source("substack_stripe")
+    revoked = record.model_copy(update={"status": "revoked"})
+    ent.store.write(record.contact_id, [revoked], [])
+    for i, status in enumerate(["active", "expired", "grace"]):
+        plan, report = run(
+            ent, [state("ana", "sub_a", status=status, interval="month")], run_id=f"r{i + 2}"
+        )
+        assert plan.actions == [] and (report.unchanged, report.unseen) == (1, 0)
+    assert ent.store.entitlements_by_source("substack_stripe") == [revoked]
