@@ -138,3 +138,8 @@ class ItemDetail(BaseModel):
     item: ItemCard
     description: str
     citation: str | None
+
+
+class SignedLink(BaseModel):
+    url: str
+    expires_at: datetime

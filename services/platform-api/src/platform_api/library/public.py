@@ -10,10 +10,18 @@ from platform_api.library.models import (
     LibraryItem,
     Manifest,
     PublishReport,
+    SignedLink,
     StoredFile,
 )
 from platform_api.library.publishing import publish
-from platform_api.library.reading import ItemNotFound, catalogue, item
+from platform_api.library.reading import (
+    ItemNotFound,
+    NotEntitled,
+    TooManyDownloads,
+    catalogue,
+    download_link,
+    item,
+)
 
 __all__ = [
     "ItemAccess",
@@ -25,9 +33,13 @@ __all__ = [
     "Kind",
     "LibraryItem",
     "Manifest",
+    "NotEntitled",
     "PublishReport",
+    "SignedLink",
     "StoredFile",
+    "TooManyDownloads",
     "catalogue",
+    "download_link",
     "item",
     "publish",
 ]
