@@ -12,11 +12,13 @@ read, applies nothing; a run never stays `running`. Logs carry counts, column na
 the Desk's redacted values only, never an address, a row, or an exception's text.
 """
 
+import csv
+import io
 import logging
 from datetime import datetime, timedelta
 from typing import Literal
 
-from substack_desk.adapters.export_file import ExportHeaderError, FileDirectory
+from substack_desk.adapters.export_file import REQUIRED_COLUMNS, ExportHeaderError, FileDirectory
 
 from platform_api.commerce.models import RunKind, SyncRun
 from platform_api.commerce.reconcile import would_do
@@ -29,6 +31,34 @@ logger = logging.getLogger(__name__)
 
 _KIND: RunKind = "roster_import"
 _RECONCILE_FRESH_FOR = timedelta(hours=24)
+
+
+_PLAN_COLUMN = "Stripe plan"
+
+
+def _missing_plan_column(data: bytes) -> tuple[str, ...] | None:
+    """The missing columns when the header has no "Stripe plan" column, else None.
+
+    Without that column every card payer would look like a reader without a plan interval.
+    The header is read as the Desk reads it (BOM removed, tab or comma, names trimmed, case
+    kept). A file that is not UTF-8, or a first line `csv` cannot read, is left to the Desk.
+    """
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    first_line = text.removeprefix("\ufeff").split("\n", 1)[0]
+    sep = "\t" if "\t" in first_line else ","
+    try:
+        header = next(
+            csv.reader(io.StringIO(first_line, newline=""), delimiter=sep, strict=True), []
+        )
+    except csv.Error:
+        return None
+    names = [h.strip() for h in header]
+    if _PLAN_COLUMN in names:
+        return None
+    return tuple(c for c in (*REQUIRED_COLUMNS, _PLAN_COLUMN) if c not in names)
 
 
 class _Stopped(Exception):
@@ -63,11 +93,12 @@ def _work(
         raise _Stopped
 
     directory = FileDirectory(found.data, found.updated_at)
-    missing: tuple[str, ...] | None = None
-    try:
-        listing = directory.list_paid()
-    except ExportHeaderError as exc:
-        missing = exc.missing  # column names from the Desk's own list, never a cell
+    missing = _missing_plan_column(found.data)
+    if missing is None:
+        try:
+            listing = directory.list_paid()
+        except ExportHeaderError as exc:
+            missing = exc.missing  # column names from the Desk's own list, never a cell
     if missing is not None:  # logged outside the except block: no chained file content
         counts["bad_header"] = 1
         if missing:

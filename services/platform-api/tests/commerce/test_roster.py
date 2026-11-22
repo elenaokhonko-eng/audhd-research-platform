@@ -212,3 +212,15 @@ def test_rows_free_rows_and_trial_rows_are_counted(com):
     ready(com, DI, BO, f"{EMAIL['cy']},Free trial,,,")
     run = commerce.roster_import(True, T0 + timedelta(hours=1))
     assert (run.counts["rows"], run.counts["free_rows"], run.counts["trial_rows"]) == (3, 1, 1)
+
+
+def test_a_file_without_the_stripe_plan_column_fails_and_names_it(com, ent, caplog):
+    ready(com, DI)
+    data = f"Email,Type,First paid date,Expiration date\r\n{EMAIL['di']},Comp,,\r\n".encode()
+    com.inbox = InMemoryRosterInbox(RosterObject(name="e.csv", data=data, updated_at=T0))
+    with caplog.at_level(logging.ERROR):
+        run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts["bad_header"]) == ("failed", 1)
+    assert "Stripe plan" in caplog.text and "@" not in caplog.text
+    assert ent.store.entitlements_by_source("substack_roster") == []
+    assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None
