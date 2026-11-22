@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from platform_api.modules import FEATURE_MODULES
 from platform_api.settings import Settings
+from platform_api.shared.http import install_error_handlers
 
 if TYPE_CHECKING:
     from platform_api.shared.auth import PushIdentity
@@ -52,6 +53,9 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
         redoc_url="/redoc" if local else None,
         openapi_url="/openapi.json" if local else None,
     )
+
+    app.state.settings = settings
+    install_error_handlers(app)
 
     @app.get("/health")
     def health() -> dict[str, str]:
