@@ -59,3 +59,22 @@ run "the_address_alert_ignores_test_and_service_addresses" {
     error_message = "The filter must exclude example.org and service account addresses."
   }
 }
+
+run "the_address_alert_accepts_the_test_log_where_it_is_switched_on" {
+  command = plan
+  variables {
+    accept_test_log = true
+  }
+  assert {
+    condition     = strcontains(google_logging_metric.address_in_logs.filter, "logs/platform-test")
+    error_message = "In dev the address filter accepts the test log."
+  }
+}
+
+run "the_address_alert_ignores_the_test_log_by_default" {
+  command = plan
+  assert {
+    condition     = !strcontains(google_logging_metric.address_in_logs.filter, "logs/platform-test")
+    error_message = "Without the switch, a test entry does not raise the address alert."
+  }
+}
