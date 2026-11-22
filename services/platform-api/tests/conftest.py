@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -38,5 +39,27 @@ def ent(monkeypatch: pytest.MonkeyPatch) -> Any:
     from platform_api.shared.bus import InMemoryBus
 
     runtime = Runtime(InMemoryStore(), LocalContactKey(b"test"), InMemoryBus())
+    monkeypatch.setattr(runtime_module, "_runtime", runtime)
+    return runtime
+
+
+@pytest.fixture
+def idn(ent: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from platform_api.identity import runtime as runtime_module
+    from platform_api.identity.provider import FakeIdentityProvider
+    from platform_api.identity.runtime import Runtime
+    from platform_api.identity.store import InMemoryMemberStore
+    from platform_api.shared.ratelimit import InMemoryRateLimiter
+    from tests.fixtures.people import EMAIL
+
+    runtime = Runtime(
+        members=InMemoryMemberStore(),
+        provider=FakeIdentityProvider(EMAIL),
+        bus=ent.bus,
+        session_ttl=timedelta(days=14),
+        limiter=InMemoryRateLimiter(),
+        request_refresh=None,
+        last_reconcile_at=None,
+    )
     monkeypatch.setattr(runtime_module, "_runtime", runtime)
     return runtime

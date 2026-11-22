@@ -55,6 +55,9 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
     )
 
     app.state.settings = settings
+    # The member lookup of `shared.http.current_member`; `shared` may not import identity.
+    identity = importlib.import_module("platform_api.identity.public")
+    app.state.member_from_session = identity.member_from_session
     install_error_handlers(app)
 
     @app.get("/health")

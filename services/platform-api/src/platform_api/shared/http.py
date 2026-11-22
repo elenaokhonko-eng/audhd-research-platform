@@ -1,9 +1,9 @@
 """The error body of contracts section 1, for every error the service itself raises."""
 
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -84,3 +84,31 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation)
     app.add_exception_handler(StarletteHTTPException, http_error)
     app.add_exception_handler(Exception, unhandled)
+
+
+def current_member(
+    request: Request,
+    session: Annotated[str | None, Header(alias="X-Member-Session")] = None,
+) -> Any:
+    """The member of the forwarded session, or 401. Refusal is anything the lookup refuses.
+
+    `shared` may not import `identity`, so the lookup is `app.state.member_from_session`,
+    which `create_app` sets. It returns a member reference (`uid`, `terms_ok`) and raises a
+    PermissionError when the session is not valid; any other error is a fault, not a refusal.
+    """
+    lookup = getattr(request.app.state, "member_from_session", None)
+    if not session or lookup is None:
+        raise ApiError(401, "unauthenticated", "Please sign in.")
+    try:
+        return lookup(session)
+    except PermissionError:
+        raise ApiError(401, "unauthenticated", "Please sign in.") from None
+
+
+def member_with_terms(member: Annotated[Any, Depends(current_member)]) -> Any:
+    """As `current_member`, then 409 until the member has accepted the current terms."""
+    if not getattr(member, "terms_ok", False):
+        raise ApiError(
+            409, "terms_required", "Please accept the current terms and privacy notice first."
+        )
+    return member
