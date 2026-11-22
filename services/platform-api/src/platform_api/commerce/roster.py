@@ -1,14 +1,15 @@
 """Recognise the readers Stripe cannot see, from Substack's subscriber export file.
 
-Only rows without a plan interval (complimentary, gift, billed by Apple) become
-`substack_roster` records, as `status:substack_paid`. A row with a plan interval is a card
-payer: Stripe is the authority for those, so such a row is counted and never granted.
-No state is ever `expired`, so an import ends nothing; people the file leaves out are unseen.
+Only rows without a plan interval (complimentary, gift, billed by Apple) whose reader has
+no live `substack_stripe` record become `substack_roster` records, as `status:substack_paid`.
+A row with a plan interval is a card payer: Stripe is the authority for those, so such a
+row is counted and never granted. No state is ever `expired`, so an import ends nothing;
+people the file leaves out are unseen.
 
 Fail safe: the import refuses unless the latest real Stripe reconcile completed with its
-guard passed less than 24 hours ago; a cut-off file applies nothing; a run never stays
-`running`. Logs carry counts, column names and the Desk's redacted values only, never an
-address, a row, or an exception's text.
+guard passed less than 24 hours ago; a cut-off file, or one with a plan the Desk cannot
+read, applies nothing; a run never stays `running`. Logs carry counts, column names and
+the Desk's redacted values only, never an address, a row, or an exception's text.
 """
 
 import logging
@@ -18,7 +19,7 @@ from typing import Literal
 from substack_desk.adapters.export_file import ExportHeaderError, FileDirectory
 
 from platform_api.commerce.models import RunKind, SyncRun
-from platform_api.commerce.reconcile import _would_do
+from platform_api.commerce.reconcile import would_do
 from platform_api.commerce.runtime import get_runtime
 from platform_api.entitlements import public as entitlements
 from platform_api.entitlements.public import ChannelsPatch, Guard, SourceState
@@ -69,9 +70,15 @@ def _work(
         missing = exc.missing  # column names from the Desk's own list, never a cell
     if missing is not None:  # logged outside the except block: no chained file content
         counts["bad_header"] = 1
-        logger.error(
-            "roster_bad_header run=%s dry_run=%s missing=%s", run_id, dry_run, ",".join(missing)
-        )
+        if missing:
+            logger.error(
+                "roster_bad_header run=%s dry_run=%s missing=%s",
+                run_id,
+                dry_run,
+                ",".join(missing),
+            )
+        else:  # the Desk names no column only when the bytes are not UTF-8 text
+            logger.error("roster_bad_header run=%s dry_run=%s reason=not_utf8", run_id, dry_run)
         raise _Stopped
     report = directory.report
     counts.update(
@@ -79,14 +86,35 @@ def _work(
         rejected_rows=listing.rejected_rows,
         free_rows=report.free_rows,
         trial_rows=report.trial_rows,
+        unreadable_dates=report.unreadable_dates,
     )
+    # The Desk's values are plan or type cells cut to 40 characters, any with an `@` redacted.
     if report.unknown_types:
-        logger.warning("roster_unknown_types run=%s values=%s", run_id, report.unknown_types)
-    if report.unknown_plans:
-        logger.warning("roster_unknown_plans run=%s values=%s", run_id, report.unknown_plans)
+        logger.warning(
+            "roster_unknown_types run=%s dry_run=%s values=%s",
+            run_id,
+            dry_run,
+            report.unknown_types,
+        )
+    if report.unreadable_dates:
+        logger.warning(
+            "roster_unreadable_dates run=%s dry_run=%s count=%s",
+            run_id,
+            dry_run,
+            report.unreadable_dates,
+        )
     if not listing.complete:
         counts["truncated"] = 1
         logger.error("alert=roster_truncated run=%s dry_run=%s", run_id, dry_run)
+        raise _Stopped
+    if report.unknown_plans:  # a plan the Desk cannot read could be a card payer: no guess
+        counts["unknown_plans"] = len(report.unknown_plans)
+        logger.error(
+            "alert=roster_refused run=%s dry_run=%s reason=unknown_plans values=%s",
+            run_id,
+            dry_run,
+            report.unknown_plans,
+        )
         raise _Stopped
 
     paying_by_card = {
@@ -96,11 +124,12 @@ def _work(
     }
     existing = entitlements.existing_for(["substack_roster"])
     held_since = {e.contact_id: e.valid_from for e in existing}
-    counts.update(card_payer_rows=0, card_payer_not_in_stripe=0)
+    counts.update(card_payer_rows=0, card_payer_not_in_stripe=0, already_in_stripe=0)
     states: list[SourceState] = []
     for record in listing.records:
         contact_id = entitlements.contact_id_for(record.email)
         if not dry_run:
+            counts["writing_contacts"] = 1  # from here a failure may have written some contacts
             entitlements.upsert_contact(
                 record.email,
                 ChannelsPatch(
@@ -115,6 +144,9 @@ def _work(
             counts["card_payer_rows"] += 1
             if contact_id not in paying_by_card:
                 counts["card_payer_not_in_stripe"] += 1
+            continue
+        if contact_id in paying_by_card:  # Stripe already holds this reader (contracts, jobs)
+            counts["already_in_stripe"] += 1
             continue
         states.append(
             SourceState(
@@ -134,7 +166,7 @@ def _work(
     plan = entitlements.plan_reconcile(existing, states, Guard(), now)
     counts.update(guard_ends=plan.ends, live_before=plan.live_before)
     if dry_run:
-        counts.update(_would_do(plan))
+        counts.update(would_do(plan))
     else:
         counts["applying"] = 1  # from here a failure may have applied some writes
         applied = entitlements.apply_plan(plan, run_id, now)

@@ -120,3 +120,95 @@ def test_a_newer_failed_reconcile_refuses_even_after_an_older_good_one(com, ent)
     run = commerce.roster_import(False, T0 + timedelta(hours=2))
     assert (run.state, run.counts) == ("failed", {"refused_no_recent_reconcile": 1})
     assert ent.store.entitlements_by_source("substack_roster") == []
+
+
+def test_a_reader_stripe_already_holds_gets_no_roster_record(com, ent):
+    ready(com, f"{EMAIL['gus']},Comp,,,")
+    run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert ent.store.entitlements_by_source("substack_roster") == []
+    assert (run.state, run.counts["already_in_stripe"], run.counts["created"]) == (
+        "completed",
+        1,
+        0,
+    )
+    channels = ent.store.get_contact(ent_api.contact_id_for(EMAIL["gus"])).channels
+    assert channels["substack"]["type"] == "comp"
+
+
+def test_an_unknown_plan_refuses_and_writes_nothing(com, ent, caplog):
+    ready(com, DI, f"{EMAIL['ed']},Paid,Founding member,,")
+    with caplog.at_level(logging.WARNING):
+        run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts["unknown_plans"]) == ("failed", 1)
+    assert "roster_refused" in caplog.text and "reason=unknown_plans" in caplog.text
+    assert "@" not in caplog.text
+    assert ent.store.entitlements_by_source("substack_roster") == []
+    assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None
+    assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["ed"])) is None
+
+
+def test_unreadable_dates_are_counted_and_logged(com, caplog):
+    ready(com, f"{EMAIL['di']},Comp,,not a date,")
+    with caplog.at_level(logging.WARNING):
+        run = commerce.roster_import(True, T0 + timedelta(hours=1))
+    assert run.counts["unreadable_dates"] == 1
+    assert "roster_unreadable_dates" in caplog.text and "dry_run=True" in caplog.text
+
+
+def test_a_file_that_is_not_utf8_fails_and_says_so(com, caplog):
+    ready(com, DI)
+    com.inbox = InMemoryRosterInbox(
+        RosterObject(name="e.csv", data=b"\xff\xfe\x00bad", updated_at=T0)
+    )
+    with caplog.at_level(logging.ERROR):
+        run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts["bad_header"]) == ("failed", 1)
+    assert "reason=not_utf8" in caplog.text and "@" not in caplog.text
+
+
+def test_reuploading_the_same_dateless_file_changes_nothing(com, ent):
+    ready(com, DI)
+    commerce.roster_import(False, T0 + timedelta(hours=1))
+    com.inbox = InMemoryRosterInbox(
+        RosterObject(name="e2.csv", data=export(DI), updated_at=T0 + timedelta(hours=2))
+    )
+    run = commerce.roster_import(False, T0 + timedelta(hours=3))
+    assert (run.state, run.counts["updated"], run.counts["unchanged"]) == ("completed", 0, 1)
+
+
+def test_a_card_payer_contact_records_what_the_roster_says(com, ent):
+    ready(com, GUS)
+    now = T0 + timedelta(hours=1)
+    run = commerce.roster_import(False, now)
+    substack = ent.store.get_contact(ent_api.contact_id_for(EMAIL["gus"])).channels["substack"]
+    assert (substack["plan_interval"], substack["last_seen_in_roster"]) == ("year", now.isoformat())
+    assert run.counts["writing_contacts"] == 1
+
+
+def test_an_empty_inbox_fails(com, caplog):
+    ready(com, DI)
+    com.inbox = InMemoryRosterInbox()
+    with caplog.at_level(logging.ERROR):
+        run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert (run.state, run.counts) == ("failed", {"no_file": 1})
+    assert "roster_no_file" in caplog.text
+
+
+def test_an_unexpected_error_fails_the_run_and_logs_only_its_class(com, ent, monkeypatch, caplog):
+    ready(com, DI)
+
+    def broken(*args, **kwargs):
+        raise ValueError(f"cannot plan for {EMAIL['di']}")
+
+    monkeypatch.setattr(ent_api, "plan_reconcile", broken)
+    with caplog.at_level(logging.ERROR):
+        run = commerce.roster_import(False, T0 + timedelta(hours=1))
+    assert run.state == "failed" and "error=ValueError" in caplog.text
+    assert "@" not in caplog.text and "cannot plan" not in caplog.text
+    assert ent.store.entitlements_by_source("substack_roster") == []
+
+
+def test_rows_free_rows_and_trial_rows_are_counted(com):
+    ready(com, DI, BO, f"{EMAIL['cy']},Free trial,,,")
+    run = commerce.roster_import(True, T0 + timedelta(hours=1))
+    assert (run.counts["rows"], run.counts["free_rows"], run.counts["trial_rows"]) == (3, 1, 1)
