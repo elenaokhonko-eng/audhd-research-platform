@@ -284,3 +284,14 @@ def test_a_slug_outside_the_pattern_is_never_looked_up(ent, slug):
     if slug != "..":  # ".." is folded into the path by the client before it is sent
         body = TestClient(create_app(Settings())).get(f"/v1/public/campaigns/{slug}").json()
         assert (body["slug"], body["audience"]) == (None, "public") and asked == []
+
+
+def test_put_campaigns_refuses_a_repeated_slug_and_a_second_default(ent):
+    default = campaign("members", audience="public", grant=None, is_default=True)
+    with pytest.raises(ValueError):
+        ent_api.put_campaigns([campaign(), campaign()], "owner:acc-1")
+    ent_api.put_campaigns([campaign(), default], "owner:acc-1")
+    with pytest.raises(ValueError):  # "members" stays stored and stays the default
+        ent_api.put_campaigns([campaign("other", is_default=True)], "owner:acc-1")
+    assert [c.slug for c in ent_api.list_campaigns() if c.is_default] == ["members"]
+    assert ent.store.get_campaign("other") is None

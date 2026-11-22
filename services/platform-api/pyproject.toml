@@ -19,6 +19,7 @@ dependencies = [
     "google-cloud-run",
     "google-cloud-secret-manager",
     "pyyaml",
+    "httpx",
 ]
 
 [project.scripts]
@@ -27,7 +28,6 @@ platform-cli = "platform_api.cli:main"
 [dependency-groups]
 dev = [
     "pytest",
-    "httpx",
     "ruff",
     "mypy",
     "import-linter",

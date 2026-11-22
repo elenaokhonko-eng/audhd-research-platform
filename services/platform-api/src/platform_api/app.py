@@ -24,6 +24,8 @@ class Deps:
     inbox: Inbox | None = None
     registry: HandlerRegistry | None = None
     verify_push: Callable[[str], PushIdentity] | None = None
+    # Token -> Google account id (claim `sub`); raises NotAuthorised. None refuses every admin call.
+    verify_owner: Callable[[str], str] | None = None
 
 
 def _route_paths(router: Any, prefix: str = "") -> Iterator[str]:
@@ -58,6 +60,7 @@ def create_app(settings: Settings, deps: Deps | None = None) -> FastAPI:
     # The member lookup of `shared.http.current_member`; `shared` may not import identity.
     identity = importlib.import_module("platform_api.identity.public")
     app.state.member_from_session = identity.member_from_session
+    app.state.verify_owner = deps.verify_owner if deps is not None else None
     install_error_handlers(app)
 
     @app.get("/health")

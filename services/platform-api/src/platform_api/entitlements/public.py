@@ -5,7 +5,7 @@ from typing import Literal
 
 from platform_api.entitlements import reconcile
 from platform_api.entitlements.access import _reason, access_from, decision_for, is_live
-from platform_api.entitlements.campaigns import grants_from
+from platform_api.entitlements.campaigns import campaign_state, grants_from
 from platform_api.entitlements.models import (
     _SLUG,
     Access,
@@ -64,6 +64,7 @@ __all__ = [
     "apply_grant_policies",
     "audit_for",
     "campaign_by_slug",
+    "campaign_state",
     "contact_view",
     "grants_due",
     "launch_config",
@@ -371,8 +372,18 @@ def list_campaigns() -> list[Campaign]:
 
 
 def put_campaigns(campaigns: list[Campaign], actor: str) -> int:
-    """Write campaigns from the owner's file. A slug that exists keeps its counts."""
+    """Write campaigns from the owner's file. A slug that exists keeps its counts.
+
+    Stored campaigns the file does not name stay. Refused with ValueError, before anything is
+    written: a slug named twice, or more than one default once the file is merged by slug.
+    """
+    slugs = [c.slug for c in campaigns]
+    if len(set(slugs)) != len(slugs):
+        raise ValueError("a slug is named more than once")
     store = get_runtime().store
+    merged = {c.slug: c for c in store.list_campaigns()} | {c.slug: c for c in campaigns}
+    if sum(c.is_default for c in merged.values()) > 1:
+        raise ValueError("more than one campaign would be the default")
     now = clock.utcnow()
     kept = []
     for c in campaigns:

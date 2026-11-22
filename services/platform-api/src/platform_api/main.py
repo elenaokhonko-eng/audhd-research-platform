@@ -3,7 +3,7 @@ from functools import cache
 
 from platform_api.app import Deps, create_app
 from platform_api.settings import Settings
-from platform_api.shared.auth import push_identity_from_token
+from platform_api.shared.auth import google_account_from_token, push_identity_from_token
 from platform_api.shared.bus import EventBus
 from platform_api.shared.events import DomainEvent
 from platform_api.shared.handlers import HandlerRegistry
@@ -56,5 +56,6 @@ app = create_app(
         verify_push=lambda t: push_identity_from_token(
             t, allowed_email=_settings.push_service_account
         ),
+        verify_owner=google_account_from_token,
     ),
 )
