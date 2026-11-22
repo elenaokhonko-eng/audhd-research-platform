@@ -8,6 +8,11 @@ from platform_api.identity.models import Member, SupportRequest
 class MemberStore(Protocol):
     def get(self, uid: str) -> Member | None: ...
     def put(self, member: Member) -> None: ...
+    def create_if_absent(self, member: Member) -> bool:
+        """Store a new member in one atomic step. False, and nothing written, when the uid
+        exists already (another sign-in created it first)."""
+        ...
+
     def count(self) -> int: ...
     def add_support_request(self, request: SupportRequest) -> None: ...
     def support_requests(self) -> list[SupportRequest]: ...
@@ -24,6 +29,12 @@ class InMemoryMemberStore:
 
     def put(self, member: Member) -> None:
         self._members[member.uid] = member.model_copy(deep=True)
+
+    def create_if_absent(self, member: Member) -> bool:
+        if member.uid in self._members:
+            return False
+        self.put(member)
+        return True
 
     def count(self) -> int:
         return len(self._members)

@@ -126,9 +126,15 @@ def resolve_session(id_token: str, campaign_slug: str | None, now: datetime) -> 
             created_at=now,
             last_seen_at=now,
         )
-    else:
+        if not runtime.members.create_if_absent(member):
+            # Another sign-in of this uid created the member first: this one is a return.
+            first = False
+            member = runtime.members.get(uid)
+            if member is None or member.status != "active":
+                raise Unauthenticated("the sign-in was refused")
+    if not first:
         member = member.model_copy(update={"last_seen_at": now})
-    runtime.members.put(member)
+        runtime.members.put(member)
 
     # The first writer of a contact's member_uid keeps it: another uid claims nothing.
     owns_contact = _owner_of(contact_id, now) == uid

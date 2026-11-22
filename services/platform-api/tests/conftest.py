@@ -30,6 +30,19 @@ def _fixed_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(clock, "utcnow", lambda: T0)
 
 
+@pytest.fixture(autouse=True)
+def _runtimes_restored(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test that sets a runtime (main, a job) leaves the next test as it found it."""
+    import importlib
+
+    for name in ("entitlements", "identity"):
+        try:
+            module = importlib.import_module(f"platform_api.{name}.runtime")
+        except ImportError:
+            continue
+        monkeypatch.setattr(module, "_runtime", module._runtime)
+
+
 @pytest.fixture
 def ent(monkeypatch: pytest.MonkeyPatch) -> Any:
     from platform_api.entitlements import runtime as runtime_module

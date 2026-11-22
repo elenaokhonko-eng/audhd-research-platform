@@ -199,3 +199,39 @@ def test_a_new_member_gets_registered_and_no_tier_event(world, ent):
     assert "membership.member.registered" in types and "membership.tier.changed" not in types
     [registered] = [e for e in ent.bus.published if e.type.endswith("membership.member.registered")]
     assert registered.data["member_uid"] == "u-ana" and registered.data["campaign"] == "founding"
+
+
+def test_two_first_sign_ins_at_once_create_one_member(world, idn, ent):
+    from platform_api.identity.store import InMemoryMemberStore
+
+    class OtherSignInWins(InMemoryMemberStore):
+        def create_if_absent(self, member):
+            super().create_if_absent(member.model_copy(update={"joined_via": "members"}))
+            return super().create_if_absent(member)
+
+    idn.members = OtherSignInWins()
+    body = sign_in(world, "ana", "founding")
+    assert body.status_code == 200 and body.json()["member"]["joined_via"] == "members"
+    assert idn.members.count() == 1
+    assert not [e for e in ent.bus.published if e.type.endswith("member.registered")]
+    assert ent.store.get_campaign("founding").counts.get("arrivals", 0) == 0
+
+
+def test_a_member_is_created_only_when_absent(idn):
+    from platform_api.identity.models import Member
+
+    member = Member(
+        uid="u-ana",
+        primary_contact_id="c1",
+        linked_contact_ids=[],
+        email="ana@example.org",
+        display_name=None,
+        terms_accepted=None,
+        joined_via=None,
+        status="active",
+        created_at=T0,
+        last_seen_at=T0,
+    )
+    assert idn.members.create_if_absent(member) is True
+    assert idn.members.create_if_absent(member.model_copy(update={"joined_via": "x"})) is False
+    assert idn.members.get("u-ana") == member
