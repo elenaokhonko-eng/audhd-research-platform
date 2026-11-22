@@ -4,15 +4,22 @@ from datetime import datetime
 from typing import Literal
 
 from platform_api.entitlements import reconcile
-from platform_api.entitlements.access import access_from, decision_for
+from platform_api.entitlements.access import _reason, access_from, decision_for, is_live
+from platform_api.entitlements.campaigns import grants_from
 from platform_api.entitlements.models import (
     Access,
     AuditEntry,
+    Campaign,
     ChannelsPatch,
     Contact,
+    ContactView,
     Decision,
     Entitlement,
+    GrantPolicy,
+    GrantSpec,
+    LaunchConfig,
     Reason,
+    ReasonEntry,
     SourceState,
     entitlement_id,
     normalise_email,
@@ -44,6 +51,23 @@ __all__ = [
     "contact_id_for",
     "entitlement_id",
     "upsert_contact",
+    "Campaign",
+    "ContactView",
+    "GrantPolicy",
+    "GrantSpec",
+    "LaunchConfig",
+    "ReasonEntry",
+    "apply_grant_policies",
+    "audit_for",
+    "campaign_by_slug",
+    "contact_view",
+    "grants_due",
+    "launch_config",
+    "list_campaigns",
+    "put_campaigns",
+    "record_arrival",
+    "update_launch_config",
+    "write_audit",
 ]
 
 
@@ -304,9 +328,209 @@ def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
     _announce_tier_change(found.contact_id, uid, tier_before, now)
 
 
+def launch_config() -> LaunchConfig:
+    return get_runtime().store.get_launch_config()
+
+
+def update_launch_config(patch: dict[str, object], actor: str) -> LaunchConfig:
+    """Change some of the owner's switches. Unknown keys are refused; the change is audited."""
+    unknown = sorted(set(patch) - set(LaunchConfig.model_fields))
+    if unknown:
+        raise ValueError("unknown launch settings: " + ", ".join(unknown))
+    store = get_runtime().store
+    config = LaunchConfig.model_validate({**store.get_launch_config().model_dump(), **patch})
+    store.put_launch_config(config)
+    write_audit(
+        AuditEntry(
+            at=clock.utcnow(),
+            actor=actor,
+            action="launch.switched",
+            subject="config/launch",
+            reason=None,
+            evidence={"changed": ",".join(sorted(patch))},
+        )
+    )
+    return config
+
+
+def write_audit(entry: AuditEntry) -> None:
+    """An audit entry that goes with no record: an owner's change of configuration."""
+    get_runtime().store.write("", [], [entry])
+
+
+def audit_for(subject: str) -> list[AuditEntry]:
+    return get_runtime().store.audit_for(subject)
+
+
+def list_campaigns() -> list[Campaign]:
+    return get_runtime().store.list_campaigns()
+
+
+def put_campaigns(campaigns: list[Campaign], actor: str) -> int:
+    """Write campaigns from the owner's file. A slug that exists keeps its counts."""
+    store = get_runtime().store
+    now = clock.utcnow()
+    kept = []
+    for c in campaigns:
+        held = store.get_campaign(c.slug)
+        kept.append(c.model_copy(update={"counts": dict(held.counts)}) if held else c)
+    store.put_campaigns(kept)
+    for c in kept:
+        write_audit(
+            AuditEntry(
+                at=now,
+                actor=actor,
+                action="campaign.written",
+                subject=f"campaigns/{c.slug}",
+                reason=None,
+                evidence={"campaign": c.slug},
+            )
+        )
+    return len(kept)
+
+
+def campaign_by_slug(slug: str | None, now: datetime) -> Campaign:
+    """The named campaign; an unknown slug, None or "default" give the default campaign."""
+    store = get_runtime().store
+    found = store.get_campaign(slug) if slug and slug != "default" else None
+    if found is not None:
+        return found
+    for c in store.list_campaigns():
+        if c.is_default:
+            return c
+    raise LookupError("no default campaign is stored")
+
+
+def grants_due(
+    entitlements: list[Entitlement], campaigns: list[Campaign], now: datetime
+) -> list[GrantSpec]:
+    return grants_from(entitlements, campaigns, launch_config(), now)
+
+
 def apply_grant_policies(contact_id: str, now: datetime) -> list[str]:
-    """Hook for the launch grant policies; Task 5 replaces it. Creates nothing yet."""
-    return []
+    """Create the launch grants due to a contact that has a member. Idempotent.
+
+    Publishes `membership.entitlement.granted` for each grant it creates, and no tier
+    change: `apply_plan` and sign-in compare the tier themselves.
+    """
+    runtime = get_runtime()
+    store = runtime.store
+    contact = store.get_contact(contact_id)
+    uid = _platform_uid(contact) if contact else None
+    if uid is None:
+        return []
+    held = store.entitlements_for_contacts([contact_id])
+    created: list[str] = []
+    for spec in grants_due(held, store.list_campaigns(), now):
+        if spec.contact_id != contact_id:
+            continue
+        source_ref = f"campaign:{spec.campaign}"
+        actor = f"policy:{spec.campaign}"
+        record = Entitlement(
+            entitlement_id=entitlement_id("grant", source_ref, contact_id, spec.grant),
+            contact_id=contact_id,
+            member_uid=uid,
+            grant=spec.grant,
+            source="grant",
+            source_ref=source_ref,
+            access_scope="platform_only",
+            plan_interval=None,
+            valid_from=now,
+            valid_until=spec.valid_until,
+            status="active",
+            updated_at=now,
+            updated_by=actor,
+        )
+        audit = AuditEntry(
+            at=now,
+            actor=actor,
+            action="entitlement.granted",
+            subject=record.entitlement_id,
+            reason="launch_grant",
+            evidence={"entitlement_id": spec.evidence_entitlement_id, "campaign": spec.campaign},
+        )
+        if not store.create_if_absent(record, audit):
+            continue  # created meanwhile by another evaluation: counted there
+        store.add_to_campaign_count(spec.campaign, "grants_created")
+        runtime.bus.publish(
+            new_event(
+                "membership.entitlement.granted",
+                contact_id,
+                {
+                    "contact_id": contact_id,
+                    "entitlement_id": record.entitlement_id,
+                    "grant": spec.grant,
+                    "source": "grant",
+                    "source_ref": source_ref,
+                    "access_scope": "platform_only",
+                },
+                now=now,
+            )
+        )
+        created.append(record.entitlement_id)
+    return created
+
+
+def record_arrival(uid: str, campaign: Campaign, recognition: str) -> None:
+    """A member's first sign-in through a campaign: invite, counts and one event."""
+    runtime = get_runtime()
+    store = runtime.store
+    contact_ids = store.contact_ids_for_member(uid)
+    if not contact_ids:
+        raise LookupError("no contact for this member")
+    contact_id = contact_ids[0]
+    contact = store.get_contact(contact_id)
+    if contact is None:
+        raise LookupError("no contact for this member")
+    now = clock.utcnow()
+    store.put_contact(
+        contact.model_copy(
+            update={"invite": {"campaign": campaign.slug, "state": "accepted"}, "updated_at": now}
+        )
+    )
+    store.add_to_campaign_count(campaign.slug, "arrivals")
+    if recognition == "paid":
+        store.add_to_campaign_count(campaign.slug, "recognised_paid")
+    runtime.bus.publish(
+        new_event(
+            "membership.campaign.joined",
+            contact_id,
+            {
+                "member_uid": uid,
+                "contact_id": contact_id,
+                "campaign": campaign.slug,
+                "recognition": recognition,
+            },
+            now=now,
+        )
+    )
+
+
+def contact_view(contact_id: str, now: datetime) -> ContactView | None:
+    """The owner's view of one contact: channels, records with reasons, their audit. No address."""
+    store = get_runtime().store
+    contact = store.get_contact(contact_id)
+    if contact is None:
+        return None
+    held = store.entitlements_for_contacts([contact_id])
+    reasons = []
+    audit: list[AuditEntry] = []
+    for e in held:
+        ended = e.status in ("active", "grace") and not is_live(e, now)
+        reasons.append(
+            ReasonEntry(
+                entitlement_id=e.entitlement_id, reason=_reason(e, "expired" if ended else e.status)
+            )
+        )
+        audit.extend(store.audit_for(e.entitlement_id))
+    audit.sort(key=lambda a: a.at)
+    return ContactView(
+        contact_id=contact_id,
+        channels=contact.channels,
+        has_member=_platform_uid(contact) is not None,
+        reasons=reasons,
+        audit=audit,
+    )
 
 
 def plan_reconcile(

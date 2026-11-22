@@ -3,9 +3,15 @@ from datetime import timedelta
 import pytest
 
 from platform_api.entitlements import public as ent_api
-from platform_api.entitlements.models import SourceState
+from platform_api.entitlements.models import (
+    Campaign,
+    ChannelsPatch,
+    GrantPolicy,
+    LaunchConfig,
+    SourceState,
+)
 from platform_api.entitlements.reconcile import Guard
-from tests.fixtures.people import EMAIL, T0
+from tests.fixtures.people import CUT_OFF, EMAIL, T0
 
 
 def state(
@@ -274,3 +280,41 @@ def test_a_third_run_after_a_move_changes_nothing_and_sees_everything(ent):
     run(ent, [state("ed", "sub_e", email=other)], run_id="r2")
     plan, report = run(ent, [state("ed", "sub_e", email=other)], run_id="r3")
     assert (plan.actions, plan.unseen, report.unchanged) == ([], [], 1)
+
+
+def test_a_member_recognised_by_a_run_gets_the_grant_and_one_tier_event(ent):
+    policy = GrantPolicy(
+        grant="tier:paid",
+        months=6,
+        starts="at_claim",
+        fixed_until=None,
+        requires_live_source=["substack_stripe", "substack_roster"],
+        paid_since_before=CUT_OFF,
+        plan_intervals=["year"],
+    )
+    ent.store.put_launch_config(LaunchConfig(join_open=True))
+    ent.store.put_campaigns(
+        [
+            Campaign(
+                slug="founding",
+                audience="substack_paid",
+                opens_at=T0 - timedelta(days=1),
+                closes_at=T0 + timedelta(days=60),
+                is_default=True,
+                grant=policy,
+                copy={"headline": "h", "body": "b", "cta": "c"},
+                counts={},
+            )
+        ]
+    )
+    ent_api.upsert_contact(EMAIL["bo"], ChannelsPatch(platform={"member_uid": "u-bo"}))
+    ent.bus.published.clear()
+    # An annual reader recorded as a status: only the grant itself makes bo paid.
+    _, report = run(ent, [state("bo", "sub_b", grant="status:substack_paid")])
+    held = ent.store.entitlements_for_member("u-bo")
+    assert sorted(e.source for e in held) == ["grant", "substack_stripe"]
+    assert (report.grants_created, report.tier_changes) == (1, 1)
+    changed = [e for e in ent.bus.published if e.type.endswith("membership.tier.changed")]
+    assert [(e.data["member_uid"], e.data["from"], e.data["to"]) for e in changed] == [
+        ("u-bo", "free", "paid")
+    ]
