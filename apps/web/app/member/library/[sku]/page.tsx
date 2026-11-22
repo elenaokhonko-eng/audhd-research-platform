@@ -11,7 +11,8 @@ export default async function LibraryItem({ params }: { params: Promise<{ sku: s
   const result = await loadItem(
     sku,
     () => requireMember("library"),
-    async () => getPlatformApi().libraryItem(await sessionForRequest(), sku),
+    sessionForRequest,
+    (session) => getPlatformApi().libraryItem(session, sku),
   );
   if (result.kind === "not_found") notFound();
   if (result.kind === "message")

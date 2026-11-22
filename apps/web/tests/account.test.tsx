@@ -34,4 +34,24 @@ describe("DeleteAccount", () => {
     await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("That did not work. Please try again.");
   });
+  it.each([[401, "/join"], [409, "/welcome"]])("sends the browser on %i to %s", async (status, to) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status })));
+    const navigate = vi.fn();
+    const done = vi.fn();
+    render(<DeleteAccount navigate={navigate} onDone={done} />);
+    await userEvent.click(screen.getByRole("button", { name: "Delete my account" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
+    expect(navigate).toHaveBeenCalledWith(to);
+    expect(done).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  it("forgets the stored sign-in address on success", async () => {
+    localStorage.setItem("signin.email", "x@example.org");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const done = vi.fn(() => { expect(localStorage.getItem("signin.email")).toBeNull(); });
+    render(<DeleteAccount onDone={done} />);
+    await userEvent.click(screen.getByRole("button", { name: "Delete my account" }));
+    await userEvent.click(screen.getByRole("button", { name: "Yes, delete it" }));
+    expect(done).toHaveBeenCalledOnce();
+  });
 });

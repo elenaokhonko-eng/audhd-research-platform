@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakePlatformApi } from "@/lib/platform-api/fake";
 
 const fake = new FakePlatformApi();
@@ -8,7 +8,7 @@ vi.mock("@/lib/platform-api/client", async (original) => ({
   getPlatformApi: () => fake,
 }));
 import { POST as deleteAccount } from "@/app/api/account/delete/route";
-import { GET as promotions } from "@/app/api/promotions/route";
+import { GET as promotions, resetPromotionsMemo } from "@/app/api/promotions/route";
 import { POST as download } from "@/app/api/library/[sku]/download/route";
 import { POST as refreshAccess } from "@/app/api/refresh-access/route";
 import { GET as tier } from "@/app/api/tier/route";
@@ -22,6 +22,7 @@ beforeEach(async () => {
   process.env.SITE_ENV = "dev";
   await fake.resolveSession("fake-token:bo", null);
   await fake.acceptTerms("fake-session:bo", "terms-v1", "privacy-v1");
+  resetPromotionsMemo();
 });
 
 describe("POST /api/account/delete", () => {
@@ -31,6 +32,15 @@ describe("POST /api/account/delete", () => {
     expect(await res.json()).toEqual({ ok: true });
     expect(res.headers.get("set-cookie")).toMatch(/^session=;.*Max-Age=0/);
     await expect(fake.me("fake-session:bo")).rejects.toThrow();
+  });
+  it("answers 409 terms_required and 503 unavailable", async () => {
+    const headers = { origin: ORIGIN, cookie: "session=fake-session:bo" };
+    fake.failNext("terms_required");
+    const a = await deleteAccount(req("/api/account/delete", headers));
+    expect([a.status, await a.json()]).toEqual([409, { error: "terms_required" }]);
+    fake.failNext("unavailable");
+    const b = await deleteAccount(req("/api/account/delete", headers));
+    expect([b.status, await b.json()]).toEqual([503, { error: "unavailable" }]);
   });
   it("refuses another origin", async () =>
     expect((await deleteAccount(req("/api/account/delete", { origin: "https://evil.example", cookie: "session=fake-session:bo" }))).status).toBe(403));
@@ -97,6 +107,31 @@ describe("GET /api/promotions", () => {
     expect(await res.json()).toEqual([]);
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
     fake.setPromotion(null);
+  });
+});
+
+describe("GET /api/promotions memo", () => {
+  const offer = { id: "p", channel: "substack_offer", plan_interval: "year" as const, starts_at: "2026-11-26T00:00:00Z",
+    ends_at: "2026-11-30T23:00:00Z", url: "https://example.org/offer", display: { badge: "Offer", headline: "A headline", body: "A body" } };
+  afterEach(() => { vi.useRealTimers(); fake.setPromotion(null); });
+  it("asks the service once within 60 seconds and again after", async () => {
+    vi.useFakeTimers();
+    fake.setPromotion(offer);
+    const spy = vi.spyOn(fake, "activePromotions");
+    await promotions();
+    vi.advanceTimersByTime(59_000);
+    await promotions();
+    expect(spy).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(2_000);
+    await promotions();
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+  it("does not remember a failure", async () => {
+    fake.setPromotion(offer);
+    fake.failNext("unavailable");
+    expect(await (await promotions()).json()).toEqual([]);
+    expect(await (await promotions()).json()).toEqual([{ badge: "Offer", headline: "A headline" }]);
   });
 });
 

@@ -3,9 +3,16 @@
 import Link from "next/link";
 import { useState } from "react";
 
-async function defaultAccept(): Promise<void> {
-  const res = await fetch("/api/terms", { method: "POST" });
-  if (!res.ok) throw new Error("terms failed");
+type Shown = { terms_version: string; privacy_version: string };
+
+// A 409 means the required versions changed since the page was drawn.
+async function defaultAccept(shown: Shown): Promise<void> {
+  const res = await fetch("/api/terms", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(shown),
+  });
+  if (!res.ok) throw Object.assign(new Error("terms failed"), { status: res.status });
 }
 
 export function TermsStep({
@@ -14,7 +21,7 @@ export function TermsStep({
   reload = () => window.location.reload(),
 }: {
   versions: { terms: string; privacy: string };
-  accept?: () => Promise<void>;
+  accept?: (shown: Shown) => Promise<void>;
   reload?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -26,8 +33,9 @@ export function TermsStep({
     setBusy(true);
     setMessage("");
     try {
-      await accept();
-    } catch {
+      await accept({ terms_version: versions.terms, privacy_version: versions.privacy });
+    } catch (error) {
+      if ((error as { status?: number }).status === 409) return reload();
       setMessage("Something went wrong. Try again.");
       setBusy(false);
       return;

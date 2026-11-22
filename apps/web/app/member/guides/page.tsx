@@ -9,7 +9,8 @@ export default async function Page() {
   const result = await loadView(
     "guides",
     () => requireMember("guides"),
-    async () => getPlatformApi().libraryItems(await sessionForRequest()),
+    sessionForRequest,
+    (session) => getPlatformApi().libraryItems(session),
   );
   return (
     <main>

@@ -23,18 +23,43 @@ beforeEach(async () => {
 });
 
 describe("POST /api/terms", () => {
-  it("accepts the versions the service requires", async () => {
-    const res = await acceptTerms(req("/api/terms", { origin: ORIGIN, cookie: "session=fake-session:bo" }));
+  const ok = { origin: ORIGIN, cookie: "session=fake-session:bo", "content-type": "application/json" };
+  const current = { terms_version: "terms-v1", privacy_version: "privacy-v1" };
+  it("accepts the versions it is sent when they are current", async () => {
+    const res = await acceptTerms(req("/api/terms", ok, current));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect((await fake.me("fake-session:bo")).member.terms.accepted).toBe(true);
   });
+  it("answers 409 terms_required for stale versions and accepts nothing", async () => {
+    await fake.resolveSession("fake-token:ed", null);
+    const spy = vi.spyOn(fake, "acceptTerms");
+    const res = await acceptTerms(req("/api/terms", { ...ok, cookie: "session=fake-session:ed" }, { terms_version: "terms-v0", privacy_version: "privacy-v1" }));
+    expect([res.status, await res.json()]).toEqual([409, { error: "terms_required" }]);
+    expect(spy).toHaveBeenCalledWith("fake-session:ed", "terms-v0", "privacy-v1");
+    expect((await fake.me("fake-session:ed")).member.terms.accepted).toBe(false);
+    spy.mockRestore();
+  });
+  it("answers 400 validation_failed unless both versions are non-empty strings, and does not call the service", async () => {
+    const spy = vi.spyOn(fake, "acceptTerms");
+    for (const body of [undefined, {}, { terms_version: "terms-v1" }, { terms_version: "", privacy_version: "privacy-v1" }, { terms_version: 1, privacy_version: "p" }]) {
+      const res = await acceptTerms(req("/api/terms", ok, body));
+      expect([res.status, await res.json()]).toEqual([400, { error: "validation_failed" }]);
+    }
+    expect((await acceptTerms(rawReq("/api/terms", ok, "not json"))).status).toBe(400);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
   it("refuses another origin", async () =>
-    expect((await acceptTerms(req("/api/terms", { origin: "https://evil.example", cookie: "session=fake-session:bo" }))).status).toBe(403));
+    expect((await acceptTerms(req("/api/terms", { ...ok, origin: "https://evil.example" }, current))).status).toBe(403));
   it("refuses a visitor without a session", async () =>
-    expect((await acceptTerms(req("/api/terms", { origin: ORIGIN }))).status).toBe(401));
+    expect((await acceptTerms(req("/api/terms", { origin: ORIGIN }, current))).status).toBe(401));
   it("answers 401 when the service says unauthenticated", async () =>
-    expect((await acceptTerms(req("/api/terms", { origin: ORIGIN, cookie: "session=fake-session:nobody" }))).status).toBe(401));
+    expect((await acceptTerms(req("/api/terms", { ...ok, cookie: "session=fake-session:nobody" }, current))).status).toBe(401));
+  it("answers 503 on another failure", async () => {
+    fake.failNext("unavailable");
+    expect((await acceptTerms(req("/api/terms", ok, current))).status).toBe(503);
+  });
 });
 
 describe("POST /api/support", () => {

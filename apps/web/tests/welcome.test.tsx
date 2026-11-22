@@ -80,6 +80,28 @@ describe("TermsStep", () => {
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(accept).toHaveBeenCalledOnce();
+    expect(accept).toHaveBeenCalledWith({ terms_version: "terms-v1", privacy_version: "privacy-v1" });
+  });
+  it("posts the versions it shows as JSON", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TermsStep reload={() => {}} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
+    vi.unstubAllGlobals();
+    expect(fetchMock).toHaveBeenCalledWith("/api/terms", expect.objectContaining({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ terms_version: "terms-v1", privacy_version: "privacy-v1" }),
+    }));
+  });
+  it("reloads the page, without an error, when the versions have changed (409)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 409 })));
+    const reload = vi.fn();
+    render(<TermsStep reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
+    vi.unstubAllGlobals();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Something went wrong. Try again.")).not.toBeInTheDocument();
   });
   it("reloads after accepting", async () => {
     const reload = vi.fn();

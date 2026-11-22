@@ -14,13 +14,23 @@ export async function POST(request: Request): Promise<Response> {
   const session = readSessionCookie(request.headers.get("cookie"));
   if (!session) return json(401, { error: "unauthenticated" });
 
+  let body: unknown;
   try {
-    const api = getPlatformApi();
-    const { member } = await api.me(session);
-    await api.acceptTerms(session, member.terms.required.terms_version, member.terms.required.privacy_version);
+    body = await request.json();
+  } catch {
+    return json(400, { error: "validation_failed" });
+  }
+  const { terms_version: terms, privacy_version: privacy } = (body ?? {}) as Record<string, unknown>;
+  if (typeof terms !== "string" || terms === "" || typeof privacy !== "string" || privacy === "")
+    return json(400, { error: "validation_failed" });
+
+  try {
+    await getPlatformApi().acceptTerms(session, terms, privacy);
     return json(200, { ok: true });
   } catch (error) {
     if (error instanceof ApiError && error.code === "unauthenticated") return json(401, { error: "unauthenticated" });
+    // The versions the person saw are no longer the required ones: ask again with the new ones.
+    if (error instanceof ApiError && error.code === "validation_failed") return json(409, { error: "terms_required" });
     return json(503, { error: "unavailable" });
   }
 }

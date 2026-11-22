@@ -41,29 +41,42 @@ describe("refusalText", () => {
   });
 });
 
+const sess = async () => "s1";
+const redirectTo = (to: string) => expect.objectContaining({ digest: expect.stringContaining(to) });
+
 describe("loadView", () => {
   const redirected = new Error("NEXT_REDIRECT");
   it("sends a free member away before any library call", async () => {
     const list = vi.fn(async () => [card({})]);
-    await expect(loadView("research", async () => { throw redirected; }, list)).rejects.toBe(redirected);
+    await expect(loadView("research", async () => { throw redirected; }, sess, list)).rejects.toBe(redirected);
     expect(list).not.toHaveBeenCalled();
   });
-  it("calls the guard first, then filters", async () => {
+  it("calls the guard, then the session, then lists with that session and filters", async () => {
     const order: string[] = [];
-    const out = await loadView("guides", async () => { order.push("guard"); }, async () => { order.push("list"); return [card({ sku: "a" }), card({ sku: "b", kind: "guide" })]; });
-    expect(order).toEqual(["guard", "list"]);
+    const out = await loadView("guides", async () => { order.push("guard"); }, async () => { order.push("session"); return "s1"; },
+      async (s) => { order.push(`list:${s}`); return [card({ sku: "a" }), card({ sku: "b", kind: "guide" })]; });
+    expect(order).toEqual(["guard", "session", "list:s1"]);
     expect(out).toEqual({ kind: "items", items: [expect.objectContaining({ sku: "b" })] });
   });
   it("says so when the view is empty", async () => {
-    expect(await loadView("research", async () => {}, async () => [])).toEqual({ kind: "message", text: "Nothing here yet." });
+    expect(await loadView("research", async () => {}, sess, async () => [])).toEqual({ kind: "message", text: "Nothing here yet." });
   });
   it("says the library opens soon when the service has none", async () => {
-    const out = await loadView("all", async () => {}, async () => { throw new ApiError(404, "not_found", "x"); });
+    const out = await loadView("all", async () => {}, sess, async () => { throw new ApiError(404, "not_found", "x"); });
     expect(out).toEqual({ kind: "message", text: "The library opens soon." });
   });
   it.each([[429, "rate_limited"], [503, "unavailable"]] as const)("keeps the page working on %i", async (status, code) => {
-    const out = await loadView("all", async () => {}, async () => { throw new ApiError(status, code, "x"); });
+    const out = await loadView("all", async () => {}, sess, async () => { throw new ApiError(status, code, "x"); });
     expect(out).toEqual({ kind: "message", text: "The library cannot be loaded right now. Please try again in a minute." });
+  });
+  it("sends an unauthenticated answer to /join and terms_required to /welcome", async () => {
+    await expect(loadView("all", async () => {}, sess, async () => { throw new ApiError(401, "unauthenticated", "x"); })).rejects.toEqual(redirectTo("/join"));
+    await expect(loadView("all", async () => {}, sess, async () => { throw new ApiError(409, "terms_required", "x"); })).rejects.toEqual(redirectTo("/welcome"));
+  });
+  it("does not swallow a redirect thrown by the session helper", async () => {
+    const list = vi.fn(async () => [card({})]);
+    await expect(loadView("all", async () => {}, async () => { throw redirected; }, list)).rejects.toBe(redirected);
+    expect(list).not.toHaveBeenCalled();
   });
 });
 
@@ -71,13 +84,21 @@ describe("loadItem", () => {
   it("answers not found for a malformed sku without guard or service", async () => {
     const guard = vi.fn(async () => {});
     const get = vi.fn();
-    expect(await loadItem("Sample..Map", guard, get)).toEqual({ kind: "not_found" });
+    expect(await loadItem("Sample..Map", guard, sess, get)).toEqual({ kind: "not_found" });
     expect(get).not.toHaveBeenCalled();
   });
   it("answers not found for an unknown sku and a message on failure", async () => {
-    expect(await loadItem("nope-nope", async () => {}, async () => { throw new ApiError(404, "not_found", "x"); })).toEqual({ kind: "not_found" });
-    expect(await loadItem("nope-nope", async () => {}, async () => { throw new ApiError(503, "unavailable", "x"); })).toEqual({
+    expect(await loadItem("nope-nope", async () => {}, sess, async () => { throw new ApiError(404, "not_found", "x"); })).toEqual({ kind: "not_found" });
+    expect(await loadItem("nope-nope", async () => {}, sess, async () => { throw new ApiError(503, "unavailable", "x"); })).toEqual({
       kind: "message", text: "The library cannot be loaded right now. Please try again in a minute." });
+  });
+  it("passes the session on, redirects on 401 and 409, and does not swallow a session redirect", async () => {
+    const get = vi.fn(async (_s: string) => { throw new ApiError(401, "unauthenticated", "x"); });
+    await expect(loadItem("nope-nope", async () => {}, sess, get)).rejects.toEqual(redirectTo("/join"));
+    expect(get).toHaveBeenCalledWith("s1");
+    await expect(loadItem("nope-nope", async () => {}, sess, async () => { throw new ApiError(409, "terms_required", "x"); })).rejects.toEqual(redirectTo("/welcome"));
+    const redirected = new Error("NEXT_REDIRECT");
+    await expect(loadItem("nope-nope", async () => {}, async () => { throw redirected; }, vi.fn())).rejects.toBe(redirected);
   });
 });
 

@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { ApiError } from "@/lib/platform-api/errors";
 import type { ItemCard, ItemDetail, ItemKind } from "@/lib/platform-api/types";
 
@@ -41,18 +42,34 @@ export function refusalText(status: number, reason: string | null): { text: stri
 
 export type ViewResult = { kind: "items"; items: ItemCard[] } | { kind: "message"; text: string };
 
-// The guard runs first and may redirect (it throws); only then is the catalogue asked for.
+// Where an answer from the service sends the browser; null when it is not one of those.
+function redirectFor(error: unknown): string | null {
+  if (error instanceof ApiError && error.code === "unauthenticated") return "/join";
+  if (error instanceof ApiError && error.code === "terms_required") return "/welcome";
+  return null;
+}
+
+// The guard runs first, then the session; both may redirect (they throw), so neither sits inside the try.
+// redirect() is also called outside the try.
 export async function loadView(
   view: "all" | "research" | "guides",
   guard: () => Promise<unknown>,
-  list: () => Promise<ItemCard[]>,
+  sessionOf: () => Promise<string>,
+  list: (session: string) => Promise<ItemCard[]>,
 ): Promise<ViewResult> {
   await guard();
-  let items: ItemCard[];
+  const session = await sessionOf();
+  let items: ItemCard[] | null = null;
+  let failure: unknown = null;
   try {
-    items = await list();
+    items = await list(session);
   } catch (error) {
-    if (error instanceof ApiError && error.code === "not_found") return { kind: "message", text: "The library opens soon." };
+    failure = error;
+  }
+  if (items === null) {
+    const to = redirectFor(failure);
+    if (to) redirect(to);
+    if (failure instanceof ApiError && failure.code === "not_found") return { kind: "message", text: "The library opens soon." };
     return { kind: "message", text: CANNOT_LOAD };
   }
   const shown = viewOf(items, view);
@@ -64,14 +81,22 @@ export type ItemResult = { kind: "item"; detail: ItemDetail } | { kind: "not_fou
 export async function loadItem(
   sku: string,
   guard: () => Promise<unknown>,
-  get: () => Promise<ItemDetail>,
+  sessionOf: () => Promise<string>,
+  get: (session: string) => Promise<ItemDetail>,
 ): Promise<ItemResult> {
   if (!SKU_PATTERN.test(sku)) return { kind: "not_found" };
   await guard();
+  const session = await sessionOf();
+  let detail: ItemDetail | null = null;
+  let failure: unknown = null;
   try {
-    return { kind: "item", detail: await get() };
+    detail = await get(session);
   } catch (error) {
-    if (error instanceof ApiError && error.code === "not_found") return { kind: "not_found" };
-    return { kind: "message", text: CANNOT_LOAD };
+    failure = error;
   }
+  if (detail) return { kind: "item", detail };
+  const to = redirectFor(failure);
+  if (to) redirect(to);
+  if (failure instanceof ApiError && failure.code === "not_found") return { kind: "not_found" };
+  return { kind: "message", text: CANNOT_LOAD };
 }
