@@ -114,7 +114,7 @@ read -rs -p "Cloudflare API token: " TF_VAR_cloudflare_api_token; echo; export T
 terraform -chdir="infra/terraform/envs/$ENV" apply
 ```
 
-The plan should show one update in place, the scheduler job `stripe-reconcile`. To stop the schedule, set `reconcile_schedule_enabled = false` the same way (launch.md, section 4).
+The plan should show one update in place, the scheduler job `stripe-reconcile`. To stop the schedule, set `reconcile_schedule_enabled = false` the same way (launch.md, section 4); that also stops `platform-api` starting the reconcile ("Check again").
 
 ## Store a new Stripe key
 
@@ -134,7 +134,7 @@ gcloud secrets versions disable <old version number> --secret stripe-read-key --
 
 ## Delete a member's account on request
 
-The command arrives with the Core lane's task card C8 and is not available yet. When it is merged: a member asks for deletion from their Account page; you list the waiting requests and delete each one. It removes the member record, the contact record and the entitlements, and writes one audit entry under the coded id. **It cannot be undone**: there is no copy to restore from, so check the uid against `member deletions` before you press Enter.
+The command arrives with the Core lane's task card C8 and is not available yet. When it is merged: a member asks for deletion from their Account page; you list the waiting requests and delete each one. It removes the member record, the contact record and the entitlements, and writes one audit entry under the coded id. **It cannot be undone**: the member is gone from the service at once, and the database's own recovery copies (prod keeps point-in-time recovery) expire after 7 days and are no way back. Check the uid against `member deletions` before you press Enter.
 
 ```bash
 platform-cli member deletions

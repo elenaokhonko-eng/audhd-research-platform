@@ -4,7 +4,7 @@ Everything below runs in **Google Cloud Shell**, from the repository root (`~/au
 
 Terms used below:
 
-- **The reconcile** is the Cloud Run job `stripe-reconcile`. It reads every subscription in Stripe with a **restricted key** (a Stripe key that can only read the three kinds of object it is given) and records who pays through Substack. It runs on a schedule (Cloud Scheduler), created **paused**.
+- **The reconcile** is the Cloud Run job `stripe-reconcile`. It reads every subscription in Stripe with a **restricted key** (a Stripe key that can only read the three kinds of object it is given) and records who pays through Substack. It runs on a schedule (Cloud Scheduler), created **paused**. One setting, `reconcile_schedule_enabled`, switches on both the schedule and `platform-api`'s right to start a run (a member's "Check again" and the refresh at sign-in); until you set it, "Check again" does nothing.
 - **The roster import** is the job `roster-import`. It reads the newest subscriber export you placed in the roster inbox bucket and records paying readers that Stripe does not know about (gift, complimentary, billed by Apple).
 - **A dry run** is a run of a job that works everything out, writes its own run record with the counts, and changes nothing else. Only your account may start a job with a dry-run setting.
 - **`platform-cli`** is the platform's command line. It calls the owner's routes of `platform-api` with your own identity token. Set it up once per Cloud Shell session as in [operations.md, "Before any command"](operations.md#before-any-command).
@@ -47,6 +47,17 @@ owner_account_ids = ["<the number printed>"]
 EOF
 ```
 
+Once dev's Google sign-in client is stored ([stage-1-sign-in.md, section 5](stage-1-sign-in.md#5-create-the-google-sign-in-client)), also switch the website's "Sign in with Google" button on. Check first that the setting is not in the file yet (it prints nothing), then append it, or edit its line if the `grep` printed it:
+
+```bash
+grep -nE '^google_sign_in_enabled' infra/terraform/envs/dev/terraform.tfvars
+cat >> infra/terraform/envs/dev/terraform.tfvars <<'EOF'
+google_sign_in_enabled = true
+EOF
+```
+
+If the client is not stored yet, leave the setting out; the button stays hidden.
+
 `stripe_substack_application` (Substack's application id in Stripe) stays empty in dev: the Stripe sandbox cannot make a subscription "created by Substack", so dev treats a sandbox subscription with the metadata `test_channel=substack` as one. Gate 2, step 3 finds the real id, for prod.
 
 **c. Apply:**
@@ -62,7 +73,7 @@ terraform -chdir=infra/terraform/envs/dev apply
 What the plan should show, all in the dev project:
 
 - **Create:** the Cloud Scheduler API switched on; the service accounts `job-stripe` (the reconcile), `job-substack` (the roster import) and `scheduler`; the custom roles `platformJobRunner` (start a job and follow its runs, nothing else) and `platformSignInManager` (sessions and accounts of sign-in); the secret `stripe-read-key` **without a version** (the key itself is added by you in Gate 2, never by Terraform); the jobs `stripe-reconcile` and `roster-import`, with Google's placeholder image; the scheduler job `stripe-reconcile`, **paused**; the Firestore indexes (on `sync_runs`, `downloads`, `entitlements`, `audit_log`) and the time-to-live fields `expires_at` (on `downloads`, `support_requests`, `audit_log`, `rate_limits`); the log-based metrics `platform-alert-...` and the alert policies `Platform alert: ...`; and IAM bindings: `job-stripe` alone on the secret, who may start each job, your account on the two jobs (start, and start with changed settings), your account as an invoker of `platform-api`, `platform-api`'s sign-in role, the two jobs' access to Firestore, the contact key and the events topic, `job-substack`'s read access to the roster inbox, and the deploy identity acting as `job-stripe` and `job-substack` (so the deploy workflow can give the jobs their image).
-- **Update in place:** `platform-api` (new settings: `PLATFORM_OWNER_ACCOUNTS`, `PLATFORM_SESSION_TTL_DAYS`, `PLATFORM_LIBRARY_STAGING_BUCKET`, `PLATFORM_RECONCILE_JOB`) and `web-dev` (`IDENTITY_GOOGLE_ENABLED`).
+- **Update in place:** `platform-api` (new settings: `PLATFORM_OWNER_ACCOUNTS`, `PLATFORM_SESSION_TTL_DAYS`, `PLATFORM_LIBRARY_STAGING_BUCKET`, and `PLATFORM_RECONCILE_JOB`, which stays **empty** while `reconcile_schedule_enabled` is false, so `platform-api` starts no reconcile yet) and `web-dev` (`IDENTITY_GOOGLE_ENABLED` changing to `"1"` if you set `google_sign_in_enabled = true` in 1 b).
 - **Destroy:** nothing. If the plan destroys anything, answer `no` and report it.
 
 **d. Give the jobs the real image.** The deploy workflow puts the platform's image on `platform-api`, `platform-hooks` and the three jobs; it skipped the two new jobs while they did not exist. Run it once by hand:
@@ -106,6 +117,7 @@ The jobs work only once the Commerce lane's job code is merged on `integration/s
 | A Firestore index or field fails with `409`, `Aborted` or "too much contention" | Firestore builds indexes and time-to-live policies one at a time per database, and Terraform asks for several at once. Run the same `apply` again; it continues where it stopped. |
 | An alert policy fails with "metric ... not found" or "Cannot find metric" | A new log-based metric takes a minute or two to become visible to Monitoring. Wait two minutes and run the same `apply` again. |
 | `Error acquiring the state lock` | As in the foundations runbook, "If it stops". |
+| The scheduler job `stripe-reconcile` fails on the first apply, right after the plan switched on `cloudscheduler.googleapis.com` | A newly switched-on API takes a minute to answer. Wait a minute and run the same `apply` again. |
 | The workflow's log says `The job ... does not exist ... yet` | The apply did not finish. Apply again, then rerun the workflow. |
 
 ## 2. Gate 2 (dev)
@@ -132,6 +144,15 @@ bash ops/scripts/41-check-stripe-key-access.sh audhd-neurobiology-dev
 | `Restricted Stripe key (starts ...; typed without echo):` | Paste the sandbox key and press Enter. Nothing is shown. The script refuses a full secret key and a live key, and stores nothing then. |
 
 It worked when the first script prints `STORED a new version of stripe-read-key in audhd-neurobiology-dev` and the key's last four characters (compare them with the Dashboard), and the second prints `ONLY job-stripe IS GRANTED ON THE SECRET`. The second also lists, as information, how many members hold project-wide roles that can read every secret (Owner, Secret Manager Admin): that is you.
+
+Then check that `platform-api`'s own identity is refused the key. This checks the swarm build plan's exit condition I3 (the member service cannot read the Stripe key):
+
+```bash
+PROJECT=audhd-neurobiology-dev
+gcloud policy-intelligence troubleshoot-policy iam "//secretmanager.googleapis.com/projects/$PROJECT/secrets/stripe-read-key" --principal-email="platform-api@${PROJECT}.iam.gserviceaccount.com" --permission=secretmanager.versions.access
+```
+
+It worked when the overall answer is a denial: `access: NOT_GRANTED` (newer `gcloud` versions print `overallAccessState: CANNOT_ACCESS`), and no binding in the list shows `GRANTED` for that identity. If it says `GRANTED`, stop and report it: a binding outside Terraform gives the member service the key.
 
 **Who can reach the key, plainly.** The secret lets one identity read it: `job-stripe`, the reconcile job's own account. `platform-api` cannot read it. But code that runs **as** `job-stripe` can, and two other identities can choose what runs as `job-stripe`:
 
@@ -185,11 +206,21 @@ What the test entry proves and what it does not:
 
 To see that every metric exists: `gcloud logging metrics list --project audhd-neurobiology-dev --format='value(name)'` lists the five `platform-alert-...` names.
 
+**6. Before Gate 3: the full journey in dev.** Once the dry run of step 4 looks right, do Gate 3's steps 7 to 11 in dev, with `audhd-neurobiology-dev` and `envs/dev` wherever they say prod, and `platform-cli` pointed at dev: the reconcile for real (step 7), the roster import (step 8), the campaigns and promotions (step 9), the library (step 10), the terms versions and `platform-cli launch set --join-open true` (step 11). For step 8 use an **invented** export, in the same columns as Substack's, with invented people at `example.org`: never put the real export into dev, which holds invented people only. Then check the journey on `https://dev.audhdneurobiology.org` with a paid and a free test address, as step 11 describes.
+
+When the real dev run is good, switch dev's schedule on, and with it `platform-api`'s right to start the reconcile ("Check again" and the refresh at sign-in do nothing until then). Set `reconcile_schedule_enabled = true` in `infra/terraform/envs/dev/terraform.tfvars` and apply:
+
+```bash
+terraform -chdir=infra/terraform/envs/dev apply
+```
+
+The plan should show two updates in place: the scheduler job (`paused` from true to false) and `platform-api` (`PLATFORM_RECONCILE_JOB` from empty to the job's name). It worked when `gcloud scheduler jobs describe stripe-reconcile --location asia-southeast1 --project audhd-neurobiology-dev --format='value(state)'` prints `ENABLED`.
+
 **If it stops:**
 
 | Message | What to do |
 | --- | --- |
-| `40-stripe-key.sh`: a refusal | Read it: it says why nothing was stored (a full secret key, a live key, a cut-off paste). Re-run with the right key. |
+| `40-stripe-key.sh`: a refusal | Read it: it says why nothing was stored (a full secret key, a live key, `--live` for a project that is not prod, a cut-off paste). Re-run with the right key. |
 | `41-...`: `ACCESS IS WIDER THAN job-stripe ALONE` | Someone added a binding on the secret by hand. Do not remove it by hand: report it; the fix is in Terraform. |
 | The dry run fails with `PERMISSION_DENIED` on the overrides | Either `gcloud` is using an account that is not the project's owner (check with `gcloud config get-value account`; switch with `gcloud config set account <your account>`), or the apply of section 1 did not finish (apply again). |
 | The dry run fails with "unknown job" | The Commerce lane's job code is not in the image yet (section 1 d). |
@@ -197,16 +228,26 @@ To see that every metric exists: `gcloud logging metrics list --project audhd-ne
 
 ## 3. Gate 3 (prod)
 
-Do the steps in this order. Before you start, the whole member journey must already have been tested **in dev**: the Quality lane's journeys and your own two addresses (one paid, one free). In prod, a new address cannot sign in while the join layer is closed, so prod gets only the short check of step 11.
+Do the steps in this order. Before you start, the whole member journey must already have been tested **in dev**: the Quality lane's journeys and Gate 2 step 6, with your own two addresses (one paid, one free). In prod, a new address cannot sign in while the join layer is closed, so prod gets only the short check of step 11.
 
-**1. Apply Terraform to prod.** In the same shell setup as section 1 a (the token and `TF_VAR_owner_member`), with prod's state:
+**Which code you apply to prod.** Before each prod apply (steps 1 and 4, and the schedule apply of step 12) check out the code that runs in prod, not `integration/stage-1`: prod's Terraform must describe the version deployed there, and `integration/stage-1` may already hold settings that version does not know. Before the first production deploy (steps 1 and 4) that is the commit promoted to `main`; from step 5 on, the released tag:
+
+```bash
+git fetch origin --tags
+git checkout origin/main
+git checkout v<version>
+```
+
+Run the second line for steps 1 and 4, the third for step 12 and every later prod apply. Either leaves you on no branch ("detached HEAD"); that is expected. The settings file `terraform.tfvars` is ignored by git and stays as it is. Go back with `git checkout integration/stage-1` before you work on dev again.
+
+**1. Apply Terraform to prod.** In the same shell setup as section 1 a (the token and `TF_VAR_owner_member`), after `git checkout origin/main` (above), with prod's state:
 
 ```bash
 terraform -chdir=infra/terraform/envs/prod init -input=false -backend-config="bucket=audhd-neurobiology-prod-tfstate"
 terraform -chdir=infra/terraform/envs/prod apply
 ```
 
-The plan should show what section 1 c lists, in the prod project, with two differences: the platform's services are updated in place in prod (`platform-api` and `web-prod`), and the jobs are created with delete protection. Nothing is destroyed. The schedule is created paused. If it stops with a Firestore `409` or "metric not found", apply again, as in section 1. Then give the jobs the real image: they get it with the production deploy of step 5.
+The plan should show what section 1 c lists, in the prod project, with two differences: the platform's services are updated in place in prod (`platform-api` and `web-prod`), and the jobs are created with delete protection. Nothing is destroyed. The schedule is created paused. If it stops with a Firestore `409` or "metric not found", apply again, as in section 1. `platform-api`'s `PLATFORM_RECONCILE_JOB` stays empty until step 12. Then give the jobs the real image: they get it with the production deploy of step 5.
 
 **2. Store the live restricted key.** In the Stripe Dashboard in **live** mode, create a restricted key exactly as in Gate 2 step 1 (Read on Customers, Subscriptions, Invoices; None elsewhere). Then:
 
@@ -227,10 +268,10 @@ bash ops/scripts/41-check-stripe-key-access.sh audhd-neurobiology-prod
 
 It worked when it prints `ONLY job-stripe IS GRANTED ON THE SECRET`. "Who can reach the key" in Gate 2 step 2 holds for prod too.
 
-**4. Set the private values and apply.** These are your commercial decisions; they live only in prod's git-ignored settings file. Check which are there already:
+**4. Set the private values and apply.** These are your commercial decisions; they live only in prod's git-ignored settings file. Still on `origin/main` (above), check which are there already:
 
 ```bash
-grep -nE '^(stripe_substack_application|substack_grant_month|substack_grant_year|reconcile_schedule|reconcile_schedule_enabled|owner_account_ids)' infra/terraform/envs/prod/terraform.tfvars
+grep -nE '^(stripe_substack_application|substack_grant_month|substack_grant_year|reconcile_schedule|reconcile_schedule_enabled|owner_account_ids|google_sign_in_enabled)' infra/terraform/envs/prod/terraform.tfvars
 ```
 
 Add the missing ones, or edit their lines (`nano infra/terraform/envs/prod/terraform.tfvars`):
@@ -241,7 +282,10 @@ substack_grant_month        = "<tier:paid or status:substack_paid>"
 substack_grant_year         = "<tier:paid or status:substack_paid>"
 reconcile_schedule          = "<cron, UTC, at least 10 minutes apart; */30 * * * * by default>"
 reconcile_schedule_enabled  = false
+google_sign_in_enabled      = true
 ```
+
+Set `google_sign_in_enabled = true` only once prod's Google sign-in client is stored ([stage-1-sign-in.md, section 5](stage-1-sign-in.md#5-create-the-google-sign-in-client)); until then leave it out, and the "Sign in with Google" button stays hidden.
 
 `tier:paid` records a paying Substack reader on that plan as a paid member of the platform; `status:substack_paid` records only that they pay, which unlocks nothing by itself and satisfies a campaign's grant policy. Then:
 
@@ -249,7 +293,7 @@ reconcile_schedule_enabled  = false
 terraform -chdir=infra/terraform/envs/prod apply
 ```
 
-The plan should show only the two jobs updated in place (their settings), and the scheduler job, if you changed the schedule. Nothing is created or destroyed.
+The plan should show only the two jobs updated in place (their settings), the scheduler job if you changed the schedule, and `web-prod` with `IDENTITY_GOOGLE_ENABLED` changing to `"1"` if you set `google_sign_in_enabled = true`. Nothing is created or destroyed.
 
 **5. Tag and approve the production deploy.** A tag starting with `v` on the commit of `main` you want deploys both the website and the platform, after your approval:
 
@@ -349,13 +393,13 @@ platform-cli launch set --library-open true
 platform-cli launch set --promotions-open true
 ```
 
-Then set `reconcile_schedule_enabled = true` in `infra/terraform/envs/prod/terraform.tfvars` and apply once more:
+Then switch on the schedule and, with the same setting, `platform-api`'s right to start the reconcile: until now a member's "Check again" and the refresh at sign-in did nothing. Check out the released tag (`git fetch origin --tags && git checkout v<version>`), set `reconcile_schedule_enabled = true` in `infra/terraform/envs/prod/terraform.tfvars` and apply once more:
 
 ```bash
 terraform -chdir=infra/terraform/envs/prod apply
 ```
 
-The plan should show one update in place, the scheduler job (`paused` from true to false). It worked when `gcloud scheduler jobs describe stripe-reconcile --location asia-southeast1 --project audhd-neurobiology-prod --format='value(state)'` prints `ENABLED`, and after one period `platform-cli runs show --kind stripe_reconcile` shows a run with `requested_by` schedule.
+The plan should show two updates in place: the scheduler job (`paused` from true to false) and `platform-api` (`PLATFORM_RECONCILE_JOB` from empty to the job's name). It worked when `gcloud scheduler jobs describe stripe-reconcile --location asia-southeast1 --project audhd-neurobiology-prod --format='value(state)'` prints `ENABLED`, and after one period `platform-cli runs show --kind stripe_reconcile` shows a run with `requested_by` schedule.
 
 ## 4. Closing a layer, stopping the schedule, going back
 
@@ -373,7 +417,7 @@ platform-cli launch set --promotions-open false
 | `--library-open false` | The library: its pages and its downloads, for every member. |
 | `--promotions-open false` | Every promotion, everywhere: the upgrade page shows no offer. |
 
-**Stopping the schedule.** Set `reconcile_schedule_enabled = false` in the root's `terraform.tfvars` and apply. Pausing it with `gcloud scheduler jobs pause` also works for a moment, but the next apply switches it on again.
+**Stopping the schedule.** Set `reconcile_schedule_enabled = false` in the root's `terraform.tfvars` and apply (for prod, from the released tag, as in Gate 3). This also stops `platform-api` starting runs: "Check again" does nothing until you switch it on again. Pausing it with `gcloud scheduler jobs pause` also works for a moment, but the next apply switches it on again.
 
 **Going back to the previous version.** Re-run the deploy workflows of the previous tag; each re-run needs your approval again:
 
@@ -384,6 +428,13 @@ gh run rerun <run id>
 ```
 
 GitHub re-runs a run only within 30 days. For an older version, tag its commit again under a new version (`git tag -a v<new version> v<previous version>^{commit} -m "Back to v<previous version>"`, then push the tag) and approve as in Gate 3 step 5.
+
+A tag from before the deploy workflow learned the two jobs does not update `stripe-reconcile` and `roster-import`: going back to it leaves them on the newer image. Put the older image on them yourself. `<registry>` is the `REGISTRY` variable of the GitHub environment `production` (`gh variable list --env production`) and `<sha>` the tag's commit (`git rev-list -n 1 v<previous version>`):
+
+```bash
+gcloud run jobs update stripe-reconcile --image <registry>/platform-api:<sha> --region asia-southeast1 --project audhd-neurobiology-prod
+gcloud run jobs update roster-import --image <registry>/platform-api:<sha> --region asia-southeast1 --project audhd-neurobiology-prod
+```
 
 A deploy that failed halfway leaves the services and the jobs on different images. Running the workflow again for the same tag (`gh run rerun <run id>`) puts the same image on all of them.
 
