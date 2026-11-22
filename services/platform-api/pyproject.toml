@@ -20,7 +20,11 @@ dependencies = [
     "google-cloud-secret-manager",
     "pyyaml",
     "httpx",
+    "substack-desk",
 ]
+
+[tool.uv.sources]
+substack-desk = { path = "../../packages/substack-desk", editable = true }
 
 [project.scripts]
 platform-cli = "platform_api.cli:main"

@@ -68,7 +68,7 @@ Firestore permissions apply to a whole database, not to single collections. So e
 | `job-index` | Indexing | The library bucket (read); the embedding model; the search snapshot bucket; Firestore | Stripe and Substack credentials |
 | `job-reporting` | Revenue export | Firestore (read); the read-only Stripe key; BigQuery `ops_commerce` | Substack credentials; buckets |
 | `pubsub-push` | Event delivery | `platform-api`'s internal endpoints | Everything else |
-| `github-deployer` (one per project) | CI | Push images; update Cloud Run images. The prod deployer can be assumed **only** by a workflow in the protected `production` environment on a version tag | Data, secrets, IAM |
+| `github-deployer` (one per project) | CI | Push images; update Cloud Run images. The prod deployer can be assumed **only** by a workflow in the protected `production` environment on a version tag | Data, secrets and IAM directly. It can put a new image on a service or job, and that image runs with the service's or job's own identity; so what `job-stripe` can read is as safe as the deploy path (the branch and tag rules, the owner's approval for production, and review of every change) |
 | `model-gateway` (Stage 2) | Gateway | Models; its spend table | Member data |
 | `agents-<team>` (Stage 2 on), one per team | Agent flows | The gateway; that team's `platform-api` endpoints | Any data store; any executor permission |
 | Executor jobs (Stage 2): `job-publish`, `job-social`, `job-store` | Carry out approved proposals | The one outside system each acts on, and Firestore | Creating or approving proposals is not in their code path; the hash check stops a tampered one |
@@ -83,7 +83,7 @@ Decision: [ADR 0015](../adr/0015-one-identity-per-service-agents-propose-executo
 | Contact key (derives `contact_id`) | Cloud KMS, as a MAC key: the key never leaves KMS and is not in Terraform state | `platform-api`, `job-stripe`, `job-substack` | Terraform creates the key ring; KMS generates the key | By key version; each id records its version; a re-key run exists |
 | Research key (Stage 3) | Cloud KMS, MAC key | `research-api` only | As above | As above |
 | Sessions | Identity Platform | `platform-api` | Managed by Google | Automatic |
-| Stripe restricted key: read-only | Secret Manager | `job-stripe`, `job-reporting`, `platform-api` | Owner, from her terminal | Yearly, or on suspicion |
+| Stripe restricted key: read-only | Secret Manager | `job-stripe` only in Stage 1 (`platform-api` never reads it: it starts the reconcile job instead; `job-reporting` gets its own grant when it is built) | Owner, from her terminal | Yearly, or on suspicion |
 | Stripe restricted key: create Checkout | Secret Manager | `platform-api` | Owner | Yearly |
 | Stripe webhook signing secret | Secret Manager | `platform-hooks` | Owner (script) | When the endpoint changes |
 | Payhip API key and webhook path token | Secret Manager | `platform-hooks`, `platform-api` | Owner | Yearly |

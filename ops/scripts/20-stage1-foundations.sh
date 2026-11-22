@@ -292,7 +292,7 @@ the platform-api image (S1.0 Task 6) have been merged; the platform-api CI deplo
 that task too. Continuing with step 7.
 EOF
 else
-  docker build -t "platform-api:${TAG}" "$ROOT/services/platform-api"
+  docker build -f "$ROOT/services/platform-api/Dockerfile" -t "platform-api:${TAG}" "$ROOT"
   deploy_platform() { # deploy_platform project registry
     local image="$2/platform-api:${TAG}"
     docker tag "platform-api:${TAG}" "$image"

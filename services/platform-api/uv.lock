@@ -835,6 +835,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "stripe" },
+    { name = "substack-desk" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -864,6 +865,7 @@ requires-dist = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "stripe" },
+    { name = "substack-desk", editable = "../../packages/substack-desk" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 
@@ -1145,6 +1147,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a8/ec/09fcf4d5a21aa23974470ab7a0f58e1011dec23effce4b6eaf3b103be1b3/stripe-17.1.0.tar.gz", hash = "sha256:767b8e0f350b2b00fae7f8fbe7e28d4c215aac23529c833f0e77ec20c5f3bb48", size = 1670474, upload-time = "2026-11-19T03:49:33.134Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7d/96/ee86b1748e0ff130474ac042cbeb683ea15ef210948a86bdbd5e73dbf8df/stripe-17.1.0-py3-none-any.whl", hash = "sha256:c8089bacd9f7d95b62e3f4c0fc6cb5dc719eb09b9d09c6ff330800d36bf8b6eb", size = 2690745, upload-time = "2026-11-19T03:49:30.546Z" },
+]
+
+[[package]]
+name = "substack-desk"
+version = "0.1.0"
+source = { editable = "../../packages/substack-desk" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "ruff" },
 ]
 
 [[package]]
