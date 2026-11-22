@@ -102,6 +102,7 @@ One `content_item` per thing a reader can find: a library item, a site page, a S
 | --- | --- | --- |
 | `inbound_events/{provider:event_id}` | M14 | One document per webhook event; created with "create if absent" so a repeat is detected and skipped |
 | `inbox/{event_id}` | shared | The same guard for events consumed from the bus |
+| `rate_limits/{key}` | shared | Counters for per-member limits (support requests, "Check again"): a window start and a count. The key is a member uid and an action, never an address |
 | `audit_log/{auto}` | shared | Who changed what, when, why. Append-only. Admin reads of a contact are logged here too |
 | `campaigns/{slug}` | M2 | An invitation: audience, window, wording, optional grant policy, counts. Replaces `invite_waves`. The slug is the id |
 | `promotions/{promotion_id}` | M14 | A time-boxed offer: channel, audience, window, display text, counts ([03 §5a](03-commerce-and-revenue.md)) |
