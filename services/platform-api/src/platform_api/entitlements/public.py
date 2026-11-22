@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime
 from typing import Literal
 
@@ -16,6 +17,7 @@ from platform_api.entitlements.models import (
 )
 from platform_api.entitlements.runtime import get_runtime
 from platform_api.shared import clock
+from platform_api.shared.events import new_event
 
 __all__ = [
     "Access",
@@ -23,6 +25,9 @@ __all__ = [
     "Reason",
     "access_for",
     "can_open",
+    "claim_for_member",
+    "grant",
+    "revoke",
     "AuditEntry",
     "ChannelsPatch",
     "Contact",
@@ -90,3 +95,142 @@ def can_open(
     if item_access is None:
         raise LookupError("the access of this item is not known")
     return decision_for(_held_by(uid), item_access, sku, now)
+
+
+def _platform_uid(contact: Contact) -> str | None:
+    uid = contact.channels.get("platform", {}).get("member_uid")
+    return uid if isinstance(uid, str) else None
+
+
+def claim_for_member(uid: str, contact_id: str) -> list[str]:
+    """Attach what is waiting under a contact to the member who proved they own it."""
+    store = get_runtime().store
+    contact = store.get_contact(contact_id)
+    if contact is None:
+        return []
+    owner = _platform_uid(contact)
+    if owner is not None and owner != uid:
+        return []
+    now = clock.utcnow()
+    waiting = [e for e in store.entitlements_for_contacts([contact_id]) if e.member_uid is None]
+    claimed = [
+        e.model_copy(update={"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"})
+        for e in waiting
+    ]
+    audit = [
+        AuditEntry(
+            at=now,
+            actor=f"member:{uid}",
+            action="entitlement.claimed",
+            subject=e.entitlement_id,
+            reason=None,
+            evidence={"contact_id": contact_id},
+        )
+        for e in claimed
+    ]
+    if owner is None:
+        platform = {**contact.channels.get("platform", {}), "member_uid": uid}
+        platform.setdefault("registered_at", now.isoformat())
+        store.put_contact(
+            contact.model_copy(
+                update={"channels": {**contact.channels, "platform": platform}, "updated_at": now}
+            )
+        )
+    if claimed:
+        store.write(contact_id, claimed, audit)
+    return [e.entitlement_id for e in claimed]
+
+
+def grant(
+    contact_id: str,
+    grant: str,
+    valid_until: datetime | None,
+    reason: str,
+    actor: str,
+    now: datetime,
+) -> str:
+    """An owner gives access by hand. Always with a reason, always audited."""
+    if not reason.strip():
+        raise ValueError("a grant needs a reason")
+    if not grant.startswith(("tier:", "item:")):
+        raise ValueError("a grant is a tier: or an item: name")
+    if valid_until is not None and valid_until <= now:
+        raise ValueError("a grant must end after it starts")
+    runtime = get_runtime()
+    contact = runtime.store.get_contact(contact_id)
+    source_ref = "owner:" + hashlib.sha256((reason + now.isoformat()).encode()).hexdigest()[:12]
+    entitlement = Entitlement(
+        entitlement_id=entitlement_id("grant", source_ref, contact_id, grant),
+        contact_id=contact_id,
+        member_uid=_platform_uid(contact) if contact else None,
+        grant=grant,
+        source="grant",
+        source_ref=source_ref,
+        access_scope="platform_only",
+        plan_interval=None,
+        valid_from=now,
+        valid_until=valid_until,
+        status="active",
+        updated_at=now,
+        updated_by=actor,
+    )
+    audit = AuditEntry(
+        at=now,
+        actor=actor,
+        action="entitlement.granted",
+        subject=entitlement.entitlement_id,
+        reason=reason,
+        evidence={"contact_id": contact_id},
+    )
+    if not runtime.store.create_if_absent(entitlement, audit):
+        raise ValueError("grant already exists")
+    runtime.bus.publish(
+        new_event(
+            "membership.entitlement.granted",
+            contact_id,
+            {
+                "contact_id": contact_id,
+                "entitlement_id": entitlement.entitlement_id,
+                "grant": grant,
+                "source": "grant",
+                "source_ref": source_ref,
+            },
+            now=now,
+        )
+    )
+    return entitlement.entitlement_id
+
+
+def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
+    """Only a grant can be revoked: a source ends only its own records."""
+    runtime = get_runtime()
+    found = runtime.store.get_entitlement(entitlement_id)
+    if found is None:
+        raise LookupError("no such entitlement")
+    if found.source != "grant":
+        raise ValueError("only a grant can be revoked by hand")
+    if found.status == "revoked":
+        return
+    revoked = found.model_copy(update={"status": "revoked", "updated_at": now, "updated_by": actor})
+    audit = AuditEntry(
+        at=now,
+        actor=actor,
+        action="entitlement.revoked",
+        subject=entitlement_id,
+        reason=reason,
+        evidence={"contact_id": found.contact_id},
+    )
+    runtime.store.write(found.contact_id, [revoked], [audit])
+    runtime.bus.publish(
+        new_event(
+            "membership.entitlement.ended",
+            found.contact_id,
+            {
+                "entitlement_id": entitlement_id,
+                "contact_id": found.contact_id,
+                "status": "revoked",
+                "reason": "revoked",
+            },
+            now=now,
+        )
+    )
