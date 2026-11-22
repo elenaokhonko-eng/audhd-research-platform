@@ -73,3 +73,10 @@ export async function requireMember(section?: Section): Promise<Me> {
   if (guard.kind === "unavailable") throw new Error("unavailable");
   return guard.me;
 }
+
+// The session the guard used, for pages that call the service after requireMember.
+export async function sessionForRequest(): Promise<string> {
+  const { session } = await loadForRequest();
+  if (!session) redirect("/join");
+  return session;
+}

@@ -26,6 +26,12 @@ describe("FakePlatformApi, second wave", () => {
     expect(await code(bo.api.download(bo.s, "sample-book"))).toBe("forbidden:purchase_required");
     expect(await code(bo.api.download(bo.s, "nope"))).toBe("not_found:null");
   });
+  it("returns a chosen link once for the next download", async () => {
+    const { api, s } = await signedIn("ana");
+    api.nextDownloadUrl("http://files.invalid/x");
+    expect((await api.download(s, "sample-map")).url).toBe("http://files.invalid/x");
+    expect((await api.download(s, "sample-map")).url).toBe("https://files.invalid/sample-map");
+  });
   it("offers each kind of member the right upgrade route", async () => {
     const bo = await signedIn("bo");
     expect((await bo.api.upgradeOptions(bo.s)).routes.map((r) => [r.kind, r.available])).toEqual([["substack", true], ["platform_only", false]]);
@@ -52,6 +58,8 @@ describe("FakePlatformApi, second wave", () => {
   it("asks for the terms on gated routes and ends the session on deletion", async () => {
     const { api, s } = await signedIn("bo", false);
     expect(await code(api.libraryItems(s))).toBe("terms_required:null");
+    expect(await code(api.libraryItem(s, "sample-map"))).toBe("terms_required:null");
+    expect(await code(api.download(s, "sample-map"))).toBe("terms_required:null");
     await api.requestDeletion(s);
     expect(await code(api.me(s))).toBe("unauthenticated:null");
   });

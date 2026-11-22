@@ -9,6 +9,7 @@ vi.mock("@/lib/platform-api/client", async (original) => ({
 }));
 import { POST as deleteAccount } from "@/app/api/account/delete/route";
 import { GET as promotions } from "@/app/api/promotions/route";
+import { POST as download } from "@/app/api/library/[sku]/download/route";
 import { POST as refreshAccess } from "@/app/api/refresh-access/route";
 import { GET as tier } from "@/app/api/tier/route";
 
@@ -96,5 +97,41 @@ describe("GET /api/promotions", () => {
     expect(await res.json()).toEqual([]);
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
     fake.setPromotion(null);
+  });
+});
+
+describe("POST /api/library/[sku]/download", () => {
+  const post = (sku: string, headers: Record<string, string>) =>
+    download(req(`/api/library/${sku}/download`, headers), { params: Promise.resolve({ sku }) });
+  const asBo = { origin: ORIGIN, cookie: "session=fake-session:bo" };
+  it("answers 200 with the link for a paid member", async () => {
+    await fake.resolveSession("fake-token:ana", null);
+    await fake.acceptTerms("fake-session:ana", "terms-v1", "privacy-v1");
+    const res = await post("sample-map", { origin: ORIGIN, cookie: "session=fake-session:ana" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ url: "https://files.invalid/sample-map" });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
+  it("answers 403 with the reason for a free member", async () => {
+    const res = await post("sample-map", asBo);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden", reason: "paid_required" });
+  });
+  it("answers 404 for a malformed sku without asking the service", async () => {
+    const spy = vi.spyOn(fake, "download");
+    expect((await post("Sample..Map", asBo)).status).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+  it("refuses another origin", async () =>
+    expect((await post("sample-map", { origin: "https://evil.example", cookie: "session=fake-session:bo" })).status).toBe(403));
+  it("refuses a visitor without a session", async () => expect((await post("sample-map", { origin: ORIGIN })).status).toBe(401));
+  it("answers 503 when the link is not https", async () => {
+    await fake.resolveSession("fake-token:ana", null);
+    await fake.acceptTerms("fake-session:ana", "terms-v1", "privacy-v1");
+    fake.nextDownloadUrl("http://files.invalid/x");
+    const res = await post("sample-map", { origin: ORIGIN, cookie: "session=fake-session:ana" });
+    expect(res.status).toBe(503);
+    expect(JSON.stringify(await res.json())).not.toContain("files.invalid");
   });
 });

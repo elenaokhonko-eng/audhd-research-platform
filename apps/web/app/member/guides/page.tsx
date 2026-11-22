@@ -1,0 +1,20 @@
+import { ItemList } from "../components/ItemList";
+import { loadView } from "@/lib/library";
+import { requireMember, sessionForRequest } from "@/lib/member";
+import { getPlatformApi } from "@/lib/platform-api/client";
+
+export const dynamic = "force-dynamic";
+
+export default async function Page() {
+  const result = await loadView(
+    "guides",
+    () => requireMember("guides"),
+    async () => getPlatformApi().libraryItems(await sessionForRequest()),
+  );
+  return (
+    <main>
+      <h1>Guides</h1>
+      {result.kind === "items" ? <ItemList items={result.items} /> : <p role="status">{result.text}</p>}
+    </main>
+  );
+}
