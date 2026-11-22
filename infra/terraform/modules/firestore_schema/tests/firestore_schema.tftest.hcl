@@ -41,7 +41,7 @@ run "each_index_has_exactly_its_fields_and_the_expiry_field_is_not_indexed" {
     error_message = "Each composite index has exactly the fields and orders of the plan's table."
   }
   assert {
-    condition     = alltrue([for f in google_firestore_field.expires : length(f.index_config) == 1])
+    condition     = alltrue([for f in google_firestore_field.expires : length(f.index_config) == 1 && length(f.index_config[0].indexes) == 0])
     error_message = "expires_at is exempt from single-field indexing (an empty index_config)."
   }
 }
