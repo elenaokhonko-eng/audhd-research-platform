@@ -15,6 +15,13 @@ blocked. Any other ending exits 1 and prints one line naming the exception's cla
   once more to finish it as `failed` with the counts it was last given, so it is not left
   `running`.
 
+Cloud Run stops a job that runs too long (Infra's timeout: 540 s) with SIGTERM. While a job
+runs, SIGTERM raises `JobStopped`: `stripe_reconcile` and `roster_import` finish their run
+as `failed` and log their own markers; a stop that escapes them goes through the step above.
+
+A run's `finished_at` is the time it really finished: the run store the job hands to
+commerce records the later of the run's `now` and the clock at that moment.
+
 Only `stripe-reconcile` reads the Stripe key, from the Secret Manager name in
 `PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client; a job uses the
 bus and the Firestore client `platform-cli job` made (`use_clients`), never its own.
@@ -22,7 +29,9 @@ bus and the Firestore client `platform-cli job` made (`use_clients`), never its 
 
 import json
 import os
-from collections.abc import Callable
+import signal
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -30,6 +39,7 @@ from pydantic import TypeAdapter
 
 from platform_api.commerce.models import RequestedBy, RunKind, SyncRun
 from platform_api.settings import Settings
+from platform_api.shared import clock
 
 if TYPE_CHECKING:
     from platform_api.commerce.ports import RunStore
@@ -40,6 +50,24 @@ _DRY_RUN = {"": False, "0": False, "1": True}
 
 class SettingRefused(Exception):
     """A setting the job needs is missing or not one it accepts."""
+
+
+class JobStopped(Exception):
+    """Cloud Run asked the job to stop (SIGTERM)."""
+
+
+def _stop(signum: int, frame: object) -> None:
+    raise JobStopped
+
+
+@contextmanager
+def stop_on_sigterm() -> Iterator[None]:
+    """While inside, SIGTERM raises JobStopped; the previous handler is put back after."""
+    previous = signal.signal(signal.SIGTERM, _stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def exit_code(run: SyncRun) -> int:
@@ -98,7 +126,8 @@ class _WatchedRuns:
         now: datetime,
     ) -> None:
         self.counts = dict(counts)
-        self._runs.finish(run_id, state, guard, counts, now)
+        # the run's `now` is when it started its work; the finish is recorded as it happens
+        self._runs.finish(run_id, state, guard, counts, max(now, clock.utcnow()))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._runs, name)
@@ -129,6 +158,7 @@ def _set_up(settings: Settings, *, stripe: bool) -> tuple[bool, RequestedBy, _Wa
 
 
 def _finish_as_failed(watched: _WatchedRuns, run_id: str, now: datetime) -> None:
+    """Through the wrapper, so the finish time recorded is the later of `now` and the clock."""
     try:
         held = watched.get(run_id)
         if held is None or held.state == "running":
@@ -140,8 +170,13 @@ def _finish_as_failed(watched: _WatchedRuns, run_id: str, now: datetime) -> None
 def _run(
     job: str, settings: Settings, work: Callable[[bool, RequestedBy, datetime], SyncRun]
 ) -> int:
-    from platform_api.shared import clock
+    with stop_on_sigterm():
+        return _run_until_stopped(job, settings, work)
 
+
+def _run_until_stopped(
+    job: str, settings: Settings, work: Callable[[bool, RequestedBy, datetime], SyncRun]
+) -> int:
     try:
         dry_run, requested_by, watched = _set_up(settings, stripe=job == "stripe-reconcile")
     except Exception as exc:

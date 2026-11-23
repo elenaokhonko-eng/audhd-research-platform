@@ -8,8 +8,9 @@ from platform_api.commerce.runtime import get_runtime
 
 GAP = timedelta(seconds=60)  # a run completed this recently is fresh; one start per gap
 # A run still `running` blocks a new start for at most this long after it started, so a run
-# that crashed without finishing does not block "Check again" for ever.
-RUNNING_BOUND = timedelta(minutes=30)
+# that crashed without finishing does not block "Check again" for ever. Tied to Infra's
+# timeout of the stripe-reconcile job (540 s): a run still `running` after it was stopped.
+RUNNING_BOUND = timedelta(minutes=10)
 # After a run the guard blocked, "Check again" starts nothing for this long: the same
 # source would trip the same guard, and the owner has an alert to look at first.
 BLOCKED_BACKOFF = timedelta(minutes=15)

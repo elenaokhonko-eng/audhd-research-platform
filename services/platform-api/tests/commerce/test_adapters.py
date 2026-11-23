@@ -401,7 +401,7 @@ def test_the_job_starter_starts_without_waiting_and_hides_the_error():
 
     jobs = Jobs()
     CloudRunJobStarter(jobs).start("projects/p/locations/l/jobs/stripe-reconcile")
-    assert jobs.calls == [{"name": "projects/p/locations/l/jobs/stripe-reconcile"}]
+    assert jobs.calls == [{"name": "projects/p/locations/l/jobs/stripe-reconcile", "timeout": 10}]
     with pytest.raises(JobStartError) as err:
         CloudRunJobStarter(Jobs(fail=True)).start("projects/p/locations/l/jobs/stripe-reconcile")
     assert "@" not in str(err.value) and "projects/" not in str(err.value)
@@ -711,3 +711,119 @@ def test_a_promotion_id_that_could_make_two_upgrade_keys_alike_is_refused(com, o
     for bad in ("a:b", "a/b"):
         with pytest.raises(ValueError):
             _promotion(id=bad)
+
+
+# Branch review fixes.
+
+
+def test_a_secret_error_names_the_class_only():
+    from platform_api.commerce.adapters import read_secret
+
+    full = "projects/p/secrets/stripe-read-key/versions/latest"
+    for broken, name in (
+        (Secrets(fail=True), "NotFound"),
+        (Secrets(value=b"rk_test_\xff\xfe0123456789"), "UnicodeDecodeError"),
+    ):
+        with pytest.raises(RuntimeError) as err:
+            read_secret(full, client=broken)
+        assert str(err.value) == f"the secret could not be read ({name})"
+        assert err.value.__cause__ is None and err.value.__suppress_context__
+
+
+def test_the_stripe_library_logs_only_warnings_and_above():
+    import logging
+
+    import platform_api.commerce.stripe_adapter  # noqa: F401
+
+    assert logging.getLogger("stripe").level == logging.WARNING
+
+
+@pytest.fixture
+def ticking(monkeypatch):
+    """A clock the test moves: `ticking[0]` is now."""
+    from platform_api.shared import clock
+
+    current = [T0]
+    monkeypatch.setattr(clock, "utcnow", lambda: current[0])
+    return current
+
+
+def test_a_run_records_the_time_it_really_finished(cloud, capsys, monkeypatch, ticking):
+    real_page = adapters.page_from_json
+
+    def slow_page(data):
+        if ticking[0] == T0:
+            ticking[0] = T0 + timedelta(minutes=5)  # the read takes five minutes
+        return real_page(data)
+
+    monkeypatch.setattr(adapters, "page_from_json", slow_page)
+    code, run = _job("stripe-reconcile", capsys)
+    stored = cloud["db"].docs[("sync_runs", run["run_id"])]
+    assert code == 0 and stored["started_at"] == T0
+    assert stored["finished_at"] == T0 + timedelta(minutes=5)
+
+
+def test_a_failure_after_start_is_finished_at_the_real_time(cloud, capsys, monkeypatch, ticking):
+    from platform_api.commerce import adapters as cloud_adapters
+
+    real_finish = cloud_adapters.FirestoreRunStore.finish
+    calls = []
+
+    def finish_fails_once(self, *args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            ticking[0] = T0 + timedelta(minutes=5)
+            raise RuntimeError("firestore unavailable")
+        return real_finish(self, *args, **kwargs)
+
+    monkeypatch.setattr(cloud_adapters.FirestoreRunStore, "finish", finish_fails_once)
+    code, line = _job("stripe-reconcile", capsys)
+    stored = cloud["db"].docs[("sync_runs", line["run_id"])]
+    assert code == 1 and stored["finished_at"] == T0 + timedelta(minutes=5)
+
+
+def test_sigterm_becomes_job_stopped():
+    import signal
+
+    from platform_api.commerce.jobs import JobStopped, stop_on_sigterm
+
+    before = signal.getsignal(signal.SIGTERM)
+    with pytest.raises(JobStopped):
+        with stop_on_sigterm():
+            signal.raise_signal(signal.SIGTERM)
+    assert signal.getsignal(signal.SIGTERM) == before  # put back afterwards
+
+
+def test_a_job_stopped_by_cloud_run_fails_its_run(cloud, capsys, monkeypatch, caplog):
+    import signal
+
+    real_page = adapters.page_from_json
+
+    def stopped(data):
+        signal.raise_signal(signal.SIGTERM)  # Cloud Run stops the job during the read
+        return real_page(data)
+
+    monkeypatch.setattr(adapters, "page_from_json", stopped)
+    code, run = _job("stripe-reconcile", capsys)
+    assert code == 1 and run["state"] == "failed"
+    assert cloud["db"].docs[("sync_runs", run["run_id"])]["state"] == "failed"
+    assert any("alert=reconcile_failed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_stop_that_escapes_the_run_still_fails_it(cloud, capsys, monkeypatch):
+    from platform_api.commerce import adapters as cloud_adapters
+    from platform_api.commerce.jobs import JobStopped
+
+    real_finish = cloud_adapters.FirestoreRunStore.finish
+    calls = []
+
+    def stopped_while_finishing(self, *args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise JobStopped
+        return real_finish(self, *args, **kwargs)
+
+    monkeypatch.setattr(cloud_adapters.FirestoreRunStore, "finish", stopped_while_finishing)
+    code, line = _job("stripe-reconcile", capsys)
+    assert (code, line["error"]) == (1, "JobStopped")
+    assert cloud["db"].docs[("sync_runs", line["run_id"])]["state"] == "failed"

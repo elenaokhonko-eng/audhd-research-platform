@@ -93,9 +93,17 @@ def test_a_running_reconcile_is_not_started_again(com):
     assert (ticket.check, com.jobs.started) == ("already_running", [])
 
 
-def test_a_run_left_running_for_over_half_an_hour_no_longer_blocks(com):
+def test_a_run_left_running_for_over_ten_minutes_no_longer_blocks(com):
     com.runs.start("stripe_reconcile", False, "schedule", T0)
-    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=31)).check == "started"
+    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=11)).check == "started"
+
+
+def test_the_running_bound_outlasts_the_job_timeout():
+    from platform_api.commerce.refresh import RUNNING_BOUND
+
+    # Infra's stripe-reconcile job times out after 540 seconds; a run still `running` past
+    # that was stopped without finishing.
+    assert timedelta(seconds=540) < RUNNING_BOUND <= timedelta(minutes=10)
 
 
 def test_the_route_refuses_a_caller_without_a_session(com, member_client):

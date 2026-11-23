@@ -261,6 +261,9 @@ class FirestorePromotionStore:
 # Cloud Run, Cloud Storage and Secret Manager
 
 
+_START_TIMEOUT = 10  # seconds for the start request; a sign-in waits on it
+
+
 class CloudRunJobStarter:
     """Starts one execution of a job and does not wait for it."""
 
@@ -272,7 +275,7 @@ class CloudRunJobStarter:
         from google.auth.exceptions import GoogleAuthError
 
         try:
-            self._client.run_job(name=job)
+            self._client.run_job(name=job, timeout=_START_TIMEOUT)
         except (GoogleAPIError, GoogleAuthError):
             # The library's text names the job and the caller's identity; it is not repeated.
             raise JobStartError("the job could not be started") from None
@@ -312,8 +315,8 @@ def read_secret(name: str, *, client: Any = None) -> str:
     try:
         found = (client or _secrets_client()).access_secret_version(name=version)
         value = found.payload.data.decode("utf-8").strip()
-    except Exception:
-        raise RuntimeError("the secret could not be read") from None
+    except Exception as exc:  # the class only: neither the value nor the name
+        raise RuntimeError(f"the secret could not be read ({type(exc).__name__})") from None
     if not value:
         raise RuntimeError("the secret is empty")
     return cast(str, value)

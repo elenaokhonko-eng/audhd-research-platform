@@ -13,6 +13,7 @@ StripeReadError naming the exception's class only, raised without its cause: the
 Stripe or validation error can hold an address.
 """
 
+import logging
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any, Protocol, Self
@@ -22,6 +23,9 @@ import stripe
 from platform_api.commerce.models import StripeSubscription
 from platform_api.commerce.ports import StripeReadError
 from platform_api.shared import clock
+
+# The SDK logs request URLs and error messages at INFO; those never reach the job log.
+logging.getLogger("stripe").setLevel(logging.WARNING)
 
 API_VERSION = "2026-11-18.endive"
 _PAGE_SIZE = 100
