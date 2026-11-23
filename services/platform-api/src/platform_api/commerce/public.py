@@ -9,7 +9,6 @@ from platform_api.commerce.models import (
 from platform_api.commerce.ports import JobStartError
 from platform_api.commerce.promotions import (
     active_promotions,
-    count_upgrades,
     put_promotions,
     upgrade_options,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "Route",
     "UpgradeOptions",
     "active_promotions",
-    "count_upgrades",
     "last_reconcile_completed_at",
     "put_promotions",
     "request_refresh",

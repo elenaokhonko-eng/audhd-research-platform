@@ -140,3 +140,12 @@ def test_the_start_slot_is_taken_once_across_threads():
     for t in threads:
         t.join()
     assert sorted(results) == [False] * 7 + [True]
+
+
+def test_after_a_blocked_guard_check_again_waits_a_quarter_of_an_hour(com):
+    run_id = com.runs.start("stripe_reconcile", False, "schedule", T0)
+    com.runs.finish(run_id, "completed", "blocked", {}, T0)
+    early = commerce.request_refresh("u-bo", T0 + timedelta(minutes=5))
+    assert (early.check, early.last_completed_at, com.jobs.started) == ("fresh", None, [])
+    late = commerce.request_refresh("u-bo", T0 + timedelta(minutes=16))
+    assert (late.check, com.jobs.started) == ("started", [com.settings.reconcile_job])

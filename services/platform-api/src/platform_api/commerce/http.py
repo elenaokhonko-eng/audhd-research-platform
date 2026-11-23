@@ -43,9 +43,15 @@ def refresh_access(member: Termed) -> dict[str, Any]:
 
 @router.get("/v1/public/promotions/active")
 def public_promotions(response: Response) -> dict[str, Any]:
-    """For the `guests` audience. No member session; cacheable for a minute."""
-    response.headers["Cache-Control"] = "public, max-age=60"
-    views = active_promotions("guests", clock.utcnow())
+    """For the `guests` audience. No member session; cacheable for a minute at most."""
+    now = clock.utcnow()
+    views = active_promotions("guests", now)
+    # Never cached past the end of an offer it shows.
+    max_age = 60
+    if views:
+        left = int((min(v.ends_at for v in views) - now).total_seconds())
+        max_age = max(0, min(60, left))
+    response.headers["Cache-Control"] = f"public, max-age={max_age}"
     return {"promotions": [v.model_dump(mode="json") for v in views]}
 
 
