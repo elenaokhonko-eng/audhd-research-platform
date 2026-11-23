@@ -71,3 +71,18 @@ output "auth_email_domain" {
   description = "The domain the sign-in email is sent from"
   value       = module.sending_domain.domain
 }
+
+output "stripe_key_secret_name" {
+  description = "Secret Manager name of the Stripe read key; the owner adds its value from her terminal"
+  value       = module.reconcile_job.secret_name
+}
+
+output "reconcile_job_name" {
+  description = "Full resource name of the stripe-reconcile job (PLATFORM_RECONCILE_JOB of platform-api)"
+  value       = module.reconcile_job.job_name
+}
+
+output "roster_import_job_name" {
+  description = "Full resource name of the roster-import job"
+  value       = module.roster_job.job_name
+}

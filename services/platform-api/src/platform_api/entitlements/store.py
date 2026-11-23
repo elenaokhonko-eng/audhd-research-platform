@@ -1,6 +1,7 @@
 """The storage port of the entitlements module, and an in-memory implementation."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Protocol
 
 from platform_api.entitlements.models import (
@@ -12,10 +13,46 @@ from platform_api.entitlements.models import (
     Source,
 )
 
+ContactChange = Callable[[Contact | None], Contact | None]
+
+
+def claimed_audit(entitlement_id: str, contact_id: str, uid: str, now: datetime) -> AuditEntry:
+    """The audit entry of one record that `claim_records` claimed."""
+    return AuditEntry(
+        at=now,
+        actor=f"member:{uid}",
+        action="entitlement.claimed",
+        subject=entitlement_id,
+        reason=None,
+        evidence={"contact_id": contact_id},
+    )
+
+
+def check_write(contact_id: str, entitlements: Sequence[Entitlement]) -> None:
+    """The rule of `write`, checked by every store before it writes anything."""
+    if not contact_id and entitlements:
+        raise ValueError("records need a contact; only audit entries may go without one")
+    if any(e.contact_id != contact_id for e in entitlements):
+        raise ValueError("every record in one write belongs to one contact")
+
 
 class EntitlementStore(Protocol):
     def get_contact(self, contact_id: str) -> Contact | None: ...
-    def put_contact(self, contact: Contact) -> None: ...
+    def put_contact(self, contact: Contact) -> None:
+        """Overwrites the contact. Code that changes a stored contact uses `merge_contact`."""
+        ...
+
+    def merge_contact(self, contact_id: str, change: ContactChange) -> Contact | None:
+        """Change one contact in one atomic step and return it as stored afterwards.
+
+        `change` gets the stored contact (None when there is none) and returns the new
+        contact, or None to leave it as it is. No other write to the contact can come between
+        the read and the write. `change` may be called more than once (a Firestore
+        transaction is retried), so it must not have side effects. ValueError when the
+        contact it returns has another id; nothing is written then.
+        """
+        ...
+
     def contact_ids_for_member(self, uid: str) -> list[str]: ...
     def entitlements_for_contacts(self, contact_ids: Sequence[str]) -> list[Entitlement]: ...
     def entitlements_for_member(self, uid: str) -> list[Entitlement]: ...
@@ -39,11 +76,26 @@ class EntitlementStore(Protocol):
         """False when the id already exists."""
         ...
 
+    def claim_records(self, contact_id: str, uid: str, now: datetime) -> list[str]:
+        """Give the member every record of the contact that no member holds yet, in one step.
+
+        Reads each entitlement of the contact again, inside the step. A record whose
+        `member_uid` is still None gets `member_uid = uid`, `updated_at = now` and
+        `updated_by = "member:<uid>"`; its status and every other field stay as stored, so a
+        record a run ended meanwhile stays ended. One `entitlement.claimed` audit entry per
+        record claimed is written in the same step. Returns the ids claimed.
+        """
+        ...
+
     def audit_for(self, subject: str) -> list[AuditEntry]: ...
     def get_campaign(self, slug: str) -> Campaign | None: ...
     def list_campaigns(self) -> list[Campaign]: ...
     def put_campaigns(self, campaigns: Sequence[Campaign]) -> None:
-        """Writes each campaign under its slug, as given; campaigns not named stay."""
+        """Writes each campaign under its slug; campaigns not named stay.
+
+        A slug already stored keeps its stored counts (only `add_to_campaign_count` changes
+        them); a new slug starts with the counts given.
+        """
         ...
 
     def add_to_campaign_count(self, slug: str, key: str, by: int = 1) -> None:
@@ -74,6 +126,16 @@ class InMemoryStore:
     def put_contact(self, contact: Contact) -> None:
         self._contacts[contact.contact_id] = contact.model_copy(deep=True)
 
+    def merge_contact(self, contact_id: str, change: ContactChange) -> Contact | None:
+        held = self.get_contact(contact_id)
+        changed = change(held)
+        if changed is None:
+            return held
+        if changed.contact_id != contact_id:
+            raise ValueError("a change may not move a contact to another id")
+        self.put_contact(changed)
+        return self.get_contact(contact_id)
+
     def contact_ids_for_member(self, uid: str) -> list[str]:
         return [
             cid
@@ -98,10 +160,7 @@ class InMemoryStore:
     def write(
         self, contact_id: str, entitlements: Sequence[Entitlement], audit: Sequence[AuditEntry]
     ) -> None:
-        if not contact_id and entitlements:
-            raise ValueError("records need a contact; only audit entries may go without one")
-        if any(e.contact_id != contact_id for e in entitlements):
-            raise ValueError("every record in one write belongs to one contact")
+        check_write(contact_id, entitlements)
         staged = [e.model_copy() for e in entitlements]
         staged_audit = [a.model_copy(deep=True) for a in audit]
         for e in staged:
@@ -115,6 +174,19 @@ class InMemoryStore:
         self._audit.append(audit.model_copy(deep=True))
         return True
 
+    def claim_records(self, contact_id: str, uid: str, now: datetime) -> list[str]:
+        claimed = [
+            e.model_copy(
+                update={"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"}
+            )
+            for e in self._entitlements.values()
+            if e.contact_id == contact_id and e.member_uid is None
+        ]
+        for e in claimed:
+            self._entitlements[e.entitlement_id] = e
+            self._audit.append(claimed_audit(e.entitlement_id, contact_id, uid, now))
+        return [e.entitlement_id for e in claimed]
+
     def audit_for(self, subject: str) -> list[AuditEntry]:
         return [a.model_copy(deep=True) for a in self._audit if a.subject == subject]
 
@@ -127,7 +199,9 @@ class InMemoryStore:
 
     def put_campaigns(self, campaigns: Sequence[Campaign]) -> None:
         for c in campaigns:
-            self._campaigns[c.slug] = c.model_copy(deep=True)
+            held = self._campaigns.get(c.slug)
+            kept = c.model_copy(update={"counts": dict(held.counts)}) if held else c
+            self._campaigns[c.slug] = kept.model_copy(deep=True)
 
     def add_to_campaign_count(self, slug: str, key: str, by: int = 1) -> None:
         found = self._campaigns.get(slug)

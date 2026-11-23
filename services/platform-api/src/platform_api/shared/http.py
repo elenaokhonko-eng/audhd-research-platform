@@ -1,12 +1,17 @@
 """The error body of contracts section 1, for every error the service itself raises."""
 
+import logging
+import traceback
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+_log = logging.getLogger(__name__)
 
 _CODES = {
     401: "unauthenticated",
@@ -50,6 +55,47 @@ def _field(loc: tuple[Any, ...]) -> str:
     return ".".join("*" if "@" in str(part) else str(part) for part in loc)
 
 
+def _where(exc: BaseException) -> str:
+    """The exception's type and the frames it passed through; never its message."""
+    frames = traceback.extract_tb(exc.__traceback__)
+    path = " < ".join(f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno} {f.name}" for f in frames[::-1])
+    return f"{type(exc).__name__} at {path}"
+
+
+class _CatchAll:
+    """Answers an unhandled exception with the contract's 500, and does not re-raise it.
+
+    Starlette's ServerErrorMiddleware re-raises after its handler, and the server then logs the
+    traceback with the exception's message, which may hold an address. Here only the type and
+    the frames are logged.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def tracking_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception as exc:
+            _log.error("unhandled error: %s", _where(exc))
+            if not started:
+                response = JSONResponse(
+                    _body("internal_error", "Something went wrong on our side."), status_code=500
+                )
+                await response(scope, receive, send)
+
+
 def install_error_handlers(app: FastAPI) -> None:
     async def api_error(request: Request, exc: Exception) -> JSONResponse:
         exc = cast(ApiError, exc)
@@ -84,3 +130,32 @@ def install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, validation)
     app.add_exception_handler(StarletteHTTPException, http_error)
     app.add_exception_handler(Exception, unhandled)
+    app.add_middleware(_CatchAll)
+
+
+def current_member(
+    request: Request,
+    session: Annotated[str | None, Header(alias="X-Member-Session")] = None,
+) -> Any:
+    """The member of the forwarded session, or 401. Refusal is anything the lookup refuses.
+
+    `shared` may not import `identity`, so the lookup is `app.state.member_from_session`,
+    which `create_app` sets. It returns a member reference (`uid`, `terms_ok`) and raises a
+    PermissionError when the session is not valid; any other error is a fault, not a refusal.
+    """
+    lookup = getattr(request.app.state, "member_from_session", None)
+    if not session or lookup is None:
+        raise ApiError(401, "unauthenticated", "Please sign in.")
+    try:
+        return lookup(session)
+    except PermissionError:
+        raise ApiError(401, "unauthenticated", "Please sign in.") from None
+
+
+def member_with_terms(member: Annotated[Any, Depends(current_member)]) -> Any:
+    """As `current_member`, then 409 until the member has accepted the current terms."""
+    if not getattr(member, "terms_ok", False):
+        raise ApiError(
+            409, "terms_required", "Please accept the current terms and privacy notice first."
+        )
+    return member

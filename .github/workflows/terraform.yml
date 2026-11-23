@@ -5,10 +5,10 @@ name: terraform
 
 on:
   pull_request:
-    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
+    paths: ["infra/terraform/**", "ops/scripts/**", "docs/runbooks/**", ".github/workflows/terraform.yml"]
   push:
     branches: [main, "integration/**"]
-    paths: ["infra/terraform/**", "ops/scripts/**", ".github/workflows/terraform.yml"]
+    paths: ["infra/terraform/**", "ops/scripts/**", "docs/runbooks/**", ".github/workflows/terraform.yml"]
 
 permissions:
   contents: read
@@ -29,8 +29,7 @@ jobs:
       - uses: actions/checkout@v4
       # -S warning: the older scripts carry one style-level note (SC2016) that is intentional.
       - run: shellcheck -S warning ops/scripts/*.sh ops/scripts/tests/*.sh
-      - run: bash ops/scripts/tests/test-30.sh
-      - run: bash ops/scripts/tests/test-31.sh
+      - run: bash ops/scripts/tests/run-all.sh
 
   test:
     runs-on: ubuntu-latest
