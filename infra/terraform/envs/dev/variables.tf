@@ -74,3 +74,41 @@ variable "signin_sender_hint" {
   type        = string
   default     = ""
 }
+
+variable "stripe_substack_application" {
+  description = "Stripe application id that marks a subscription as created by Substack (PLATFORM_STRIPE_SUBSTACK_APPLICATION of the two jobs). Set in terraform.tfvars; never committed."
+  type        = string
+  default     = ""
+}
+
+variable "substack_grant_month" {
+  description = "What a paying Substack reader on a monthly plan is recorded as: tier:paid or status:substack_paid (the owner's commercial decision)"
+  type        = string
+  default     = "status:substack_paid"
+  validation {
+    condition     = contains(["tier:paid", "status:substack_paid"], var.substack_grant_month)
+    error_message = "substack_grant_month must be tier:paid or status:substack_paid."
+  }
+}
+
+variable "substack_grant_year" {
+  description = "What a paying Substack reader on an annual plan is recorded as: tier:paid or status:substack_paid (the owner's commercial decision)"
+  type        = string
+  default     = "status:substack_paid"
+  validation {
+    condition     = contains(["tier:paid", "status:substack_paid"], var.substack_grant_year)
+    error_message = "substack_grant_year must be tier:paid or status:substack_paid."
+  }
+}
+
+variable "reconcile_schedule" {
+  description = "Cron schedule (UTC) of the stripe-reconcile job; at least 10 minutes between runs. Shorten it while a campaign is open."
+  type        = string
+  default     = "*/30 * * * *"
+}
+
+variable "reconcile_schedule_enabled" {
+  description = "Run the reconcile schedule. Created paused; the launch runbook switches it on after the first good real run."
+  type        = bool
+  default     = false
+}

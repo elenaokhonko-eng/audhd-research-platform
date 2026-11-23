@@ -8,3 +8,14 @@ map_custom_domains    = false
 manage_cloudflare_dns = false
 cloudflare_zone_id    = ""
 # cloudflare_api_token comes from the environment: export TF_VAR_cloudflare_api_token=...
+
+# Wave 2: the reconcile and roster jobs.
+# Stripe application id of Substack's subscriptions (from a Substack-created subscription in Stripe; leave empty until known).
+stripe_substack_application = ""
+# What a paying Substack reader is recorded as, per plan interval: "tier:paid" or "status:substack_paid".
+substack_grant_month = "status:substack_paid"
+substack_grant_year  = "status:substack_paid"
+# How often the reconcile runs (cron, UTC, at least 10 minutes apart); shorten while a campaign is open.
+reconcile_schedule = "*/30 * * * *"
+# Created paused; set to true after the first good real run (launch runbook).
+reconcile_schedule_enabled = false
