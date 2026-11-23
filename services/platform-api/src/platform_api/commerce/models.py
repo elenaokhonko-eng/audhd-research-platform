@@ -46,3 +46,11 @@ class SyncRun(BaseModel):
     counts: dict[str, int]
     started_at: datetime
     finished_at: datetime | None
+
+
+class RefreshTicket(BaseModel):
+    """The answer to "Check again". Ids only; never an address."""
+
+    check: Literal["fresh", "started", "already_running"]
+    last_completed_at: datetime | None
+    next_allowed_at: datetime

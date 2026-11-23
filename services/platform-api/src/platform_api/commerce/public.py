@@ -1,15 +1,15 @@
-from datetime import datetime
-
+from platform_api.commerce.models import RefreshTicket
+from platform_api.commerce.ports import JobStartError
 from platform_api.commerce.reconcile import stripe_reconcile
+from platform_api.commerce.refresh import RateLimited, last_reconcile_completed_at, request_refresh
 from platform_api.commerce.roster import roster_import
-from platform_api.commerce.runtime import get_runtime
 
-__all__ = ["last_reconcile_completed_at", "roster_import", "stripe_reconcile"]
-
-
-def last_reconcile_completed_at() -> datetime | None:
-    """When the last real reconcile finished with its guard passed; a dry run does not count."""
-    run = get_runtime().runs.latest("stripe_reconcile", completed_only=True, real_only=True)
-    if run is None or run.guard != "passed":
-        return None
-    return run.finished_at
+__all__ = [
+    "JobStartError",
+    "RateLimited",
+    "RefreshTicket",
+    "last_reconcile_completed_at",
+    "request_refresh",
+    "roster_import",
+    "stripe_reconcile",
+]

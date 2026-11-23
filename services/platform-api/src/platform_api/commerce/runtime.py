@@ -1,10 +1,11 @@
 """The ports the commerce module runs on, set once at start-up (or by a test)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from platform_api.commerce.ports import RosterInbox, RunStore, StripeReader
+from platform_api.commerce.ports import JobStarter, RosterInbox, RunStore, StripeReader
 from platform_api.commerce.settings import CommerceSettings
 from platform_api.shared.bus import EventBus
+from platform_api.shared.ratelimit import InMemoryRateLimiter, RateLimiter
 
 
 @dataclass
@@ -14,6 +15,8 @@ class Runtime:
     runs: RunStore
     bus: EventBus
     inbox: RosterInbox | None = None
+    jobs: JobStarter | None = None  # None: "Check again" starts nothing
+    limiter: RateLimiter = field(default_factory=InMemoryRateLimiter)
 
 
 _runtime: Runtime | None = None

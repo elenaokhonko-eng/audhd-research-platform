@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Iterable, Iterator
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -39,6 +39,29 @@ class RunStore(Protocol):
     def recent(self, kind: RunKind | None, limit: int) -> list[SyncRun]: ...
 
     def get(self, run_id: str) -> SyncRun | None: ...
+
+    def acquire_start_slot(self, kind: RunKind, now: datetime, gap: timedelta) -> bool:
+        """Atomic. True, and `now` recorded as the last start, when no slot of `kind` was
+        taken within `gap` before `now`; otherwise False and nothing recorded."""
+        ...
+
+
+class JobStartError(Exception):
+    """A job could not be started. Carries no id and no address."""
+
+
+class JobStarter(Protocol):
+    def start(self, job: str) -> None:
+        """Start one execution of the job named by its full resource name. Raises JobStartError."""
+        ...
+
+
+class InMemoryJobStarter:
+    def __init__(self) -> None:
+        self.started: list[str] = []
+
+    def start(self, job: str) -> None:
+        self.started.append(job)
 
 
 class RosterObject(BaseModel):
@@ -84,6 +107,14 @@ class InMemoryStripeReader:
 class InMemoryRunStore:
     def __init__(self) -> None:
         self._runs: dict[str, SyncRun] = {}
+        self._last_start: dict[RunKind, datetime] = {}
+
+    def acquire_start_slot(self, kind: RunKind, now: datetime, gap: timedelta) -> bool:
+        last = self._last_start.get(kind)
+        if last is not None and now - last < gap:
+            return False
+        self._last_start[kind] = now
+        return True
 
     def start(self, kind: RunKind, dry_run: bool, requested_by: RequestedBy, now: datetime) -> str:
         run_id = uuid.uuid4().hex

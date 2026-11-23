@@ -1,0 +1,58 @@
+"""'Check again': a fresh look at Stripe on request, one job at a time, limited per member."""
+
+from datetime import datetime, timedelta
+from typing import Literal
+
+from platform_api.commerce.models import RefreshTicket
+from platform_api.commerce.runtime import get_runtime
+
+GAP = timedelta(seconds=60)  # a run completed this recently is fresh; one start per gap
+_LIMITS = (("m", 1, timedelta(minutes=1)), ("h", 6, timedelta(hours=1)))
+
+
+class RateLimited(Exception):
+    """The member asked too often. Carries the seconds to wait; never an id or an address."""
+
+    def __init__(self, retry_after: int) -> None:
+        super().__init__("rate limited")
+        self.retry_after = retry_after
+
+
+def last_reconcile_completed_at() -> datetime | None:
+    """When the last real reconcile finished with its guard passed; a dry run does not count."""
+    run = get_runtime().runs.latest("stripe_reconcile", completed_only=True, real_only=True)
+    if run is None or run.guard != "passed":
+        return None
+    return run.finished_at
+
+
+def request_refresh(uid: str | None, now: datetime) -> RefreshTicket:
+    """Start the reconcile job unless a run completed in the last minute or one just started.
+
+    A member (`uid`) is limited to one request a minute and six an hour; a sign-in (`uid`
+    None) is not limited but shares the start slot. Raises RateLimited, or JobStartError
+    when the job could not be started.
+    """
+    runtime = get_runtime()
+    if uid is not None:
+        for suffix, limit, window in _LIMITS:
+            # The minute comes first: a request it refuses never counts toward the hour.
+            wait = runtime.limiter.hit(f"refresh:{uid}:{suffix}", limit, window, now)
+            if wait is not None:
+                raise RateLimited(retry_after=wait)
+
+    def ticket(check: Literal["fresh", "started", "already_running"]) -> RefreshTicket:
+        return RefreshTicket(
+            check=check, last_completed_at=last_reconcile_completed_at(), next_allowed_at=now + GAP
+        )
+
+    # Whatever its guard: a blocked run is not restarted at the floor rate.
+    latest = runtime.runs.latest("stripe_reconcile", completed_only=True, real_only=True)
+    if latest is not None and latest.finished_at is not None and now - latest.finished_at < GAP:
+        return ticket("fresh")
+    if runtime.jobs is None or not runtime.settings.reconcile_job:
+        return ticket("fresh")
+    if not runtime.runs.acquire_start_slot("stripe_reconcile", now, GAP):
+        return ticket("already_running")
+    runtime.jobs.start(runtime.settings.reconcile_job)
+    return ticket("started")
