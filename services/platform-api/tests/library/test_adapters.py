@@ -23,9 +23,7 @@ class FakeBucket:
 
 def test_a_link_is_signed_for_get_for_the_given_time_without_a_key_file():
     bucket = FakeBucket()
-    store = BucketFileStore(
-        bucket, signer="svc@example.iam.gserviceaccount.com", token=lambda: "tok"
-    )
+    store = BucketFileStore(bucket, signer="svc@example.org", token=lambda: "tok")
     url = store.signed_url("items/sample-map/1.0/f.pdf", timedelta(seconds=600), T0)
     [call] = bucket.log
     assert url.startswith("https://storage.example/items/sample-map/1.0/f.pdf")
@@ -35,7 +33,7 @@ def test_a_link_is_signed_for_get_for_the_given_time_without_a_key_file():
         timedelta(seconds=600),
     )
     assert (call["service_account_email"], call["access_token"]) == (
-        "svc@example.iam.gserviceaccount.com",
+        "svc@example.org",
         "tok",
     )
 
