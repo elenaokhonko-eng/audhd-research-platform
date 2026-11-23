@@ -5,7 +5,7 @@ import { TermsStep } from "@/app/welcome/TermsStep";
 import { NotRecognised } from "@/app/welcome/NotRecognised";
 import { FakePlatformApi } from "@/lib/platform-api/fake";
 import { ApiError } from "@/lib/platform-api/errors";
-import { welcomeState, welcomeView } from "@/lib/welcome";
+import { termsCurrent, welcomeState, welcomeView } from "@/lib/welcome";
 import { WelcomeBody } from "@/app/welcome/WelcomeBody";
 import { SignOutButton } from "@/app/welcome/SignOutButton";
 
@@ -16,8 +16,24 @@ const meOf = async (name: string, accept = true) => {
   return api.me(session.cookie);
 };
 
+describe("termsCurrent", () => {
+  it("is true only when accepted and both versions match the required ones", async () => {
+    const { member } = await meOf("ana");
+    expect(termsCurrent(member)).toBe(true);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, terms_version: "old" } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, privacy_version: "old" } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, privacy_version: null } })).toBe(false);
+    expect(termsCurrent({ ...member, terms: { ...member.terms, accepted: false } })).toBe(false);
+  });
+});
+
 describe("welcomeView", () => {
-  it("asks for the terms first", async () => expect(welcomeView(await meOf("ana", false), null)).toEqual({ kind: "terms" }));
+  it("asks again when the required terms version has moved on", async () => {
+    const me = await meOf("ana");
+    const stale = { ...me, member: { ...me.member, terms: { ...me.member.terms, terms_version: "old" } } };
+    expect(welcomeView(stale, null)).toEqual({ kind: "terms", versions: { terms: "terms-v1", privacy: "privacy-v1" } });
+  });
+  it("asks for the terms first", async () => expect(welcomeView(await meOf("ana", false), null)).toEqual({ kind: "terms", versions: { terms: "terms-v1", privacy: "privacy-v1" } }));
   it("shows ana as paid, included while paying, with a guarantee date", async () => {
     const view = welcomeView(await meOf("ana"), null);
     expect(view).toMatchObject({ kind: "paid", includedWhilePaying: true });
@@ -56,36 +72,58 @@ describe("welcomeView", () => {
   });
 });
 
+const versions = { terms: "terms-v1", privacy: "privacy-v1" };
 describe("TermsStep", () => {
-  it("keeps Continue disabled until the box is ticked, then accepts", async () => {
+  it("has no checkbox and accepts on the button", async () => {
     const accept = vi.fn().mockResolvedValue(undefined);
-    render(<TermsStep accept={accept} reload={() => {}} />);
-    const button = screen.getByRole("button", { name: "Continue" });
-    expect(button).toBeDisabled();
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(button);
+    render(<TermsStep accept={accept} reload={() => {}} versions={versions} />);
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(accept).toHaveBeenCalledOnce();
+    expect(accept).toHaveBeenCalledWith({ terms_version: "terms-v1", privacy_version: "privacy-v1" });
+  });
+  it("posts the versions it shows as JSON", async () => {
+    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TermsStep reload={() => {}} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
+    vi.unstubAllGlobals();
+    expect(fetchMock).toHaveBeenCalledWith("/api/terms", expect.objectContaining({
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ terms_version: "terms-v1", privacy_version: "privacy-v1" }),
+    }));
+  });
+  it("reloads the page, without an error, when the versions have changed (409)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 409 })));
+    const reload = vi.fn();
+    render(<TermsStep reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
+    vi.unstubAllGlobals();
+    expect(reload).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Something went wrong. Try again.")).not.toBeInTheDocument();
   });
   it("reloads after accepting", async () => {
     const reload = vi.fn();
-    render(<TermsStep accept={vi.fn().mockResolvedValue(undefined)} reload={reload} />);
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    render(<TermsStep accept={vi.fn().mockResolvedValue(undefined)} reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(reload).toHaveBeenCalledOnce();
   });
   it("says so and keeps the form when accepting fails", async () => {
     const reload = vi.fn();
-    render(<TermsStep accept={vi.fn().mockRejectedValue(new Error("x"))} reload={reload} />);
-    await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    render(<TermsStep accept={vi.fn().mockRejectedValue(new Error("x"))} reload={reload} versions={versions} />);
+    await userEvent.click(screen.getByRole("button", { name: "I agree and continue" }));
     expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "I agree and continue" })).toBeEnabled();
     expect(reload).not.toHaveBeenCalled();
   });
-  it("links the terms and the privacy notice", () => {
-    render(<TermsStep accept={vi.fn()} reload={() => {}} />);
-    expect(screen.getByRole("link", { name: "terms" })).toHaveAttribute("href", "/terms");
+  it("links the terms and the privacy notice, states age and versions", () => {
+    render(<TermsStep accept={vi.fn()} reload={() => {}} versions={versions} />);
+    expect(screen.getAllByRole("link", { name: "terms of use" })).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "terms of use" })).toHaveAttribute("href", "/terms");
     expect(screen.getByRole("link", { name: "privacy notice" })).toHaveAttribute("href", "/privacy");
+    expect(screen.getByText(/you are 18 or older/)).toBeInTheDocument();
+    expect(screen.getByText("Terms terms-v1, privacy notice privacy-v1.")).toBeInTheDocument();
   });
 });
 
@@ -159,7 +197,7 @@ describe("WelcomeBody", () => {
     expect(screen.getByRole("link", { name: "Try again" })).toHaveAttribute("href", "/welcome");
   });
   it.each([
-    { kind: "terms" as const },
+    { kind: "terms" as const, versions: { terms: "terms-v1", privacy: "privacy-v1" } },
     { kind: "paid" as const, grantUntil: "2027-01-31T00:00:00Z", includedWhilePaying: true },
     { kind: "free" as const, checking: false },
     { kind: "other_plan" as const, planInterval: "month" as const },

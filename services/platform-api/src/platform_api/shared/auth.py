@@ -1,4 +1,4 @@
-"""Identity of the caller of the Pub/Sub push endpoint."""
+"""Identity of the callers that present a Google token: Pub/Sub push and the owner."""
 
 import base64
 import binascii
@@ -54,3 +54,35 @@ def push_identity_from_token(token: str, *, allowed_email: str) -> PushIdentity:
     if not allowed_email or email != allowed_email:
         raise NotAuthorised("wrong_identity")
     return PushIdentity(email=email)
+
+
+GOOGLE_ISSUER = "https://accounts.google.com"
+
+
+def google_account_from_token(token: str) -> str:
+    """The Google account id (claim `sub`) of a person's identity token, signature checked.
+
+    Cloud Run's own check is not enough for the owner's routes: any caller allowed to invoke
+    the service could otherwise present a token it wrote itself. The signature and expiry are
+    checked against Google's published keys. The audience is not checked: a token printed by
+    `gcloud auth print-identity-token` for a person carries gcloud's own audience. The list of
+    owner accounts is the gate.
+
+    Raises NotAuthorised("invalid") for any token that fails; the cause is not repeated.
+    """
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token
+
+    try:
+        claims = id_token.verify_token(token, google_requests.Request())
+    except Exception:
+        raise NotAuthorised("invalid") from None
+    sub = claims.get("sub")
+    if (
+        claims.get("iss") != GOOGLE_ISSUER
+        or claims.get("email_verified") is not True
+        or not isinstance(sub, str)
+        or not sub
+    ):
+        raise NotAuthorised("invalid")
+    return sub

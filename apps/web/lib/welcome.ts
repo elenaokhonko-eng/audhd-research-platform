@@ -2,13 +2,23 @@ import { ApiError } from "@/lib/platform-api/errors";
 import type { Access, Member } from "@/lib/platform-api/types";
 
 export type WelcomeView =
-  | { kind: "terms" }
+  | { kind: "terms"; versions: { terms: string; privacy: string } }
   | { kind: "paid"; grantUntil: string | null; includedWhilePaying: boolean }
   | { kind: "other_plan"; planInterval: "month" | "year" }
   | { kind: "free"; checking: boolean };
 
+// True only when the member accepted the terms and privacy versions that are required now.
+// A null version (never accepted) never matches. Shared by the workspace guard and /welcome.
+export function termsCurrent(member: Member): boolean {
+  const { accepted, terms_version, privacy_version, required } = member.terms;
+  return accepted && terms_version === required.terms_version && privacy_version === required.privacy_version;
+}
+
 export function welcomeView(me: { member: Member; access: Access }, check: string | null): WelcomeView {
-  if (!me.member.terms.accepted) return { kind: "terms" };
+  if (!termsCurrent(me.member)) {
+    const { required } = me.member.terms;
+    return { kind: "terms", versions: { terms: required.terms_version, privacy: required.privacy_version } };
+  }
   if (me.access.tier === "paid") {
     const reasons = me.access.reasons;
     const dates = reasons

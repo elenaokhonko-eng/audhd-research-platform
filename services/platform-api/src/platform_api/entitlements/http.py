@@ -1,11 +1,11 @@
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from platform_api.entitlements import public
 from platform_api.entitlements.campaigns import campaign_state
 from platform_api.shared import clock
-from platform_api.shared.http import ApiError
+from platform_api.shared.http import ApiError, member_with_terms
 
 router = APIRouter()
 hooks_router = APIRouter()
@@ -26,3 +26,9 @@ def get_campaign(slug: str) -> dict[str, Any]:
         "state": campaign_state(campaign, public.launch_config(), now),
         "copy": shown["copy"],
     }
+
+
+@router.get("/v1/me/entitlements")
+def my_entitlements(member: Annotated[Any, Depends(member_with_terms)]) -> dict[str, Any]:
+    reasons = public.access_for(member.uid, clock.utcnow()).reasons
+    return {"entitlements": [r.model_dump(mode="json") for r in reasons]}
