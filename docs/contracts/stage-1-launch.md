@@ -196,7 +196,9 @@ class FileDirectory:                 # reads Substack's export file; satisfies S
 | `members/{uid}` gains | `joined_via` (campaign slug), `terms_accepted.privacy_version` |
 | `contacts/{contact_id}` changes | `invite` becomes `{campaign, state}`; `channels.substack.last_seen_in_roster` is written by every roster import |
 | `entitlements/{entitlement_id}` clarifies | `valid_from` is the source's `started_at`. For an owner grant or a launch grant it is the moment of the grant. `plan_interval` (`month`, `year` or null) is stored from the source state. A grant whose name starts with `status:` unlocks no section and no item; it is listed in `reasons` so the Account page can explain it |
-| `sync_runs/{auto}` gains | `kind` (`stripe_reconcile`, `roster_import`), `dry_run`, `state` (`running`, `completed`, `failed`), `guard` (`passed`, `blocked`), `unseen`, counts by action, `requested_by` (`schedule`, `member`, `owner`) |
+| `sync_runs/{auto}` gains | `kind` (`stripe_reconcile`, `roster_import`), `dry_run`, `state` (`running`, `completed`, `failed`), `guard` (`passed`, `blocked`), `counts` (counts by action, `unseen` among them, and the run's other counts), `requested_by` (`schedule`, `member`, `owner`), `started_at`, `finished_at` |
+| `promotion_upgrades/{promotion_id}:{contact_id}` | `promotion_id`, `contact_id`, `counted_at`. Written once, in the transaction that adds one to the promotion's `counts.upgrades_in_window`, so a contact is counted once per promotion. A promotion id never contains `:` or `/` |
+| `config/reconcile_slot` | `last_start` (time). Taken in a transaction by `request_refresh`, so two requests in the same 60 seconds start one job |
 
 ## 5. Events (additions to [09 §4](../architecture/09-events-and-data-model.md))
 
