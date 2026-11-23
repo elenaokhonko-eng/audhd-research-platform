@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { loadItem, KIND_LABEL } from "@/lib/library";
+import { loadItem, missingItemText, KIND_LABEL, SKU_PATTERN } from "@/lib/library";
 import { requireMember, sessionForRequest } from "@/lib/member";
 import { getPlatformApi } from "@/lib/platform-api/client";
 import { ItemAction } from "../../components/ItemList";
@@ -14,7 +14,16 @@ export default async function LibraryItem({ params }: { params: Promise<{ sku: s
     sessionForRequest,
     (session) => getPlatformApi().libraryItem(session, sku),
   );
-  if (result.kind === "not_found") notFound();
+  if (result.kind === "not_found") {
+    if (!SKU_PATTERN.test(sku)) notFound();
+    const text = await missingItemText(sessionForRequest, (session) => getPlatformApi().libraryItems(session));
+    return (
+      <main>
+        <h1>Library</h1>
+        <p role="status">{text}</p>
+      </main>
+    );
+  }
   if (result.kind === "message")
     return (
       <main>

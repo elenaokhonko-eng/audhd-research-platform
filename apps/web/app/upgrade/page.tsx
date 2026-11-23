@@ -9,6 +9,7 @@ import { upgradeView } from "@/lib/upgrade";
 import { Footer } from "../components/Footer";
 import { Header } from "../components/Header";
 import { CheckAgain } from "./CheckAgain";
+import { SubscribeView } from "./UpgradeViews";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Upgrade", robots: { index: false } };
@@ -102,27 +103,7 @@ export default async function Page() {
 
   return (
     <Shell>
-      <h1>Get full access.</h1>
-      {view.offer ? (
-        <div className="promotion-offer">
-          <p>
-            <strong>{view.offer.badge}</strong>
-          </p>
-          <h2>{view.offer.headline}</h2>
-          <p>{view.offer.body}</p>
-          {view.offer.ends ? <p>Offer ends {view.offer.ends}.</p> : null}
-        </div>
-      ) : null}
-      {view.url ? (
-        <p>
-          <a aria-describedby="new-tab-note" className="button button-primary" href={view.url} rel="noreferrer" target="_blank">
-            Subscribe on Substack
-          </a>{" "}
-          <span id="new-tab-note">Opens in a new tab.</span>
-        </p>
-      ) : null}
-      <p>Subscriptions are sold and billed by Substack. When you have subscribed, come back and press Check again.</p>
-      <CheckAgain />
+      <SubscribeView view={view} />
     </Shell>
   );
 }

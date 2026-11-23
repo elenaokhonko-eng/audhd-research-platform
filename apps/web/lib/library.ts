@@ -14,13 +14,48 @@ export const SKU_PATTERN = /^[a-z0-9][a-z0-9-]{1,58}[a-z0-9]$/;
 
 export const CANNOT_LOAD = "The library cannot be loaded right now. Please try again in a minute.";
 
-export type CardAction = { kind: "download" } | { kind: "buy"; url: string } | { kind: "upgrade" } | { kind: "none" };
+export type CardAction = { kind: "download" } | { kind: "buy"; url: string } | { kind: "upgrade" };
 
-export function cardAction(item: ItemCard): CardAction {
-  if (item.can_open) return { kind: "download" };
-  if (item.buy_url) return { kind: "buy", url: item.buy_url };
-  if (item.access === "paid") return { kind: "upgrade" };
-  return { kind: "none" };
+export function cardActions(item: ItemCard): CardAction[] {
+  if (item.can_open) return [{ kind: "download" }];
+  const actions: CardAction[] = [];
+  if (item.buy_url) actions.push({ kind: "buy", url: item.buy_url });
+  // Full access does not open a purchase_only item, so no upgrade is offered for one.
+  if (item.access === "paid") actions.push({ kind: "upgrade" });
+  return actions;
+}
+
+export type LibraryCounts = { total: number; open: number };
+
+export function libraryCounts(items: ItemCard[]): LibraryCounts {
+  return { total: items.length, open: items.filter((i) => i.can_open).length };
+}
+
+// The overview never fails because of the library: any failure means no count.
+export async function overviewCounts(
+  sessionOf: () => Promise<string>,
+  list: (session: string) => Promise<ItemCard[]>,
+): Promise<LibraryCounts | null> {
+  const session = await sessionOf(); // may redirect (it throws), so it stays outside the try
+  try {
+    return libraryCounts(await list(session));
+  } catch {
+    return null;
+  }
+}
+
+// Words for a well-formed sku the service does not know: the library is off when the list is not found too.
+export async function missingItemText(
+  sessionOf: () => Promise<string>,
+  list: (session: string) => Promise<ItemCard[]>,
+): Promise<string> {
+  const session = await sessionOf(); // may redirect (it throws), so it stays outside the try
+  try {
+    await list(session);
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "not_found") return "The library opens soon.";
+  }
+  return "This item is no longer available.";
 }
 
 const RESEARCH: ItemKind[] = ["meta_review", "evidence_map", "clinician_one_pager"];
