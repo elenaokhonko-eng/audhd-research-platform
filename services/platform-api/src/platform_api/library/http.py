@@ -5,10 +5,12 @@ looked up. A sku in the address that is not a sku answers 404 the same way; the 
 it, because a pattern on the path parameter would answer 422.
 """
 
+import json
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, Request
+from pydantic import BaseModel, ConfigDict, ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from platform_api.admin.public import owner
 from platform_api.entitlements import public as entitlements
@@ -96,14 +98,28 @@ def download(sku: str, member: Member) -> dict[str, Any]:
 
 
 @router.post("/v1/admin/library/publish")
-def publish_items(body: PublishBody, account: Owner) -> PublishReport:
+async def publish_items(request: Request, account: Owner) -> PublishReport:
     """Publishes, or with `dry_run` only checks, the item folders under `staging_prefix`.
 
-    Every call by the owner leaves one audit entry, a refused prefix included.
+    Every call by the owner leaves one audit entry, a malformed body included: the body is read
+    and validated here, inside the audited block, not by FastAPI before the handler runs. The
+    action is `library.dry_run` when the body asked for a dry run, else `library.published`.
     """
     now = clock.utcnow()
     status = 500
+    dry_run = False
     try:
+        try:
+            raw: Any = json.loads(await request.body())
+        except ValueError:
+            raw = None
+        if isinstance(raw, dict):
+            dry_run = raw.get("dry_run") is True
+        try:
+            body = PublishBody.model_validate(raw)
+        except ValidationError as invalid:
+            status = 422
+            raise _invalid_body(invalid) from None
         # Checked here with publish's own pattern, so that no other ValueError reads as a 422.
         if not STAGING_PREFIX.fullmatch(body.staging_prefix):
             status = 422
@@ -112,17 +128,33 @@ def publish_items(body: PublishBody, account: Owner) -> PublishReport:
                 "validation_failed",
                 "staging_prefix: use 1 to 40 lower-case letters, digits and hyphens.",
             )
-        report = publish(body.staging_prefix, body.dry_run, f"owner:{account}", now)
+        report = await run_in_threadpool(
+            publish, body.staging_prefix, body.dry_run, f"owner:{account}", now
+        )
         status = 200
         return report
     finally:
-        entitlements.write_audit(
-            entitlements.AuditEntry(
-                at=now,
-                actor=f"owner:{account}",
-                action="library.dry_run" if body.dry_run else "library.published",
-                subject="admin",
-                reason=None,
-                evidence={"route": "library/publish", "outcome": str(status)},
-            )
+        entry = entitlements.AuditEntry(
+            at=now,
+            actor=f"owner:{account}",
+            action="library.dry_run" if dry_run else "library.published",
+            subject="admin",
+            reason=None,
+            evidence={"route": "library/publish", "outcome": str(status)},
         )
+        await run_in_threadpool(entitlements.write_audit, entry)
+
+
+def _invalid_body(invalid: ValidationError) -> ApiError:
+    """Names the fields, never their values (as shared.http's handler does)."""
+    fields = sorted(
+        {
+            ".".join("*" if "@" in str(p) else str(p) for p in e["loc"]) or "body"
+            for e in invalid.errors()
+        }
+    )
+    return ApiError(
+        422,
+        "validation_failed",
+        "These fields are missing or not valid: " + ", ".join(fields) + ".",
+    )
