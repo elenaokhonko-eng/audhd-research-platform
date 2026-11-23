@@ -7,6 +7,9 @@ from platform_api.commerce.models import RefreshTicket
 from platform_api.commerce.runtime import get_runtime
 
 GAP = timedelta(seconds=60)  # a run completed this recently is fresh; one start per gap
+# A run still `running` blocks a new start for at most this long after it started, so a run
+# that crashed without finishing does not block "Check again" for ever.
+RUNNING_BOUND = timedelta(minutes=30)
 _LIMITS = (("m", 1, timedelta(minutes=1)), ("h", 6, timedelta(hours=1)))
 
 
@@ -52,7 +55,16 @@ def request_refresh(uid: str | None, now: datetime) -> RefreshTicket:
         return ticket("fresh")
     if runtime.jobs is None or not runtime.settings.reconcile_job:
         return ticket("fresh")
+    current = runtime.runs.latest("stripe_reconcile", real_only=True)
+    if (
+        current is not None
+        and current.state == "running"
+        and now - current.started_at < RUNNING_BOUND
+    ):
+        return ticket("already_running")
     if not runtime.runs.acquire_start_slot("stripe_reconcile", now, GAP):
         return ticket("already_running")
+    # A start that raises JobStartError keeps the slot for GAP on purpose, as backoff: the
+    # next requests in that minute answer already_running. Nothing is granted either way.
     runtime.jobs.start(runtime.settings.reconcile_job)
     return ticket("started")

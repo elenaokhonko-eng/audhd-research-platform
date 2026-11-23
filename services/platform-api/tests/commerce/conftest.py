@@ -44,14 +44,24 @@ def com(ent, monkeypatch):
 
 
 @pytest.fixture
-def member_client(com, idn, ent):
-    """Sign-in made possible, then `member_client(name)` -> (client, session header)."""
+def member_client(com, idn, ent, monkeypatch):
+    """Sign-in made possible, then `member_client(name)` -> (client, session header).
+
+    The clock is fixed in the middle of a minute, so that two requests of one test never
+    fall on either side of a minute's edge.
+    """
+    from datetime import timedelta
+
     from fastapi.testclient import TestClient
 
     from platform_api.app import create_app
     from platform_api.settings import Settings
+    from platform_api.shared import clock
     from tests.entitlements.test_campaigns import campaign
+    from tests.fixtures.people import T0
     from tests.identity.test_http_member import member
+
+    monkeypatch.setattr(clock, "utcnow", lambda: T0 + timedelta(seconds=30))
 
     config = ent.store.get_launch_config()
     ent.store.put_launch_config(

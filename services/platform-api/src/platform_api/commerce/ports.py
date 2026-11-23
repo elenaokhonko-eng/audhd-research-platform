@@ -1,3 +1,4 @@
+import threading
 import uuid
 from collections.abc import Iterable, Iterator
 from datetime import datetime, timedelta
@@ -108,13 +109,15 @@ class InMemoryRunStore:
     def __init__(self) -> None:
         self._runs: dict[str, SyncRun] = {}
         self._last_start: dict[RunKind, datetime] = {}
+        self._slot_lock = threading.Lock()
 
     def acquire_start_slot(self, kind: RunKind, now: datetime, gap: timedelta) -> bool:
-        last = self._last_start.get(kind)
-        if last is not None and now - last < gap:
-            return False
-        self._last_start[kind] = now
-        return True
+        with self._slot_lock:  # the read and the write are one step
+            last = self._last_start.get(kind)
+            if last is not None and now - last < gap:
+                return False
+            self._last_start[kind] = now
+            return True
 
     def start(self, kind: RunKind, dry_run: bool, requested_by: RequestedBy, now: datetime) -> str:
         run_id = uuid.uuid4().hex

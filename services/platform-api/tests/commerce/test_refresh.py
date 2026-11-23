@@ -85,3 +85,58 @@ def test_a_job_that_cannot_be_started_answers_503(com, member_client):
     client, cookie = member_client("bo")
     r = client.post("/v1/me/refresh-access", headers=cookie)
     assert r.status_code == 503 and r.json()["error"]["code"] == "unavailable"
+
+
+def test_a_running_reconcile_is_not_started_again(com):
+    com.runs.start("stripe_reconcile", False, "schedule", T0)
+    ticket = commerce.request_refresh("u-bo", T0 + timedelta(minutes=2))
+    assert (ticket.check, com.jobs.started) == ("already_running", [])
+
+
+def test_a_run_left_running_for_over_half_an_hour_no_longer_blocks(com):
+    com.runs.start("stripe_reconcile", False, "schedule", T0)
+    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=31)).check == "started"
+
+
+def test_the_route_refuses_a_caller_without_a_session(com, member_client):
+    client, _ = member_client("bo")
+    r = client.post("/v1/me/refresh-access")
+    assert r.status_code == 401 and r.json()["error"]["code"] == "unauthenticated"
+
+
+def test_the_route_refuses_a_member_before_the_terms(com, member_client):
+    from tests.identity.test_sessions import sign_in
+
+    client, _ = member_client("bo")
+    cookie = {"X-Member-Session": sign_in(client, "ed").json()["session"]["cookie"]}
+    r = client.post("/v1/me/refresh-access", headers=cookie)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "terms_required"
+    assert com.jobs.started == []
+
+
+def test_the_start_slot_is_taken_once_across_threads():
+    import threading
+    import time
+
+    from platform_api.commerce.ports import InMemoryRunStore
+
+    class SlowReads(dict):
+        def get(self, *args):
+            held = super().get(*args)
+            time.sleep(0.01)  # widens the gap between the read and the write
+            return held
+
+    runs, results = InMemoryRunStore(), []
+    runs._last_start = SlowReads()
+    barrier = threading.Barrier(8)
+
+    def take():
+        barrier.wait()
+        results.append(runs.acquire_start_slot("stripe_reconcile", T0, timedelta(seconds=60)))
+
+    threads = [threading.Thread(target=take) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == [False] * 7 + [True]
