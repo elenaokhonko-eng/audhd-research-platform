@@ -39,6 +39,14 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build # type-checks every page
+      - name: The legal texts are in the standalone output
+        run: |
+          for f in terms privacy; do
+            test -f ".next/standalone/content/legal/$f.md" || {
+              echo "::error::.next/standalone/content/legal/$f.md is missing: /terms and /privacy would fail in the image. Keep content/legal in the build's output file tracing (next.config.ts, outputFileTracingIncludes)."
+              exit 1
+            }
+          done
       - name: Smoke test the standalone server
         run: |
           cp -r .next/static .next/standalone/.next/static

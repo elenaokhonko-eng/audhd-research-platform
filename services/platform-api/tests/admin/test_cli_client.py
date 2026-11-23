@@ -161,6 +161,75 @@ def test_the_client_sends_the_token_for_cloud_run_and_for_the_service():
     assert seen == {"serverless": "Bearer tok", "auth": "Bearer tok"}
 
 
+def test_library_publish_prints_one_line_per_item_and_exits_1_on_a_refusal(monkeypatch, capsys):
+    calls = []
+    report = {
+        "dry_run": True,
+        "staging_prefix": "batch-1",
+        "items": [
+            {"sku": "guide-a", "action": "created", "problems": []},
+            {"sku": "guide-b", "action": "refused", "problems": ["no file for ana@example.org"]},
+        ],
+    }
+
+    class Fake:
+        def library_publish(self, staging_prefix, dry_run):
+            calls.append((staging_prefix, dry_run))
+            return report
+
+    monkeypatch.setattr(cli, "admin_client", lambda: Fake())
+    code = cli.main(["library", "publish", "--staging-prefix", "batch-1", "--dry-run"])
+    assert code == 1 and calls == [("batch-1", True)]
+    assert capsys.readouterr().out.splitlines() == [
+        "dry_run: true",
+        "items: 2",
+        "guide-a: created",
+        "guide-b: refused",
+        "  no file for [email]",
+    ]
+
+
+def test_library_publish_exits_0_when_nothing_was_refused(monkeypatch, capsys):
+    calls = []
+
+    def handler(request):
+        calls.append((request.method, request.url.path, request.content.decode()))
+        return httpx.Response(
+            200,
+            json={
+                "dry_run": False,
+                "staging_prefix": "b",
+                "items": [{"sku": "s", "action": "unchanged", "problems": []}],
+            },
+        )
+
+    monkeypatch.setattr(cli, "admin_client", lambda: client(handler))
+    assert cli.main(["library", "publish", "--staging-prefix", "b"]) == 0
+    assert calls == [
+        (
+            "POST",
+            "/v1/admin/library/publish",
+            '{"staging_prefix":"b","dry_run":false}',
+        )
+    ]
+    assert capsys.readouterr().out == "items: 1\ns: unchanged\n"
+
+
+def test_library_publish_says_when_nothing_was_found_and_exits_1(monkeypatch, capsys):
+    class Fake:
+        def library_publish(self, staging_prefix, dry_run):
+            return {"dry_run": True, "staging_prefix": staging_prefix, "items": []}
+
+    monkeypatch.setattr(cli, "admin_client", lambda: Fake())
+    code = cli.main(["library", "publish", "--staging-prefix", "batch-1", "--dry-run"])
+    assert code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "dry_run: true",
+        "items: 0",
+        "nothing found under batch-1/; each item needs its own folder batch-1/<sku>/",
+    ]
+
+
 # Commerce: runs and promotions. Every time is relative to the test clock.
 
 START = T0.isoformat()

@@ -117,7 +117,7 @@ def configure_runtimes(
     key_required: bool,
     firestore_client: "Callable[[], firestore.Client] | None" = None,
 ) -> None:
-    """Set the runtimes of `entitlements`, `identity` and `commerce` for this process.
+    """Set the runtimes of `entitlements`, `identity`, `library` and `commerce` for this process.
 
     In `local`: the in-memory stores and a local contact key. Elsewhere: Firestore, the
     Cloud KMS key named by PLATFORM_CONTACT_KEY, and Identity Platform. When the key is not
@@ -145,6 +145,16 @@ def configure_runtimes(
     from platform_api.identity import runtime as identity_runtime
     from platform_api.identity.provider import IdentityProvider
     from platform_api.identity.store import InMemoryMemberStore, MemberStore
+    from platform_api.library import runtime as library_runtime
+    from platform_api.library.ports import (
+        DownloadLog,
+        FileStore,
+        InMemoryDownloadLog,
+        InMemoryFileStore,
+        InMemoryItemStore,
+        ItemStore,
+    )
+    from platform_api.library.settings import LibrarySettings
     from platform_api.shared.ratelimit import InMemoryRateLimiter, RateLimiter
 
     commerce_settings = CommerceSettings()  # refuses the sandbox marker in prod
@@ -152,12 +162,20 @@ def configure_runtimes(
     key: ContactKey
     members: MemberStore
     limiter: RateLimiter
+    library: library_runtime.Runtime
     shop: commerce_runtime.Runtime
     if settings.env == "local":
         from platform_api.commerce.ports import InMemoryPromotionStore, InMemoryRunStore
 
         store, members, limiter = InMemoryStore(), InMemoryMemberStore(), InMemoryRateLimiter()
         key = LocalContactKey(b"local-only")
+        library = library_runtime.Runtime(
+            items=InMemoryItemStore(),
+            staging=InMemoryFileStore(),
+            files=InMemoryFileStore(),
+            downloads=InMemoryDownloadLog(),
+            bus=bus,
+        )
         shop = commerce_runtime.Runtime(
             settings=commerce_settings,
             stripe=None,
@@ -174,6 +192,11 @@ def configure_runtimes(
         from platform_api.adapters.firestore_members import FirestoreMemberStore
         from platform_api.adapters.firestore_ratelimit import FirestoreRateLimiter
         from platform_api.adapters.kms import KmsContactKey, version_of
+        from platform_api.library.adapters import (
+            BucketFileStore,
+            FirestoreDownloadLog,
+            FirestoreItemStore,
+        )
 
         if key_name:
             version_of(key_name)  # a name that is not a key version stops the start here
@@ -199,6 +222,24 @@ def configure_runtimes(
             if key_name
             else cast(ContactKey, _MissingKey())
         )
+        lib_settings = LibrarySettings()
+        library = library_runtime.Runtime(
+            items=cast(ItemStore, Lazy(lambda: FirestoreItemStore(client()))),
+            staging=cast(
+                FileStore,
+                Lazy(
+                    lambda: BucketFileStore.from_default_credentials(
+                        lib_settings.library_staging_bucket
+                    )
+                ),
+            ),
+            files=cast(
+                FileStore,
+                Lazy(lambda: BucketFileStore.from_default_credentials(lib_settings.library_bucket)),
+            ),
+            downloads=cast(DownloadLog, Lazy(lambda: FirestoreDownloadLog(client()))),
+            bus=bus,
+        )
         from platform_api.commerce import adapters as commerce_adapters
 
         shop = commerce_adapters.build_runtime(
@@ -215,6 +256,7 @@ def configure_runtimes(
         return FirebaseIdentityProvider(app)
 
     entitlements_runtime.set_runtime(entitlements_runtime.Runtime(store, key, bus))
+    library_runtime.set_runtime(library)
     identity_runtime.set_runtime(
         identity_runtime.Runtime(
             members=members,

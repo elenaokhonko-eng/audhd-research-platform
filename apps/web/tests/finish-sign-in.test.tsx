@@ -10,7 +10,7 @@ import { SessionError } from "@/lib/identity/session-client";
 const LINK = "https://dev.example.org/auth/finish?c=founding&oobCode=ok&mode=signIn";
 const setup = (href: string, postSession = vi.fn().mockResolvedValue({ next: "/welcome" })) => {
   const navigate = vi.fn();
-  render(<FinishSignIn identity={{ kind: "fake" }} href={href} authClient={createFakeAuthClient()} postSession={postSession} navigate={navigate} />);
+  render(<FinishSignIn identity={{ kind: "fake", googleEnabled: true }} href={href} authClient={createFakeAuthClient()} postSession={postSession} navigate={navigate} />);
   return { postSession, navigate, user: userEvent.setup() };
 };
 
@@ -55,7 +55,7 @@ describe("FinishSignIn", () => {
     const { AuthError } = await import("@/lib/identity/auth-client");
     authClient.completeEmailLink = vi.fn().mockRejectedValue(new AuthError("invalid_email"));
     const user = userEvent.setup();
-    render(<FinishSignIn identity={{ kind: "fake" }} href={LINK} authClient={authClient} postSession={vi.fn()} navigate={vi.fn()} />);
+    render(<FinishSignIn identity={{ kind: "fake", googleEnabled: true }} href={LINK} authClient={authClient} postSession={vi.fn()} navigate={vi.fn()} />);
     await user.type(screen.getByLabelText("Email address"), "bo@example.org");
     await user.click(screen.getByRole("button", { name: "Finish signing in" }));
     expect(await screen.findByText("Check the email address.")).toBeInTheDocument();
@@ -68,7 +68,7 @@ describe("FinishSignIn", () => {
     const { AuthError } = await import("@/lib/identity/auth-client");
     authClient.completeEmailLink = vi.fn().mockRejectedValue(new AuthError("network"));
     const user = userEvent.setup();
-    render(<FinishSignIn identity={{ kind: "fake" }} href={LINK} authClient={authClient} postSession={vi.fn()} navigate={vi.fn()} />);
+    render(<FinishSignIn identity={{ kind: "fake", googleEnabled: true }} href={LINK} authClient={authClient} postSession={vi.fn()} navigate={vi.fn()} />);
     await user.type(screen.getByLabelText("Email address"), "bo@example.org");
     await user.click(screen.getByRole("button", { name: "Finish signing in" }));
     expect(await screen.findByText("Something went wrong. Try again.")).toBeInTheDocument();
@@ -135,7 +135,7 @@ describe("FinishSignIn", () => {
     const navigate = vi.fn();
     render(
       <StrictMode>
-        <FinishSignIn identity={{ kind: "fake" }} href={LINK} authClient={authClient} postSession={postSession} navigate={navigate} />
+        <FinishSignIn identity={{ kind: "fake", googleEnabled: true }} href={LINK} authClient={authClient} postSession={postSession} navigate={navigate} />
       </StrictMode>,
     );
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
@@ -174,7 +174,7 @@ describe("FinishSignIn", () => {
     const spy = vi.spyOn(window.history, "replaceState");
     const navigate = vi.fn();
     const postSession = vi.fn().mockResolvedValue({ next: "/welcome" });
-    render(<FinishSignIn identity={{ kind: "fake" }} authClient={createFakeAuthClient()} postSession={postSession} navigate={navigate} />);
+    render(<FinishSignIn identity={{ kind: "fake", googleEnabled: true }} authClient={createFakeAuthClient()} postSession={postSession} navigate={navigate} />);
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
     expect(postSession).toHaveBeenCalledWith("fake-token:ana", "founding");
     expect(spy).toHaveBeenCalledWith(null, "", "/auth/finish?c=founding");
@@ -183,7 +183,7 @@ describe("FinishSignIn", () => {
   });
 
   it("shows nothing in the status region before the address is known", () => {
-    const html = renderToString(<FinishSignIn identity={{ kind: "fake" }} authClient={createFakeAuthClient()} />);
+    const html = renderToString(<FinishSignIn identity={{ kind: "fake", googleEnabled: true }} authClient={createFakeAuthClient()} />);
     expect(html).not.toContain("Signing you in.");
   });
 });

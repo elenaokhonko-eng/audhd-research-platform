@@ -327,7 +327,7 @@ def read_secret(name: str, *, client: Any = None) -> str:
 
 
 def _storage_client() -> Any:
-    from google.cloud import storage  # type: ignore[attr-defined]
+    import google.cloud.storage as storage  # type: ignore[import-untyped]  # ships no types
 
     return storage.Client()
 

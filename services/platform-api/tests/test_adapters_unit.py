@@ -190,6 +190,9 @@ def _reload_main(monkeypatch):
     monkeypatch.setattr(ent_runtime, "_runtime", None)
     monkeypatch.setattr(id_runtime, "_runtime", None)
     monkeypatch.setattr(com_runtime, "_runtime", None)
+    from platform_api.library import runtime as lib_runtime
+
+    monkeypatch.setattr(lib_runtime, "_runtime", None)
     import platform_api.main as main
 
     return importlib.reload(main)
@@ -253,6 +256,50 @@ def test_in_local_the_runtimes_are_in_memory(monkeypatch, restore_root_logger):
     assert isinstance(ent_runtime().key, LocalContactKey)
     assert isinstance(id_runtime().members, InMemoryMemberStore)
     assert isinstance(id_runtime().limiter, InMemoryRateLimiter)
+
+
+def test_in_local_the_library_runtime_is_in_memory_and_the_shelf_reads(
+    monkeypatch, restore_root_logger
+):
+    monkeypatch.setenv("PLATFORM_ENV", "local")
+    _reload_main(monkeypatch)
+    from platform_api.entitlements.models import Access
+    from platform_api.library import public as library
+    from platform_api.library.ports import InMemoryDownloadLog, InMemoryFileStore, InMemoryItemStore
+    from platform_api.library.runtime import get_runtime
+
+    runtime = get_runtime()
+    assert isinstance(runtime.items, InMemoryItemStore)
+    assert isinstance(runtime.staging, InMemoryFileStore)
+    assert isinstance(runtime.files, InMemoryFileStore)
+    assert runtime.staging is not runtime.files
+    assert isinstance(runtime.downloads, InMemoryDownloadLog)
+    access = Access(tier="free", sections=[], items=[], reasons=[], computed_at=T0)
+    assert library.catalogue(access) == []
+
+
+def test_outside_local_the_library_runtime_makes_no_client_until_used(
+    monkeypatch, restore_root_logger
+):
+    from google.cloud import firestore
+
+    made: list[str] = []
+
+    def refuse(*a, **k):
+        made.append("firestore")
+        raise RuntimeError("no client in this test")
+
+    monkeypatch.setattr(firestore, "Client", refuse)
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    monkeypatch.setenv("PLATFORM_CONTACT_KEY", NAME)
+    _reload_main(monkeypatch)
+    from platform_api.library.runtime import get_runtime
+
+    runtime = get_runtime()
+    assert made == []
+    with pytest.raises(RuntimeError, match="no client"):
+        runtime.items.list_all()
+    assert made == ["firestore"]
 
 
 def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):

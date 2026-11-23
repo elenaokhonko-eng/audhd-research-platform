@@ -202,8 +202,12 @@ the job platform-selfcheck, their service accounts and permissions; and the memb
 the sign-in configuration (Identity Platform), the browser API key, the contact key (Cloud KMS),
 the buckets library, library-staging and roster-inbox, and the DNS records of the sending
 domain ${DOMAIN} (SPF, firebase verification, two DKIM, DMARC; an SPF or DMARC record you
-imported shows as an in-place update). web-prod is UPDATED in place: it gets its sign-in
-settings as environment variables. Nothing for web-prod, ${DOMAIN} or www is destroyed.
+imported shows as an in-place update). It also creates the second wave's pieces: the jobs
+stripe-reconcile and roster-import with their service accounts, the secret stripe-read-key
+(the container only, no key in it), the schedule of the reconcile (paused), two custom roles,
+the Firestore indexes and expiry policies, and the alert policies with their log metrics.
+web-prod is UPDATED in place: it gets its sign-in settings as environment variables.
+Nothing for web-prod, ${DOMAIN} or www is destroyed.
 Read the plan, then type yes at Terraform's prompt to apply it (anything else cancels).
 EOF
 ensure_pubsub_agent "$PROD_PROJECT"
@@ -245,8 +249,11 @@ The plan below should CREATE the dev project's resources: APIs, the image regist
 the GitHub identity for dev deploys, Firestore, the Pub/Sub topics, platform-api,
 platform-hooks, platform-selfcheck and (if domains are mapped) dev.${DOMAIN}; and the member
 pieces: the sign-in configuration, the browser API key, the contact key, the three buckets
-and the DNS records of the sending domain auth.dev.${DOMAIN}. If web-dev exists already (an
-earlier run), it is UPDATED in place with its sign-in settings instead of created.
+and the DNS records of the sending domain auth.dev.${DOMAIN}; and the second wave's pieces:
+the jobs stripe-reconcile and roster-import with their service accounts, the secret
+stripe-read-key (no key in it), the paused schedule, two custom roles, the Firestore indexes
+and expiry policies, and the alert policies. If web-dev exists already (an earlier run), it
+is UPDATED in place with its sign-in settings instead of created. Nothing is destroyed.
 Type yes at Terraform's prompt to apply it.
 EOF
 ensure_pubsub_agent "$DEV_PROJECT"

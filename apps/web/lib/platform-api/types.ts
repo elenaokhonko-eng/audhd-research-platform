@@ -69,3 +69,57 @@ export interface SessionResult {
   access: Access;
   join: Join;
 }
+
+export interface Route {
+  kind: "substack" | "platform_only" | "substack_change_plan";
+  available: boolean;
+  url: string | null;
+}
+
+export interface Promotion {
+  id: string;
+  channel: string;
+  plan_interval: "month" | "year" | null;
+  starts_at: string;
+  ends_at: string;
+  url: string | null;
+  display: { badge: string; headline: string; body: string };
+}
+
+export interface UpgradeOptions {
+  routes: Route[];
+  promotion: Promotion | null;
+}
+
+export interface RefreshTicket {
+  check: "fresh" | "started" | "already_running";
+  last_completed_at: string | null;
+  next_allowed_at: string;
+}
+
+export type ItemKind = "meta_review" | "evidence_map" | "clinician_one_pager" | "guide" | "worksheet";
+
+export interface ItemCard {
+  sku: string;
+  title: string;
+  kind: ItemKind;
+  abstract: string;
+  version: string;
+  pages: number;
+  access: "paid" | "free_members" | "purchase_only";
+  can_open: boolean;
+  buy_url: string | null;
+}
+
+export interface ItemDetail {
+  item: ItemCard;
+  description: string;
+  citation: string | null;
+}
+
+export interface SignedLink {
+  url: string;
+  expires_at: string;
+}
+
+export type ErrorReason = "paid_required" | "purchase_required";

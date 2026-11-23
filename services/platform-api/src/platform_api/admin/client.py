@@ -106,6 +106,14 @@ class AdminClient:
         requests: list[dict[str, Any]] = self._call("GET", "/v1/admin/support-requests")["requests"]
         return requests
 
+    def library_publish(self, staging_prefix: str, dry_run: bool) -> dict[str, Any]:
+        report: dict[str, Any] = self._call(
+            "POST",
+            "/v1/admin/library/publish",
+            {"staging_prefix": staging_prefix, "dry_run": dry_run},
+        )
+        return report
+
     def sync_runs(self, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
         query: dict[str, Any] = {"limit": limit} if kind is None else {"kind": kind, "limit": limit}
         runs: list[dict[str, Any]] = self._call("GET", "/v1/admin/sync-runs?" + urlencode(query))[
