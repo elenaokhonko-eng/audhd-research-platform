@@ -208,3 +208,108 @@ def test_a_grant_names_the_paid_tier_or_a_real_item(ent, name):
 def test_a_grant_may_name_an_item(ent):
     cid = seeded(ent, "di")
     assert ent_api.grant(cid, "item:sample", None, "r", "owner:acc-1", T0)
+
+
+def test_a_claim_records_the_time_of_registration_as_a_datetime(ent):
+    from datetime import datetime
+
+    cid = seeded(ent, "ana", "stripe_year")
+    ent_api.claim_for_member("u-ana", cid)
+    registered = ent.store.get_contact(cid).channels["platform"]["registered_at"]
+    assert isinstance(registered, datetime) and registered == T0
+
+
+class _Interleaving:
+    """Runs another writer's change inside the store's merge, just before the caller's own."""
+
+    def __init__(self, store, other):
+        self._store, self._other, self._done = store, other, False
+
+    def __getattr__(self, name):
+        return getattr(self._store, name)
+
+    def merge_contact(self, contact_id, change):
+        if not self._done:
+            self._done = True
+            self._store.merge_contact(contact_id, self._other)
+        return self._store.merge_contact(contact_id, change)
+
+
+def test_an_upsert_keeps_a_channel_another_writer_added_meanwhile(ent):
+    cid = ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch())
+
+    def reconcile_adds_stripe(held):
+        return held.model_copy(update={"channels": {**held.channels, "stripe": {"x": True}}})
+
+    ent.store = _Interleaving(ent.store, reconcile_adds_stripe)
+    ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch(platform={"member_uid": "u-ana"}))
+    channels = ent.store.get_contact(cid).channels
+    assert channels["stripe"] == {"x": True} and channels["platform"]["member_uid"] == "u-ana"
+
+
+def test_two_members_claiming_one_contact_at_once_leave_one_owner(ent):
+    cid = seeded(ent, "ana", "stripe_year")
+
+    def other_claims_first(held):
+        platform = {**held.channels.get("platform", {}), "member_uid": "u-other"}
+        return held.model_copy(update={"channels": {**held.channels, "platform": platform}})
+
+    ent.store = _Interleaving(ent.store, other_claims_first)
+    assert ent_api.claim_for_member("u-ana", cid) == []
+    assert ent.store.get_contact(cid).channels["platform"]["member_uid"] == "u-other"
+    assert ent.store.entitlements_for_member("u-ana") == []
+
+
+def test_a_record_a_run_ends_during_a_claim_stays_ended(ent, monkeypatch):
+    """The run lands after the claim's ownership step and before its records are written."""
+    from tests.entitlements.test_reconcile import run, state
+
+    run(ent, [state("bo", "sub_b")])
+    cid = ent_api.contact_id_for(EMAIL["bo"])
+    store = ent.store
+    merge = store.merge_contact
+    armed, ended = [], []
+
+    def end_bo() -> None:
+        if armed and not ended:
+            ended.append(True)
+            run(ent, [state("bo", "sub_b", status="expired")], run_id="r2")
+
+    def ownership(contact_id, change):
+        held = merge(contact_id, change)
+        armed.append(True)
+        return held
+
+    def after_read(method):
+        def wrapped(*args):
+            found = method(*args)
+            end_bo()  # the read is done; the run ends the record before the claim writes
+            return found
+
+        return wrapped
+
+    def before(method):
+        def wrapped(*args):
+            end_bo()  # the latest moment before a one-step claim
+            return method(*args)
+
+        return wrapped
+
+    monkeypatch.setattr(store, "merge_contact", ownership)
+    monkeypatch.setattr(
+        store, "entitlements_for_contacts", after_read(store.entitlements_for_contacts)
+    )
+    if hasattr(store, "claim_records"):
+        monkeypatch.setattr(store, "claim_records", before(store.claim_records))
+
+    claimed = ent_api.claim_for_member("u-bo", cid)
+
+    assert ended
+    [held] = [e for e in store.entitlements_by_source("substack_stripe") if e.contact_id == cid]
+    assert (held.status, held.member_uid) == ("expired", "u-bo")
+    assert claimed == [held.entitlement_id]
+    assert ent_api.access_for("u-bo", T0).tier == "free"
+
+
+def test_the_tier_announcement_is_part_of_the_public_port():
+    assert "announce_tier_change" in ent_api.__all__ and callable(ent_api.announce_tier_change)

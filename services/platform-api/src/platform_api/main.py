@@ -1,9 +1,10 @@
 from datetime import datetime
 from functools import cache
 
+from platform_api.adapters import configure_runtimes
 from platform_api.app import Deps, create_app
 from platform_api.settings import Settings
-from platform_api.shared.auth import push_identity_from_token
+from platform_api.shared.auth import google_account_from_token, push_identity_from_token
 from platform_api.shared.bus import EventBus
 from platform_api.shared.events import DomainEvent
 from platform_api.shared.handlers import HandlerRegistry
@@ -47,6 +48,10 @@ class _LazyInbox:
         _inbox().record(event_id, event_type=event_type, received_at=received_at)
 
 
+# Every runtime is set before the app exists. Outside `local` a missing PLATFORM_CONTACT_KEY
+# stops the api service here; hooks starts without it. No cloud client is made until used.
+configure_runtimes(_settings, _LazyBus(), key_required=_settings.app_mode == "api")
+
 app = create_app(
     _settings,
     Deps(
@@ -56,5 +61,6 @@ app = create_app(
         verify_push=lambda t: push_identity_from_token(
             t, allowed_email=_settings.push_service_account
         ),
+        verify_owner=google_account_from_token,
     ),
 )

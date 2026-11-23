@@ -239,10 +239,12 @@ def test_the_launch_switches_refuse_unknown_keys_and_audit_a_change(ent):
 
 
 def test_writing_campaigns_again_keeps_their_counts(ent):
-    ent.store.put_campaigns([campaign(counts={"arrivals": 4})])
+    default = campaign("members", audience="public", grant=None, is_default=True)
+    ent.store.put_campaigns([campaign(counts={"arrivals": 4}), default])
     assert ent_api.put_campaigns([campaign(), campaign("spring")], "owner:acc-1") == 2
     assert {c.slug: c.counts for c in ent_api.list_campaigns()} == {
         "founding": {"arrivals": 4},
+        "members": {},
         "spring": {},
     }
 
@@ -284,3 +286,25 @@ def test_a_slug_outside_the_pattern_is_never_looked_up(ent, slug):
     if slug != "..":  # ".." is folded into the path by the client before it is sent
         body = TestClient(create_app(Settings())).get(f"/v1/public/campaigns/{slug}").json()
         assert (body["slug"], body["audience"]) == (None, "public") and asked == []
+
+
+def test_put_campaigns_refuses_a_repeated_slug_and_a_second_default(ent):
+    default = campaign("members", audience="public", grant=None, is_default=True)
+    with pytest.raises(ValueError):
+        ent_api.put_campaigns([campaign(), campaign()], "owner:acc-1")
+    ent_api.put_campaigns([campaign(), default], "owner:acc-1")
+    with pytest.raises(ValueError):  # "members" stays stored and stays the default
+        ent_api.put_campaigns([campaign("other", is_default=True)], "owner:acc-1")
+    assert [c.slug for c in ent_api.list_campaigns() if c.is_default] == ["members"]
+    assert ent.store.get_campaign("other") is None
+
+
+def test_put_campaigns_refuses_a_result_with_no_default(ent):
+    with pytest.raises(ValueError):
+        ent_api.put_campaigns([campaign()], "owner:acc-1")
+    assert ent_api.list_campaigns() == []
+    default = campaign("members", audience="public", grant=None, is_default=True)
+    ent_api.put_campaigns([campaign(), default], "owner:acc-1")
+    with pytest.raises(ValueError):  # the file would turn the only default off
+        ent_api.put_campaigns([default.model_copy(update={"is_default": False})], "owner:acc-1")
+    assert ent.store.get_campaign("members").is_default

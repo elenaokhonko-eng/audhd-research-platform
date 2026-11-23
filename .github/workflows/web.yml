@@ -45,10 +45,19 @@ jobs:
           cp -r public .next/standalone/public
           (cd .next/standalone && PORT=8080 HOSTNAME=127.0.0.1 SITE_ENV=dev node server.js &)
           sleep 3
-          for p in / /research-agenda /evidence-library /clinician-resources /methods /about-elena-okhonko /member /ask /api/healthz; do
+          for p in / /research-agenda /evidence-library /clinician-resources /methods /about-elena-okhonko /ask /api/healthz; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080$p")
             echo "$p $code"; test "$code" = 200
           done
+          # The workspace is behind a server guard: without a session it answers 200 (before the
+          # guard existed) or a redirect to the join page (after). Anything else is a failure.
+          out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://127.0.0.1:8080/member")
+          echo "/member $out"
+          case "$out" in
+            "200 "*) ;;
+            "307 "*/join*) ;;
+            *) exit 1 ;;
+          esac
 
   # Only integration/stage-1 deploys to dev, so the daily promotion to main does not deploy a
   # second time. A manual run on that branch redeploys without a new commit. DEPLOY_DEV_ENABLED
