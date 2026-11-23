@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 
 class StripeSubscription(BaseModel):
@@ -46,3 +46,68 @@ class SyncRun(BaseModel):
     counts: dict[str, int]
     started_at: datetime
     finished_at: datetime | None
+
+
+class RefreshTicket(BaseModel):
+    """The answer to "Check again". Ids only; never an address."""
+
+    check: Literal["fresh", "started", "already_running"]
+    last_completed_at: datetime | None
+    next_allowed_at: datetime
+
+
+Audience = Literal["guests", "free_members", "paid_members"]
+
+
+class Promotion(BaseModel):
+    """The stored record (contracts section 4), written from the owner's private file.
+
+    `display` and `substack_offer_url` are the owner's words and link; `counts` is written
+    only by `count_once`, never from the file.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    channel: Literal["substack_offer", "platform_checkout"]
+    audience: list[Audience]
+    plan_interval: Literal["month", "year"] | None
+    starts_at: AwareDatetime
+    ends_at: AwareDatetime
+    substack_offer_url: str | None
+    display: dict[str, str]
+    counts: dict[str, int] = Field(default_factory=dict)  # upgrades_in_window
+    updated_at: AwareDatetime | None = None
+    updated_by: str | None = None
+
+    @model_validator(mode="after")
+    def _sound(self) -> Self:
+        if self.starts_at >= self.ends_at:
+            raise ValueError("a promotion must end after it starts")
+        url = self.substack_offer_url
+        if self.channel == "substack_offer" and url is not None and not url.startswith("https://"):
+            raise ValueError("a Substack offer link starts with https://")
+        return self
+
+
+class PromotionView(BaseModel):
+    """What a reader sees (contracts section 2). Never the counts."""
+
+    id: str
+    channel: Literal["substack_offer", "platform_checkout"]
+    plan_interval: Literal["month", "year"] | None
+    starts_at: datetime
+    ends_at: datetime
+    url: str | None
+    display: dict[str, str]
+
+
+class Route(BaseModel):
+    kind: Literal["substack", "platform_only", "substack_change_plan"]
+    available: bool
+    url: str | None
+
+
+class UpgradeOptions(BaseModel):
+    routes: list[Route]
+    promotion: PromotionView | None
