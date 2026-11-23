@@ -53,6 +53,7 @@ Admin routes (called by `platform-cli`):
 | `PUT /v1/admin/campaigns` · `PUT /v1/admin/promotions` | The validated contents of the configuration file | `{written: <n>}` |
 | `PUT /v1/admin/launch` | `{join_open, library_open, promotions_open}` (any subset) | The stored switches |
 | `GET /v1/admin/launch/report` | – | Counts per campaign and promotion |
+| `GET /v1/admin/promotions` | – | `{promotions: [{id, channel, starts_at, ends_at, counts}]}`: the stored promotions with their counts, for `platform-cli promo` and the launch report. Audited as `admin.read` |
 | `GET /v1/admin/support-requests` | – | `{requests: [...]}` with `member_uid`, `kind`, `note`, `created_at` |
 | `POST /v1/admin/library/publish` | `{staging_prefix, dry_run}` | `PublishReport` |
 
