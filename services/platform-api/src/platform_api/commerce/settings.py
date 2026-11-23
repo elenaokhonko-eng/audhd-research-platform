@@ -9,7 +9,8 @@ Grant = Literal["tier:paid", "status:substack_paid"]
 class CommerceSettings(BaseSettings):
     """Settings of the commerce lane, read from PLATFORM_* environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="PLATFORM_")
+    # A refused setting's message names the rule, never the values: some identify accounts.
+    model_config = SettingsConfigDict(env_prefix="PLATFORM_", hide_input_in_errors=True)
 
     env: Literal["local", "dev", "prod"] = "local"
     stripe_substack_application: str = ""

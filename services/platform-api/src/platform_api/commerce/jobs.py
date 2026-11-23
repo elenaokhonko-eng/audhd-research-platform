@@ -23,7 +23,8 @@ A run's `finished_at` is the time it really finished: the run store the job hand
 commerce records the later of the run's `now` and the clock at that moment.
 
 Only `stripe-reconcile` reads the Stripe key, from the Secret Manager name in
-`PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client.
+`PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client; a job uses the
+bus and the Firestore client `platform-cli job` made (`use_clients`), never its own.
 """
 
 import json
@@ -87,15 +88,21 @@ def _job_environment() -> tuple[bool, RequestedBy]:
     return _DRY_RUN[flag], requested_by
 
 
-def _clients(settings: Settings) -> "tuple[EventBus, Any]":
-    """The bus and the Firestore client of the job's project."""
-    from google.cloud import firestore
-    from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
+_provided: "tuple[EventBus, Any] | None" = None
 
-    from platform_api.shared.bus import PubSubBus
 
-    bus = PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
-    return bus, firestore.Client(project=settings.gcp_project)
+def use_clients(bus: "EventBus", firestore_client: Any) -> None:
+    """The bus and the Firestore client the process has already made (`platform-cli job`
+    sets them before a job runs), so that a job makes no second client."""
+    global _provided
+    _provided = (bus, firestore_client)
+
+
+def _clients() -> "tuple[EventBus, Any]":
+    """The bus and the Firestore client of the job's project, as `use_clients` set them."""
+    if _provided is None:
+        raise RuntimeError("the job's clients were not set: run it as 'platform-cli job'")
+    return _provided
 
 
 class _WatchedRuns:
@@ -140,7 +147,7 @@ def _set_up(settings: Settings, *, stripe: bool) -> tuple[bool, RequestedBy, _Wa
         if not name:
             raise SettingRefused
         key = adapters.read_secret(name)
-    bus, client = _clients(settings)
+    bus, client = _clients()
     runtime = adapters.build_runtime(
         commerce_settings, bus, client, stripe_key=key, limiter=InMemoryRateLimiter()
     )

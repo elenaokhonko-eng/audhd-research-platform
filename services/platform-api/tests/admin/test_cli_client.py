@@ -1,8 +1,11 @@
+from datetime import datetime, timedelta
+
 import httpx
 import pytest
 
 from platform_api import cli
 from platform_api.admin.client import AdminClient, AdminError
+from tests.fixtures.people import T0
 
 
 def client(handler):
@@ -225,3 +228,221 @@ def test_library_publish_says_when_nothing_was_found_and_exits_1(monkeypatch, ca
         "items: 0",
         "nothing found under batch-1/; each item needs its own folder batch-1/<sku>/",
     ]
+
+
+# Commerce: runs and promotions. Every time is relative to the test clock.
+
+START = T0.isoformat()
+END = (T0 + timedelta(minutes=1)).isoformat()
+WEEK = (T0 + timedelta(days=7)).isoformat()
+
+
+def _run(kind="stripe_reconcile", **counts):
+    return {
+        "run_id": "r1",
+        "kind": kind,
+        "dry_run": False,
+        "state": "completed",
+        "guard": "passed",
+        "requested_by": "schedule",
+        "counts": counts,
+        "started_at": START,
+        "finished_at": END,
+    }
+
+
+def test_sync_runs_asks_for_a_kind_and_a_limit():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, dict(request.url.params)))
+        return httpx.Response(200, json={"runs": [_run()]})
+
+    assert client(handler).sync_runs("roster_import", 5) == [_run()]
+    assert client(handler).sync_runs() == [_run()]
+    assert seen == [
+        ("GET", "/v1/admin/sync-runs", {"kind": "roster_import", "limit": "5"}),
+        ("GET", "/v1/admin/sync-runs", {"limit": "20"}),
+    ]
+
+
+def test_promotions_are_put_and_listed():
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, request.content.decode()))
+        if request.method == "PUT":
+            return httpx.Response(200, json={"written": 1})
+        return httpx.Response(200, json={"promotions": [{"id": "p1"}]})
+
+    assert client(handler).promotions_put([{"id": "p1"}]) == 1
+    assert client(handler).promotions_list() == [{"id": "p1"}]
+    assert seen == [
+        ("PUT", "/v1/admin/promotions", '{"promotions":[{"id":"p1"}]}'),
+        ("GET", "/v1/admin/promotions", ""),
+    ]
+
+
+def _cli_with(monkeypatch, routes):
+    sent = []
+
+    def handler(request):
+        sent.append((request.method, request.url.path, request.url.params, request.content))
+        return httpx.Response(200, json=routes[(request.method, request.url.path)])
+
+    monkeypatch.setattr(cli, "admin_client", lambda: client(handler))
+    return sent
+
+
+def test_runs_show_prints_one_line_per_run(monkeypatch, capsys):
+    reconcile = _run(created=2, updated=0, ended=1, moved=0, unchanged=7, unseen=3, seen=10)
+    roster = {**_run("roster_import", no_file=1), "dry_run": True, "state": "failed"}
+    roster["guard"] = None
+    sent = _cli_with(monkeypatch, {("GET", "/v1/admin/sync-runs"): {"runs": [reconcile, roster]}})
+    assert cli.main(["runs", "show", "--kind", "stripe_reconcile", "--limit", "2"]) == 0
+    assert dict(sent[0][2]) == {"kind": "stripe_reconcile", "limit": "2"}
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    first, second = lines
+    assert first.startswith("run: stripe_reconcile real completed guard=passed")
+    assert f"started={START} finished={END}" in first
+    assert "created=2 updated=0 ended=1 moved=0 unchanged=7 unseen=3 seen=10" in first
+    assert second.startswith("run: roster_import dry_run failed guard=none")
+    assert second.endswith("created=0 updated=0 ended=0 moved=0 unchanged=0 unseen=0 no_file=1")
+
+
+def test_runs_show_refuses_an_unknown_kind(monkeypatch, capsys):
+    _cli_with(monkeypatch, {})
+    with pytest.raises(SystemExit):
+        cli.main(["runs", "show", "--kind", "everything"])
+
+
+def _promotion(**changes):
+    start = T0 + timedelta(days=1)
+    body = {
+        "id": "offer-1",
+        "channel": "substack_offer",
+        "audience": ["guests"],
+        "plan_interval": "year",
+        "starts_at": start,
+        "ends_at": start + timedelta(days=7),
+        "substack_offer_url": "https://example.org/offer",
+        "display": {"title": "An offer"},
+    }
+    return {**body, **changes}
+
+
+def _promo_file(tmp_path, promotions):
+    import yaml
+
+    path = tmp_path / "promotions.yaml"
+    path.write_text(yaml.safe_dump({"promotions": promotions}))
+    return str(path)
+
+
+def test_promo_apply_validates_then_writes(monkeypatch, capsys, tmp_path):
+    import json
+
+    sent = _cli_with(monkeypatch, {("PUT", "/v1/admin/promotions"): {"written": 1}})
+    assert cli.main(["promo", "apply", "--file", _promo_file(tmp_path, [_promotion()])]) == 0
+    [(method, path, _, content)] = sent
+    body = json.loads(content)
+    assert (method, path) == ("PUT", "/v1/admin/promotions")
+    [sent_promotion] = body["promotions"]
+    assert sent_promotion["id"] == "offer-1" and "counts" not in sent_promotion
+    assert datetime.fromisoformat(sent_promotion["starts_at"]) == T0 + timedelta(days=1)
+    assert capsys.readouterr().out == "written: 1\n"
+
+
+@pytest.mark.parametrize(
+    "promotions",
+    [
+        [_promotion(channel="elsewhere")],
+        [_promotion(id="a:b")],
+        [_promotion(ends_at=_promotion()["starts_at"])],
+        [_promotion(extra="no")],
+        "not a list",
+    ],
+)
+def test_promo_apply_refuses_a_file_that_does_not_validate_and_sends_nothing(
+    monkeypatch, capsys, tmp_path, promotions
+):
+    sent = _cli_with(monkeypatch, {})
+    assert cli.main(["promo", "apply", "--file", _promo_file(tmp_path, promotions)]) == 1
+    assert sent == [] and capsys.readouterr().err.strip()
+
+
+def test_promo_apply_says_when_the_file_cannot_be_read(monkeypatch, capsys, tmp_path):
+    _cli_with(monkeypatch, {})
+    assert cli.main(["promo", "apply", "--file", str(tmp_path / "missing.yaml")]) == 1
+    assert "YAML" in capsys.readouterr().err
+
+
+def test_launch_report_also_prints_each_promotion(monkeypatch, capsys):
+    promotion = {
+        "id": "offer-1",
+        "channel": "substack_offer",
+        "starts_at": START,
+        "ends_at": WEEK,
+        "counts": {"upgrades_in_window": 4},
+    }
+    _cli_with(
+        monkeypatch,
+        {
+            ("GET", "/v1/admin/launch/report"): {"campaigns": [], "members": 3},
+            ("GET", "/v1/admin/promotions"): {
+                "promotions": [promotion, {**promotion, "id": "o2", "counts": {}}]
+            },
+        },
+    )
+    assert cli.main(["launch", "report"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert "members: 3" in out
+    assert (
+        f"promotion: offer-1 channel=substack_offer window={START}/{WEEK} upgrades_in_window=4"
+    ) in out
+    assert any(
+        line.startswith("promotion: o2 ") and line.endswith("upgrades_in_window=0") for line in out
+    )
+
+
+@pytest.mark.parametrize("limit", ["0", "21", "-1", "many"])
+def test_runs_show_takes_a_limit_from_1_to_20(monkeypatch, limit):
+    _cli_with(monkeypatch, {})
+    with pytest.raises(SystemExit):
+        cli.main(["runs", "show", "--limit", limit])
+
+
+def test_runs_show_accepts_the_largest_limit(monkeypatch):
+    sent = _cli_with(monkeypatch, {("GET", "/v1/admin/sync-runs"): {"runs": []}})
+    assert cli.main(["runs", "show", "--limit", "20"]) == 0
+    assert dict(sent[0][2]) == {"limit": "20"}
+
+
+@pytest.mark.parametrize(
+    "field", [{"counts": {"upgrades_in_window": 1}}, {"updated_at": START}, {"updated_by": "x"}]
+)
+def test_promo_apply_refuses_the_fields_the_service_writes(monkeypatch, capsys, tmp_path, field):
+    sent = _cli_with(monkeypatch, {})
+    path = _promo_file(tmp_path, [_promotion(**field)])
+    assert cli.main(["promo", "apply", "--file", path]) == 1
+    assert sent == []
+    assert "counts and update stamps are written by the service" in capsys.readouterr().err
+
+
+def test_a_cli_error_never_shows_an_address(monkeypatch, capsys, tmp_path):
+    _cli_with(monkeypatch, {})
+    path = _promo_file(tmp_path, [_promotion(**{"ana@example.org": "x"})])
+    assert cli.main(["promo", "apply", "--file", path]) == 1
+    err = capsys.readouterr().err
+    assert "[email]" in err and "ana@example.org" not in err
+
+
+def test_the_cli_takes_promotions_from_commerce_public():
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(cli.__file__).read_text())
+    modules = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert "platform_api.commerce.models" not in modules
+    assert "platform_api.commerce.public" in modules

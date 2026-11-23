@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 class Settings(BaseSettings):
     """Runtime settings, read from PLATFORM_* environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="PLATFORM_")
+    # A refused setting's message names the rule, never the value: some identify accounts.
+    model_config = SettingsConfigDict(env_prefix="PLATFORM_", hide_input_in_errors=True)
 
     app_mode: Literal["api", "hooks"] = "api"
     env: Literal["local", "dev", "prod"] = "local"

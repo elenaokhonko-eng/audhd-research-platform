@@ -11,8 +11,10 @@ from typing import Any
 
 import httpx
 import yaml
+from pydantic import ValidationError
 
 from platform_api.admin.client import AdminClient, AdminError
+from platform_api.commerce.public import Promotion
 from platform_api.modules import FEATURE_MODULES
 from platform_api.settings import Settings
 from platform_api.shared.logging import configure_logging
@@ -44,6 +46,10 @@ def build_registry() -> JobTable:
 
 class CliError(Exception):
     """A command that cannot run; the message is plain words for the owner."""
+
+
+class JobRefusedInLocal(Exception):
+    """A commerce job would write to a real Firestore while entitlements stay in memory."""
 
 
 def _identity_token() -> str:
@@ -135,17 +141,79 @@ def _grant_revoke(client: AdminClient, args: argparse.Namespace) -> None:
     _say("revoked", args.id)
 
 
-def _campaign_apply(client: AdminClient, args: argparse.Namespace) -> None:
+def _load_yaml(path: str) -> object:
     try:
-        with open(args.file, encoding="utf-8") as handle:
-            loaded = yaml.safe_load(handle)
+        with open(path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
     except (OSError, yaml.YAMLError):
         raise CliError("Could not read that file as YAML.") from None
+
+
+def _campaign_apply(client: AdminClient, args: argparse.Namespace) -> None:
+    loaded = _load_yaml(args.file)
     campaigns = loaded.get("campaigns") if isinstance(loaded, dict) else None
     if not isinstance(campaigns, list):
         raise CliError("The file needs a list under the key 'campaigns'.")
     ready = json.loads(json.dumps(campaigns, default=_json_ready))
     _say("written", client.campaign_apply(ready))
+
+
+# Written by the service, never from the owner's file.
+_PROMOTION_STAMPS = {"counts", "updated_at", "updated_by"}
+
+
+def _promo_apply(client: AdminClient, args: argparse.Namespace) -> None:
+    loaded = _load_yaml(args.file)
+    entries = loaded.get("promotions") if isinstance(loaded, dict) else None
+    if not isinstance(entries, list):
+        raise CliError("The file needs a list under the key 'promotions'.")
+    ready = []
+    for number, entry in enumerate(entries, start=1):
+        if isinstance(entry, dict) and _PROMOTION_STAMPS & set(entry):
+            raise CliError(
+                f"Promotion {number} in the file: counts and update stamps are written by "
+                "the service. Remove them from the file."
+            )
+        try:
+            promotion = Promotion.model_validate(entry)
+        except ValidationError as exc:
+            # The location and the rule; never the value that was typed.
+            problems = "; ".join(
+                f"{'.'.join(str(part) for part in e['loc']) or 'entry'}: {e['msg']}"
+                for e in exc.errors(include_input=False, include_url=False)
+            )
+            raise CliError(f"Promotion {number} in the file is not valid: {problems}") from None
+        ready.append(promotion.model_dump(mode="json", exclude_unset=True))
+    _say("written", client.promotions_put(ready))
+
+
+MAX_RUNS = 20  # as the route allows
+
+
+def _run_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"use a whole number from 1 to {MAX_RUNS}") from None
+    if not 1 <= limit <= MAX_RUNS:
+        raise argparse.ArgumentTypeError(f"use a whole number from 1 to {MAX_RUNS}")
+    return limit
+
+
+_RUN_ACTIONS = ("created", "updated", "ended", "moved", "unchanged", "unseen")
+
+
+def _runs_show(client: AdminClient, args: argparse.Namespace) -> None:
+    for run in client.sync_runs(args.kind, args.limit):
+        counts: dict[str, int] = run["counts"]
+        actions = {name: counts.get(name, 0) for name in _RUN_ACTIONS}
+        others = {k: v for k, v in sorted(counts.items()) if k not in actions and v}
+        line = (
+            f"{run['kind']} {'dry_run' if run['dry_run'] else 'real'} {run['state']} "
+            f"guard={run['guard'] or 'none'} started={run['started_at']} "
+            f"finished={run['finished_at'] or 'none'} " + _pairs({**actions, **others})
+        )
+        _say("run", line)
 
 
 _LAUNCH_FLAGS = {
@@ -175,6 +243,13 @@ def _launch_report(client: AdminClient, args: argparse.Namespace) -> None:
     for c in report["campaigns"]:
         _say("campaign", f"{c['slug']} state={c['state']} " + _pairs(c["counts"]))
     _say("members", report["members"])
+    for p in client.promotions_list():
+        upgrades = (p.get("counts") or {}).get("upgrades_in_window", 0)
+        window = f"{p['starts_at']}/{p['ends_at']}"
+        _say(
+            "promotion",
+            f"{p['id']} channel={p['channel']} window={window} upgrades_in_window={upgrades}",
+        )
 
 
 def _support_list(client: AdminClient, args: argparse.Namespace) -> None:
@@ -240,6 +315,21 @@ def _parser() -> argparse.ArgumentParser:
     apply.add_argument("--file", required=True)
     apply.set_defaults(run=_campaign_apply)
 
+    promo = sub.add_parser("promo", help="write promotions").add_subparsers(
+        dest="action", required=True
+    )
+    promo_apply = promo.add_parser("apply")
+    promo_apply.add_argument("--file", required=True)
+    promo_apply.set_defaults(run=_promo_apply)
+
+    runs = sub.add_parser("runs", help="the latest sync runs").add_subparsers(
+        dest="action", required=True
+    )
+    runs_show = runs.add_parser("show")
+    runs_show.add_argument("--kind", choices=("stripe_reconcile", "roster_import"))
+    runs_show.add_argument("--limit", type=_run_limit, default=MAX_RUNS)
+    runs_show.set_defaults(run=_runs_show)
+
     launch = sub.add_parser("launch", help="the launch switches").add_subparsers(
         dest="action", required=True
     )
@@ -272,19 +362,36 @@ def _run_job(name: str) -> int:
     if job is None:
         known = ", ".join(sorted(registry))
         print(f"unknown job {name!r}; known jobs: {known}", file=sys.stderr)
-        return 2
-    settings = Settings()
-    configure_logging(settings.service_name)
-    _configure_job_runtimes(settings)
+        return 1  # 2 means only that a guard blocked the run
+    from platform_api.commerce import jobs as commerce_jobs
+
+    try:
+        settings = Settings()
+        configure_logging(settings.service_name)
+        if settings.env == "local" and name in commerce_jobs.JOBS:
+            # In `local` entitlements are in memory; the job would write to a real Firestore.
+            raise JobRefusedInLocal
+        _configure_job_runtimes(settings)
+    except Exception as exc:
+        # As a commerce job that cannot set up: one line naming the class only, since a
+        # refused setting's message can repeat the values it was given.
+        print(json.dumps({"job": name, "error": type(exc).__name__}))
+        return 1
     return job(settings)
 
 
 def _configure_job_runtimes(settings: Settings) -> None:
-    """A job runs on the runtimes the service has (`platform_api.adapters`)."""
-    from typing import cast
+    """A job runs on the runtimes the service has (`platform_api.adapters`), with one bus and
+    one Firestore client for the process, which the commerce jobs use too."""
+    from functools import cache
+    from typing import TYPE_CHECKING, cast
 
     from platform_api.adapters import Lazy, configure_runtimes
+    from platform_api.commerce import jobs as commerce_jobs
     from platform_api.shared.bus import EventBus
+
+    if TYPE_CHECKING:
+        from google.cloud import firestore
 
     def pubsub() -> EventBus:
         from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
@@ -293,8 +400,16 @@ def _configure_job_runtimes(settings: Settings) -> None:
 
         return PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
 
+    @cache
+    def firestore_client() -> "firestore.Client":
+        from google.cloud import firestore
+
+        return firestore.Client(project=settings.gcp_project)
+
+    bus = cast(EventBus, Lazy(pubsub))
     # A job that never uses the contact key (selfcheck) runs without PLATFORM_CONTACT_KEY.
-    configure_runtimes(settings, cast(EventBus, Lazy(pubsub)), key_required=False)
+    configure_runtimes(settings, bus, key_required=False, firestore_client=firestore_client)
+    commerce_jobs.use_clients(bus, Lazy(firestore_client))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -308,7 +423,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_EMAIL.sub("[email]", exc.message), file=sys.stderr)
         return 1
     except CliError as exc:
-        print(str(exc), file=sys.stderr)
+        print(_EMAIL.sub("[email]", str(exc)), file=sys.stderr)
         return 1
     except _Refused:
         return 1

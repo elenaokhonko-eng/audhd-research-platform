@@ -35,12 +35,18 @@ def _runtimes_restored(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test that sets a runtime (main, a job) leaves the next test as it found it."""
     import importlib
 
-    for name in ("entitlements", "identity", "library"):
+    for name in ("entitlements", "identity", "library", "commerce"):
         try:
             module = importlib.import_module(f"platform_api.{name}.runtime")
         except ImportError:
             continue
         monkeypatch.setattr(module, "_runtime", module._runtime)
+    try:
+        from platform_api.commerce import jobs as commerce_jobs
+    except ImportError:
+        return
+    # `platform-cli job` hands the commerce jobs its clients; no test passes them on.
+    monkeypatch.setattr(commerce_jobs, "_provided", None)
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ Authorization for the service's.
 import json
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -113,3 +113,17 @@ class AdminClient:
             {"staging_prefix": staging_prefix, "dry_run": dry_run},
         )
         return report
+
+    def sync_runs(self, kind: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {"limit": limit} if kind is None else {"kind": kind, "limit": limit}
+        runs: list[dict[str, Any]] = self._call("GET", "/v1/admin/sync-runs?" + urlencode(query))[
+            "runs"
+        ]
+        return runs
+
+    def promotions_put(self, promotions: list[dict[str, Any]]) -> int:
+        return int(self._call("PUT", "/v1/admin/promotions", {"promotions": promotions})["written"])
+
+    def promotions_list(self) -> list[dict[str, Any]]:
+        promotions: list[dict[str, Any]] = self._call("GET", "/v1/admin/promotions")["promotions"]
+        return promotions

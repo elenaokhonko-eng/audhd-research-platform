@@ -62,10 +62,11 @@ def test_the_shared_selfcheck_job_is_registered() -> None:
     assert "selfcheck" in cli.build_registry()
 
 
-def test_unknown_job_exits_with_status_2_and_lists_known_names(
+def test_unknown_job_exits_with_status_1_and_lists_known_names(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert cli.main(["job", "no-such-job"]) == 2
+    # 2 is kept for a guard that blocked a run (contracts section 6)
+    assert cli.main(["job", "no-such-job"]) == 1
     assert "selfcheck" in capsys.readouterr().err
 
 
@@ -88,13 +89,14 @@ def test_job_logs_go_out_as_redacted_json(
     import json
     import logging
 
-    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api import jobs as shared_jobs
 
     def noisy(settings: Settings) -> int:
         logging.getLogger("job").warning("saw ana@example.org")
         return 0
 
-    monkeypatch.setattr(commerce_jobs, "JOBS", {"noisy": noisy})
+    # A shared job: in `local` the commerce jobs refuse to run.
+    monkeypatch.setattr(shared_jobs, "JOBS", {"noisy": noisy})
     assert cli.main(["job", "noisy"]) == 0
     data = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
     assert data["severity"] == "WARNING"

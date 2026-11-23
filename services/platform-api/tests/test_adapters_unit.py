@@ -183,11 +183,13 @@ def test_every_provider_error_becomes_invalid_token(monkeypatch, method):
 
 
 def _reload_main(monkeypatch):
+    from platform_api.commerce import runtime as com_runtime
     from platform_api.entitlements import runtime as ent_runtime
     from platform_api.identity import runtime as id_runtime
 
     monkeypatch.setattr(ent_runtime, "_runtime", None)
     monkeypatch.setattr(id_runtime, "_runtime", None)
+    monkeypatch.setattr(com_runtime, "_runtime", None)
     from platform_api.library import runtime as lib_runtime
 
     monkeypatch.setattr(lib_runtime, "_runtime", None)
@@ -231,7 +233,10 @@ def test_outside_local_no_client_is_made_until_a_port_is_used(monkeypatch, resto
     assert made == []
     assert ent_runtime().key.version == "1" and made == []
     assert id_runtime().session_ttl == timedelta(days=14)
-    assert id_runtime().request_refresh is None and id_runtime().last_reconcile_at is None
+    from platform_api.commerce.runtime import get_runtime as com_runtime
+
+    assert id_runtime().request_refresh is not None and id_runtime().last_reconcile_at is not None
+    assert com_runtime().stripe is None and made == []
     with pytest.raises(RuntimeError, match="no client"):
         ent_runtime().store.get_contact("c1")
     assert made == ["firestore"]
@@ -299,7 +304,7 @@ def test_outside_local_the_library_runtime_makes_no_client_until_used(
 
 def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):
     from platform_api import cli
-    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api import jobs as shared_jobs
     from platform_api.entitlements import runtime as ent_runtime
     from platform_api.identity import runtime as id_runtime
 
@@ -312,8 +317,231 @@ def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):
         seen.append((ent_runtime.get_runtime(), id_runtime.get_runtime()))
         return 0
 
-    monkeypatch.setattr(commerce_jobs, "JOBS", {"probe": job})
+    monkeypatch.setattr(shared_jobs, "JOBS", {"probe": job})
     assert cli.main(["job", "probe"]) == 0 and len(seen) == 1
+
+
+def test_in_local_the_commerce_runtime_is_in_memory_without_stripe(
+    monkeypatch, restore_root_logger
+):
+    from platform_api.commerce.ports import InMemoryPromotionStore, InMemoryRunStore
+    from platform_api.commerce.runtime import get_runtime as com_runtime
+    from platform_api.identity.runtime import get_runtime as id_runtime
+
+    monkeypatch.setenv("PLATFORM_ENV", "local")
+    _reload_main(monkeypatch)
+    runtime = com_runtime()
+    assert runtime.stripe is None and runtime.jobs is None and runtime.inbox is None
+    assert isinstance(runtime.runs, InMemoryRunStore)
+    assert isinstance(runtime.promotions, InMemoryPromotionStore)
+    assert runtime.limiter is id_runtime().limiter  # one limiter for the process
+    # no reconcile has run and no job can be started: a sign-in is told "fresh"
+    assert id_runtime().last_reconcile_at() is None
+    assert id_runtime().request_refresh("u-ed", T0) == "fresh"
+
+
+def test_outside_local_commerce_runs_on_cores_client_and_limiter_without_a_key(
+    monkeypatch, restore_root_logger
+):
+    from google.cloud import firestore
+
+    from platform_api.commerce import adapters as cloud_adapters
+    from platform_api.identity.runtime import get_runtime as id_runtime
+
+    built: list[Any] = []
+
+    def make_client(*a, **k):
+        built.append(FakeFirestore())
+        return built[-1]
+
+    asked: dict[str, Any] = {}
+    real_build = cloud_adapters.build_runtime
+
+    def build_runtime(settings, bus, firestore_client, *, stripe_key, limiter):
+        asked.update(stripe_key=stripe_key, limiter=limiter, client=firestore_client)
+        return real_build(settings, bus, firestore_client, stripe_key=stripe_key, limiter=limiter)
+
+    monkeypatch.setattr(firestore, "Client", make_client)
+    monkeypatch.setattr(cloud_adapters, "build_runtime", build_runtime)
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    monkeypatch.setenv("PLATFORM_CONTACT_KEY", NAME)
+    _reload_main(monkeypatch)
+    from platform_api.commerce.runtime import get_runtime as com_runtime
+    from platform_api.entitlements.runtime import get_runtime as ent_runtime
+
+    assert asked["stripe_key"] is None and com_runtime().stripe is None
+    assert asked["limiter"] is id_runtime().limiter and built == []
+    assert type(id_runtime().limiter).__name__ == "Lazy"  # Core's Firestore limiter
+    com_runtime().promotions.list()
+    ent_runtime().store.get_contact("c1")
+    assert len(built) == 1  # Core's own Firestore client, shared
+
+
+def test_the_sandbox_marker_in_prod_stops_the_service_start(monkeypatch, restore_root_logger):
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("PLATFORM_ENV", "prod")
+    monkeypatch.setenv("PLATFORM_CONTACT_KEY", NAME)
+    monkeypatch.setenv("PLATFORM_STRIPE_TEST_CHANNEL_METADATA", "true")
+    with pytest.raises(ValidationError, match="sandbox"):
+        _reload_main(monkeypatch)
+
+
+def test_a_commerce_job_reuses_the_clients_the_cli_built(monkeypatch, restore_root_logger):
+    import google.cloud.pubsub_v1 as pubsub
+    from google.cloud import firestore
+
+    from platform_api import cli
+    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api.entitlements.runtime import get_runtime as ent_runtime
+    from platform_api.settings import Settings
+
+    built: list[Any] = []
+
+    def make_client(*a, **k):
+        built.append(FakeFirestore())
+        return built[-1]
+
+    monkeypatch.setattr(firestore, "Client", make_client)
+    monkeypatch.setattr(pubsub, "PublisherClient", lambda: built.append("pubsub"))
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    settings = Settings()
+    cli._configure_job_runtimes(settings)
+    bus, client = commerce_jobs._clients()
+    client.collection("sync_runs")
+    ent_runtime().store.get_contact("c1")
+    assert len(built) == 1  # one Firestore client in the job's process; no publisher yet
+    assert bus is ent_runtime().bus
+
+
+def test_a_job_whose_settings_are_refused_prints_one_line_and_exits_1(
+    monkeypatch, restore_root_logger, capsys
+):
+    import json
+
+    from platform_api import cli
+    from platform_api.commerce import jobs as commerce_jobs
+
+    ran = []
+    monkeypatch.setattr(commerce_jobs, "JOBS", {"probe": lambda settings: ran.append(1) or 0})
+    monkeypatch.setenv("PLATFORM_ENV", "prod")
+    monkeypatch.setenv("PLATFORM_STRIPE_TEST_CHANNEL_METADATA", "true")
+    monkeypatch.setenv("PLATFORM_STRIPE_SUBSTACK_APPLICATION", "ca_test_substack")
+    assert cli.main(["job", "probe"]) == 1 and ran == []
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"job": "probe", "error": "ValidationError"}
+    assert "ca_test" not in out
+
+
+def test_a_commerce_job_without_its_clients_prints_one_line_and_exits_1(capsys):
+    import json
+
+    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api.settings import Settings
+
+    with pytest.raises(RuntimeError):
+        commerce_jobs._clients()
+    assert commerce_jobs.JOBS["roster-import"](Settings()) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {"job": "roster-import", "error": "RuntimeError"}
+    ]
+
+
+@pytest.mark.parametrize("name", ["stripe-reconcile", "roster-import"])
+def test_in_local_the_commerce_jobs_refuse_to_run(monkeypatch, restore_root_logger, capsys, name):
+    import json
+
+    from platform_api import cli
+    from platform_api.commerce import adapters as cloud_adapters
+
+    read = []
+    monkeypatch.setattr(cloud_adapters, "read_secret", lambda n: read.append(n) or "rk_test_x")
+    monkeypatch.setenv("PLATFORM_ENV", "local")
+    monkeypatch.setenv("PLATFORM_STRIPE_KEY_SECRET", "projects/p/secrets/k")
+    assert cli.main(["job", name]) == 1 and read == []
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines] == [{"job": name, "error": "JobRefusedInLocal"}]
+
+
+def test_a_refused_core_setting_never_shows_its_value():
+    from pydantic import ValidationError
+
+    from platform_api.settings import Settings
+
+    with pytest.raises(ValidationError) as err:
+        Settings(env="staging-secretish")
+    assert "secretish" not in str(err.value) and "input_value" not in str(err.value)
+
+
+def test_a_refused_core_setting_stops_a_job_with_one_line(monkeypatch, restore_root_logger, capsys):
+    import json
+
+    from platform_api import cli
+
+    monkeypatch.setenv("PLATFORM_ENV", "staging-secretish")
+    assert cli.main(["job", "selfcheck"]) == 1
+    out = capsys.readouterr()
+    assert [json.loads(line) for line in out.out.splitlines()] == [
+        {"job": "selfcheck", "error": "ValidationError"}
+    ]
+    assert "secretish" not in out.out + out.err
+
+
+def test_the_reconcile_job_runs_end_to_end_on_one_firestore_client(
+    monkeypatch, restore_root_logger, capsys
+):
+    """`platform-cli job stripe-reconcile` in dev, with every cloud client replaced."""
+    import json
+
+    import google.cloud.pubsub_v1 as pubsub
+    from google.cloud import firestore, kms
+
+    from platform_api import cli
+    from platform_api.commerce import adapters as cloud_adapters
+    from platform_api.commerce import stripe_adapter
+    from platform_api.commerce.ports import InMemoryStripeReader
+    from tests.commerce.test_adapters import OrderedFirestore
+    from tests.commerce.test_mapping import sub
+
+    built: list[Any] = []
+
+    def make_client(*a, **k):
+        built.append(OrderedFirestore())
+        return built[-1]
+
+    class FakePublisher:
+        def topic_path(self, project, topic):
+            return f"projects/{project}/topics/{topic}"
+
+        def publish(self, topic, data, **attrs):
+            return type("F", (), {"result": lambda self: "m-1"})()
+
+    keys: list[str] = []
+    monkeypatch.setattr(firestore, "Client", make_client)
+    monkeypatch.setattr(kms, "KeyManagementServiceClient", lambda *a, **k: FakeKms())
+    monkeypatch.setattr(pubsub, "PublisherClient", FakePublisher)
+    monkeypatch.setattr(cloud_adapters, "read_secret", lambda name: "rk_test_0123456789")
+    monkeypatch.setattr(
+        stripe_adapter,
+        "StripeSdkReader",
+        lambda key: keys.append(key) or InMemoryStripeReader([sub("ana")]),
+    )
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    monkeypatch.setenv("PLATFORM_CONTACT_KEY", NAME)
+    monkeypatch.setenv("PLATFORM_STRIPE_KEY_SECRET", "projects/p/secrets/k")
+    monkeypatch.setenv("PLATFORM_STRIPE_SUBSTACK_APPLICATION", "ca_test_substack")
+    monkeypatch.setenv("PLATFORM_SUBSTACK_GRANT_YEAR", "tier:paid")
+
+    assert cli.main(["job", "stripe-reconcile"]) == 0
+    [line] = capsys.readouterr().out.splitlines()
+    run = json.loads(line)
+    assert (run["kind"], run["state"], run["guard"]) == ("stripe_reconcile", "completed", "passed")
+    assert run["counts"]["seen"] == 1 and "@" not in line
+    assert len(built) == 1 and keys == ["rk_test_0123456789"]
+    db = built[0]
+    assert db.docs[("sync_runs", run["run_id"])]["state"] == "completed"
+    assert any(collection == "entitlements" for collection, _ in db.docs)
 
 
 def test_hooks_mode_starts_without_the_contact_key(monkeypatch, restore_root_logger):
