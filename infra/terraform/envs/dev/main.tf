@@ -18,6 +18,7 @@ locals {
     "secretmanager.googleapis.com",
     "pubsub.googleapis.com",
     "firestore.googleapis.com",
+    "cloudscheduler.googleapis.com",
   ]
 }
 
@@ -70,6 +71,8 @@ module "web_dev" {
     PLATFORM_API_URL     = module.platform_api.uri
     SITE_ORIGIN          = "https://dev.${var.domain}"
     SIGNIN_SENDER_HINT   = var.signin_sender_hint
+    # Shows "Sign in with Google" once the owner has set up the Google provider.
+    IDENTITY_GOOGLE_ENABLED = var.google_sign_in_enabled ? "1" : "0"
   }
   depends_on = [google_project_service.enabled]
 }

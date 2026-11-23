@@ -1,11 +1,12 @@
 import hashlib
-from collections.abc import Sequence
+import logging
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Literal
 
 from platform_api.entitlements import reconcile
 from platform_api.entitlements.access import _reason, access_from, decision_for, is_live
-from platform_api.entitlements.campaigns import grants_from
+from platform_api.entitlements.campaigns import campaign_state, grants_from
 from platform_api.entitlements.models import (
     _SLUG,
     Access,
@@ -31,11 +32,14 @@ from platform_api.entitlements.runtime import get_runtime
 from platform_api.shared import clock
 from platform_api.shared.events import contains_email, new_event
 
+_log = logging.getLogger(__name__)
+
 __all__ = [
     "Access",
     "Decision",
     "Reason",
     "access_for",
+    "announce_tier_change",
     "apply_plan",
     "existing_for",
     "Source",
@@ -54,6 +58,7 @@ __all__ = [
     "SourceState",
     "contact_id_for",
     "entitlement_id",
+    "normalise_email",
     "upsert_contact",
     "Campaign",
     "ContactView",
@@ -64,6 +69,7 @@ __all__ = [
     "apply_grant_policies",
     "audit_for",
     "campaign_by_slug",
+    "campaign_state",
     "contact_view",
     "grants_due",
     "launch_config",
@@ -81,33 +87,48 @@ def contact_id_for(email: str) -> str:
     return key.mac(normalise_email(email).encode()).hex()[:32]
 
 
-def upsert_contact(email: str, channels: ChannelsPatch) -> str:
-    runtime = get_runtime()
-    contact_id = contact_id_for(email)
-    now = clock.utcnow()
-    existing = runtime.store.get_contact(contact_id)
+def _merged_contact(
+    held: Contact | None,
+    contact_id: str,
+    key_version: str,
+    email: str,
+    patch: dict[str, dict[str, object]],
+    now: datetime,
+) -> Contact:
+    """The contact after a patch: the first address stays, and so does a claimed member_uid."""
     merged: dict[str, dict[str, object]] = (
-        {k: dict(v) for k, v in existing.channels.items()} if existing else {}
+        {k: dict(v) for k, v in held.channels.items()} if held else {}
     )
-    for name, values in channels.model_dump(exclude_none=True).items():
-        held = merged.get(name, {})
-        combined = {**held, **values}
-        if name == "platform" and held.get("member_uid") is not None:
-            combined["member_uid"] = held["member_uid"]  # a claim is never overwritten
+    for name, values in patch.items():
+        kept = merged.get(name, {})
+        combined = {**kept, **values}
+        if name == "platform" and kept.get("member_uid") is not None:
+            combined["member_uid"] = kept["member_uid"]  # a claim is never overwritten
         merged[name] = combined
-    if existing is None:
-        contact = Contact(
+    if held is None:
+        return Contact(
             contact_id=contact_id,
-            key_version=runtime.key.version,
-            email=email.strip(),
+            key_version=key_version,
+            email=email,
             channels=merged,
             invite={"campaign": None, "state": "none"},
             created_at=now,
             updated_at=now,
         )
-    else:
-        contact = existing.model_copy(update={"channels": merged, "updated_at": now})
-    runtime.store.put_contact(contact)
+    return held.model_copy(update={"channels": merged, "updated_at": now})
+
+
+def upsert_contact(email: str, channels: ChannelsPatch) -> str:
+    """Create or update a contact in one step of the store, so no concurrent change is lost."""
+    runtime = get_runtime()
+    contact_id = contact_id_for(email)
+    now = clock.utcnow()
+    patch = channels.model_dump(exclude_none=True)
+    version, first_seen = runtime.key.version, email.strip()
+    runtime.store.merge_contact(
+        contact_id,
+        lambda held: _merged_contact(held, contact_id, version, first_seen, patch, now),
+    )
     return contact_id
 
 
@@ -153,7 +174,7 @@ def _member_tier(contact: Contact | None, now: datetime) -> tuple[str | None, st
     return (uid, access_for(uid, now).tier if uid else None)
 
 
-def _announce_tier_change(
+def announce_tier_change(
     contact_id: str,
     uid: str | None,
     before: str | None,
@@ -194,40 +215,25 @@ def _platform_uid(contact: Contact) -> str | None:
 def claim_for_member(uid: str, contact_id: str) -> list[str]:
     """Attach what is waiting under a contact to the member who proved they own it."""
     store = get_runtime().store
-    contact = store.get_contact(contact_id)
-    if contact is None:
-        return []
-    owner = _platform_uid(contact)
-    if owner is not None and owner != uid:
-        return []
     now = clock.utcnow()
-    waiting = [e for e in store.entitlements_for_contacts([contact_id]) if e.member_uid is None]
-    claimed = [
-        e.model_copy(update={"member_uid": uid, "updated_at": now, "updated_by": f"member:{uid}"})
-        for e in waiting
-    ]
-    audit = [
-        AuditEntry(
-            at=now,
-            actor=f"member:{uid}",
-            action="entitlement.claimed",
-            subject=e.entitlement_id,
-            reason=None,
-            evidence={"contact_id": contact_id},
+
+    def take(held: Contact | None) -> Contact | None:
+        if held is None or _platform_uid(held) is not None:
+            return None  # nothing to claim, or claimed already: the first claim stays
+        platform = {**held.channels.get("platform", {}), "member_uid": uid}
+        platform.setdefault("registered_at", now)
+        return held.model_copy(
+            update={"channels": {**held.channels, "platform": platform}, "updated_at": now}
         )
-        for e in claimed
-    ]
-    if owner is None:
-        platform = {**contact.channels.get("platform", {}), "member_uid": uid}
-        platform.setdefault("registered_at", now.isoformat())
-        store.put_contact(
-            contact.model_copy(
-                update={"channels": {**contact.channels, "platform": platform}, "updated_at": now}
-            )
-        )
-    if claimed:
-        store.write(contact_id, claimed, audit)
-    return [e.entitlement_id for e in claimed]
+
+    # The ownership check and the claim are one step of the store: two members claiming
+    # one contact at once leave exactly one owner.
+    contact = store.merge_contact(contact_id, take)
+    if contact is None or _platform_uid(contact) != uid:
+        return []
+    # The records are claimed in one step of the store, which reads them again: a record a
+    # run ended after the ownership step stays ended (02 section 4: no grant without a fact).
+    return store.claim_records(contact_id, uid, now)
 
 
 def grant(
@@ -290,7 +296,7 @@ def grant(
             now=now,
         )
     )
-    _announce_tier_change(contact_id, uid, tier_before, now)
+    announce_tier_change(contact_id, uid, tier_before, now)
     return entitlement.entitlement_id
 
 
@@ -329,7 +335,7 @@ def revoke(entitlement_id: str, reason: str, actor: str, now: datetime) -> None:
             now=now,
         )
     )
-    _announce_tier_change(found.contact_id, uid, tier_before, now)
+    announce_tier_change(found.contact_id, uid, tier_before, now)
 
 
 def launch_config() -> LaunchConfig:
@@ -371,8 +377,19 @@ def list_campaigns() -> list[Campaign]:
 
 
 def put_campaigns(campaigns: list[Campaign], actor: str) -> int:
-    """Write campaigns from the owner's file. A slug that exists keeps its counts."""
+    """Write campaigns from the owner's file. A slug that exists keeps its counts.
+
+    Stored campaigns the file does not name stay. Refused with ValueError, before anything is
+    written: a slug named twice, or anything but exactly one default once the file is merged
+    by slug.
+    """
+    slugs = [c.slug for c in campaigns]
+    if len(set(slugs)) != len(slugs):
+        raise ValueError("a slug is named more than once")
     store = get_runtime().store
+    merged = {c.slug: c for c in store.list_campaigns()} | {c.slug: c for c in campaigns}
+    if sum(c.is_default for c in merged.values()) != 1:
+        raise ValueError("exactly one campaign must be the default")
     now = clock.utcnow()
     kept = []
     for c in campaigns:
@@ -485,15 +502,16 @@ def record_arrival(uid: str, campaign: Campaign, recognition: str) -> None:
     if not contact_ids:
         raise LookupError("no contact for this member")
     contact_id = contact_ids[0]
-    contact = store.get_contact(contact_id)
-    if contact is None:
-        raise LookupError("no contact for this member")
     now = clock.utcnow()
-    store.put_contact(
-        contact.model_copy(
-            update={"invite": {"campaign": campaign.slug, "state": "accepted"}, "updated_at": now}
-        )
+    invite = {"campaign": campaign.slug, "state": "accepted"}
+    arrived = store.merge_contact(
+        contact_id,
+        lambda held: (
+            held.model_copy(update={"invite": invite, "updated_at": now}) if held else None
+        ),
     )
+    if arrived is None:
+        raise LookupError("no contact for this member")
     store.add_to_campaign_count(campaign.slug, "arrivals")
     if recognition == "paid":
         store.add_to_campaign_count(campaign.slug, "recognised_paid")
@@ -569,6 +587,51 @@ def _audit_entry(action: Action, run_id: str, now: datetime, partner: str | None
     )
 
 
+def _guarded(step: Callable[[], int], guarded: bool) -> int:
+    """Run one follow-up of a failed run: its failure is logged by type only, and skipped."""
+    if not guarded:
+        return step()
+    try:
+        return step()
+    except Exception as exc:
+        _log.error("a follow-up of a failed run failed: %s", type(exc).__name__)
+        return 0
+
+
+def _follow_up(
+    written: set[str],
+    touched: list[str],
+    before: dict[str, tuple[str, str]],
+    run_id: str,
+    now: datetime,
+    *,
+    guarded: bool = False,
+) -> tuple[int, int]:
+    """The grant policies of the written contacts, then the tier announcements."""
+    store = get_runtime().store
+    grants_created = 0
+    for contact_id in touched:
+        if contact_id not in written:
+            continue
+
+        def grants(contact_id: str = contact_id) -> int:
+            contact = store.get_contact(contact_id)
+            uid = _platform_uid(contact) if contact else None
+            return len(apply_grant_policies(contact_id, now)) if uid is not None else 0
+
+        grants_created += _guarded(grants, guarded)
+    tier_changes = 0
+    for uid, (contact_id, tier) in before.items():
+
+        def announce(contact_id: str = contact_id, uid: str = uid, tier: str = tier) -> int:
+            return int(
+                announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
+            )
+
+        tier_changes += _guarded(announce, guarded)
+    return grants_created, tier_changes
+
+
 def apply_plan(plan: ReconcilePlan, run_id: str, now: datetime) -> ReconcileReport:
     """Write a plan: one write per contact, a moved record created before its old one ends.
 
@@ -630,20 +693,18 @@ def apply_plan(plan: ReconcilePlan, run_id: str, now: datetime) -> ReconcileRepo
         (then if ends_a_move else first).setdefault(record.contact_id, []).append(
             (record, _audit_entry(a, run_id, now, partner.get(i)))
         )
-    for writes in (first, then):  # never a moment with neither record of a move
-        for contact_id, pairs in writes.items():
-            store.write(contact_id, [e for e, _ in pairs], [entry for _, entry in pairs])
-
-    grants_created = 0
-    for contact_id in touched:
-        contact = store.get_contact(contact_id)
-        uid = _platform_uid(contact) if contact else None
-        if uid is not None:
-            grants_created += len(apply_grant_policies(contact_id, now))
-    tier_changes = sum(
-        _announce_tier_change(contact_id, uid, tier, now, run_id=run_id, reason="reconcile")
-        for uid, (contact_id, tier) in before.items()
-    )
+    written: set[str] = set()
+    try:
+        for writes in (first, then):  # never a moment with neither record of a move
+            for contact_id, pairs in writes.items():
+                store.write(contact_id, [e for e, _ in pairs], [entry for _, entry in pairs])
+                written.add(contact_id)
+    except Exception:
+        # A write failed partway: what landed still gets its grants and its tier events,
+        # and then the write's own error is raised, whatever a follow-up does.
+        _follow_up(written, touched, before, run_id, now, guarded=True)
+        raise
+    grants_created, tier_changes = _follow_up(written, touched, before, run_id, now)
     return report.model_copy(
         update={
             "created": counts["create"],

@@ -13,3 +13,19 @@ cloudflare_zone_id    = ""
 
 # Step 3, once https://audhdneurobiology.org serves with a certificate:
 check_custom_domain = false
+
+# Wave 2: the reconcile and roster jobs.
+# Stripe application id of Substack's subscriptions (from a Substack-created subscription in Stripe; leave empty until known).
+stripe_substack_application = ""
+# What a paying Substack reader is recorded as, per plan interval: "tier:paid" or "status:substack_paid".
+substack_grant_month = "status:substack_paid"
+substack_grant_year  = "status:substack_paid"
+# How often the reconcile runs (cron, UTC, at least 10 minutes apart); shorten while a campaign is open.
+reconcile_schedule = "*/30 * * * *"
+# Runs the schedule and lets platform-api start the reconcile ("Check again", sign-in refresh).
+# Off at first; set to true after the first good real run (launch runbook).
+reconcile_schedule_enabled = false
+# Your Google account ids allowed to call the owner's routes: the "sub" of your identity token (the launch runbook gives the command). Empty until then.
+owner_account_ids = []
+# Offer "Sign in with Google" on the website; true once the Google provider is set up.
+google_sign_in_enabled = false
