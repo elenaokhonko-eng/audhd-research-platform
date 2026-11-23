@@ -88,6 +88,8 @@ def sign_in_refresh(uid: str, now: datetime) -> Literal["fresh", "started"]:
 
     try:
         ticket = commerce.request_refresh(None, now)
+    # With uid None, request_refresh applies no member limit and cannot raise RateLimited;
+    # it is caught only in case that changes, so that a limit never fails a sign-in.
     except (commerce.JobStartError, commerce.RateLimited):
         return "fresh"
     except Exception as exc:

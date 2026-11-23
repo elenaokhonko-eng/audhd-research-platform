@@ -331,16 +331,15 @@ def _run_job(name: str) -> int:
     if job is None:
         known = ", ".join(sorted(registry))
         print(f"unknown job {name!r}; known jobs: {known}", file=sys.stderr)
-        return 2
-    settings = Settings()
-    configure_logging(settings.service_name)
+        return 1  # 2 means only that a guard blocked the run
     from platform_api.commerce import jobs as commerce_jobs
 
-    if settings.env == "local" and name in commerce_jobs.JOBS:
-        # In `local` entitlements are in memory; the job would write runs to a real Firestore.
-        print(json.dumps({"job": name, "error": JobRefusedInLocal.__name__}))
-        return 1
     try:
+        settings = Settings()
+        configure_logging(settings.service_name)
+        if settings.env == "local" and name in commerce_jobs.JOBS:
+            # In `local` entitlements are in memory; the job would write to a real Firestore.
+            raise JobRefusedInLocal
         _configure_job_runtimes(settings)
     except Exception as exc:
         # As a commerce job that cannot set up: one line naming the class only, since a

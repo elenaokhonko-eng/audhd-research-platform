@@ -417,6 +417,86 @@ def test_in_local_the_commerce_jobs_refuse_to_run(monkeypatch, restore_root_logg
     assert [json.loads(line) for line in lines] == [{"job": name, "error": "JobRefusedInLocal"}]
 
 
+def test_a_refused_core_setting_never_shows_its_value():
+    from pydantic import ValidationError
+
+    from platform_api.settings import Settings
+
+    with pytest.raises(ValidationError) as err:
+        Settings(env="staging-secretish")
+    assert "secretish" not in str(err.value) and "input_value" not in str(err.value)
+
+
+def test_a_refused_core_setting_stops_a_job_with_one_line(monkeypatch, restore_root_logger, capsys):
+    import json
+
+    from platform_api import cli
+
+    monkeypatch.setenv("PLATFORM_ENV", "staging-secretish")
+    assert cli.main(["job", "selfcheck"]) == 1
+    out = capsys.readouterr()
+    assert [json.loads(line) for line in out.out.splitlines()] == [
+        {"job": "selfcheck", "error": "ValidationError"}
+    ]
+    assert "secretish" not in out.out + out.err
+
+
+def test_the_reconcile_job_runs_end_to_end_on_one_firestore_client(
+    monkeypatch, restore_root_logger, capsys
+):
+    """`platform-cli job stripe-reconcile` in dev, with every cloud client replaced."""
+    import json
+
+    import google.cloud.pubsub_v1 as pubsub
+    from google.cloud import firestore, kms
+
+    from platform_api import cli
+    from platform_api.commerce import adapters as cloud_adapters
+    from platform_api.commerce import stripe_adapter
+    from platform_api.commerce.ports import InMemoryStripeReader
+    from tests.commerce.test_adapters import OrderedFirestore
+    from tests.commerce.test_mapping import sub
+
+    built: list[Any] = []
+
+    def make_client(*a, **k):
+        built.append(OrderedFirestore())
+        return built[-1]
+
+    class FakePublisher:
+        def topic_path(self, project, topic):
+            return f"projects/{project}/topics/{topic}"
+
+        def publish(self, topic, data, **attrs):
+            return type("F", (), {"result": lambda self: "m-1"})()
+
+    keys: list[str] = []
+    monkeypatch.setattr(firestore, "Client", make_client)
+    monkeypatch.setattr(kms, "KeyManagementServiceClient", lambda *a, **k: FakeKms())
+    monkeypatch.setattr(pubsub, "PublisherClient", FakePublisher)
+    monkeypatch.setattr(cloud_adapters, "read_secret", lambda name: "rk_test_0123456789")
+    monkeypatch.setattr(
+        stripe_adapter,
+        "StripeSdkReader",
+        lambda key: keys.append(key) or InMemoryStripeReader([sub("ana")]),
+    )
+    monkeypatch.setenv("PLATFORM_ENV", "dev")
+    monkeypatch.setenv("PLATFORM_CONTACT_KEY", NAME)
+    monkeypatch.setenv("PLATFORM_STRIPE_KEY_SECRET", "projects/p/secrets/k")
+    monkeypatch.setenv("PLATFORM_STRIPE_SUBSTACK_APPLICATION", "ca_test_substack")
+    monkeypatch.setenv("PLATFORM_SUBSTACK_GRANT_YEAR", "tier:paid")
+
+    assert cli.main(["job", "stripe-reconcile"]) == 0
+    [line] = capsys.readouterr().out.splitlines()
+    run = json.loads(line)
+    assert (run["kind"], run["state"], run["guard"]) == ("stripe_reconcile", "completed", "passed")
+    assert run["counts"]["seen"] == 1 and "@" not in line
+    assert len(built) == 1 and keys == ["rk_test_0123456789"]
+    db = built[0]
+    assert db.docs[("sync_runs", run["run_id"])]["state"] == "completed"
+    assert any(collection == "entitlements" for collection, _ in db.docs)
+
+
 def test_hooks_mode_starts_without_the_contact_key(monkeypatch, restore_root_logger):
     monkeypatch.setenv("PLATFORM_ENV", "dev")
     monkeypatch.setenv("PLATFORM_APP_MODE", "hooks")

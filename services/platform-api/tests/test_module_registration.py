@@ -62,10 +62,11 @@ def test_the_shared_selfcheck_job_is_registered() -> None:
     assert "selfcheck" in cli.build_registry()
 
 
-def test_unknown_job_exits_with_status_2_and_lists_known_names(
+def test_unknown_job_exits_with_status_1_and_lists_known_names(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert cli.main(["job", "no-such-job"]) == 2
+    # 2 is kept for a guard that blocked a run (contracts section 6)
+    assert cli.main(["job", "no-such-job"]) == 1
     assert "selfcheck" in capsys.readouterr().err
 
 
