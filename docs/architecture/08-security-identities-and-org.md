@@ -114,7 +114,7 @@ Two services: `web` and `platform-hooks`. Everything else requires a Google-sign
 | Break-glass | The owner's direct console access to Firestore is a separate role, granted for a day when needed, and logged |
 | Backups | Firestore point-in-time recovery (7 days) and a daily backup kept 14 days; buckets versioned; a monthly export of members and entitlements to storage the owner controls independently of this project |
 | Minimisation | Events and logs carry ids only; the log formatter redacts email-shaped text; raw webhook payloads are kept 90 days in a restricted bucket; traces carry no prompt or answer text |
-| Deletion and erasure | Account deletion removes the sign-in identity, the member record and its links. Full erasure also removes the person at the source systems, leaves a tombstone so a sync does not re-import them, swaps ids in long-retention tables for random ones, and is replayed after any restore |
+| Deletion and erasure | At launch, account deletion is the owner's command: it removes the sign-in account, the member record, the member's own contacts with their entitlements, and the support requests. A reader who still pays through Substack is found again by the next reconcile, as a contact with no member. Full erasure (removal at the source systems, a tombstone so a sync does not re-import the person, random ids in long-retention tables, replay after any restore) comes after launch |
 | No trackers | No advertising or behavioural analytics on member pages; page analytics without cookies |
 | Separation | Commerce ids and research ids come from different keys held by different services. Keys are necessary, not sufficient: see [09 §1](09-events-and-data-model.md) |
 

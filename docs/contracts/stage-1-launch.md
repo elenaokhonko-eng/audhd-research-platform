@@ -56,6 +56,10 @@ Admin routes (called by `platform-cli`):
 | `GET /v1/admin/promotions` | – | `{promotions: [{id, channel, starts_at, ends_at, counts}]}`: the stored promotions with their counts, for `platform-cli promo` and the launch report. Audited as `admin.read` |
 | `GET /v1/admin/support-requests` | – | `{requests: [...]}` with `member_uid`, `kind`, `note`, `created_at` |
 | `POST /v1/admin/library/publish` | `{staging_prefix, dry_run}` | `PublishReport` |
+| `GET /v1/admin/deletions` | – | `{pending: [{uid, requested_at}]}`, oldest first. Audited as `admin.read` |
+| `POST /v1/admin/members/{uid}/deletion-request` | – | `{status: "deletion_requested"}`. For a request the member made in writing. 404 for an unknown uid. Calling it again changes nothing. Audited as `member.deletion_requested` |
+| `POST /v1/admin/members/{uid}/delete` | – | `{}`. 404 for an unknown uid, 422 when the member has not asked, 503 when the sign-in provider could not be reached (run it again). Audited as `member.deleted` |
+| `POST /v1/admin/contacts/forget` | `{email}` in the body, never in the address | `{forgotten: true \| false}`; `false` when no contact exists. 409 `member_exists` when a member owns the contact: that person is removed through the two member routes. Audited as `contact.forgotten` under the coded id |
 
 ```jsonc
 // Member
@@ -132,6 +136,8 @@ Refinements made when the Core plan was written (2026-11-20):
 - **`Join.recognition`** is `paid` when the member's tier is paid or they hold a live record from a Substack source, whatever that record unlocks.
 - **Records with a stated lifetime carry `expires_at`**, a timestamp Firestore's time-to-live policy acts on. The code that creates the record writes it: `downloads` and `support_requests` 365 days after creation, `audit_log` 730 days after the entry, `rate_limits` 2 days after the window ends. The lifetimes are those of the privacy notice.
 - **Deleting a member (task card C8):** `identity.public.delete_member(uid, actor, now)` and `platform-cli member delete --uid <uid>` remove the member record, the contact record and the entitlements of a member whose status is `deletion_requested`, and write one audit entry under the coded id. `platform-cli member deletions` lists the requests that are waiting.
+- **Deletion asked for in writing (owner's decision, 2026-11-23):** `identity.public.request_deletion_by_owner(uid, actor, now)` does what the member's own button does (status `deletion_requested`, sessions ended) and writes one audit entry `member.deletion_requested` naming the owner's account; `platform-cli member request-deletion --uid <uid>` calls it. `entitlements.public.forget_unowned_contact(email, actor, now) -> bool` forgets a contact no member owns and refuses (`MemberExists`) one a member owns; `platform-cli contact forget --email-stdin` calls it. `ContactView` gains `member_uid` (the owning member's uid, or null), so `contact show --email-stdin` tells the owner which uid to name.
+- **After a deletion, the sources still speak (owner's decision, 2026-11-23).** Nothing marks a forgotten contact. While the person's Substack subscription continues, the next reconcile or roster import creates a new contact with no member; the privacy notice says so. A marker that stops the re-import is not part of the launch track.
 - **`sync_runs.requested_by`** is `owner` for a run the owner started with that setting and `schedule` for every other run, including one started by "Check again": `platform-api` may start the job but may not change a run's settings.
 - **The reconcile's schedule is created paused**; the owner switches it on after the first good real run.
 - **`entitlements.public` re-exports** the models other modules may use: `SourceState`, `Guard`, `Entitlement`, `ChannelsPatch`, `Access`, `Reason`, `LaunchConfig`, `Campaign`, `AuditEntry`.
@@ -262,6 +268,8 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 | `platform-cli launch report` | Counts per campaign and promotion; no emails |
 | `platform-cli contact show --email-stdin` · `platform-cli grant create --email-stdin --grant tier:paid --months <n> --reason <text>` · `platform-cli grant revoke --id <id> --reason <text>` | The inspector at launch, through the admin routes. Each read and change is written to the audit log under the owner's account |
 | `platform-cli support list` | Open support requests |
+| `platform-cli member deletions` · `platform-cli member request-deletion --uid <uid>` · `platform-cli member delete --uid <uid>` | Lists the deletion requests that are waiting; records a request a member made in writing; removes a member who asked. `contact show --email-stdin` gives the uid |
+| `platform-cli contact forget --email-stdin` | Forgets a contact no member owns. Reads one address from standard input, never from an argument. Prints a reminder that a reader who still pays through Substack is found again by the next reconcile |
 | `gcloud storage cp -r <item folders> gs://<staging bucket>/<name>/` then `platform-cli library publish --staging-prefix <name> [--dry-run]` | Validates each item's manifest and file and publishes it by version; prints one line per item |
 
 ## 7. Infrastructure names (Terraform outputs the other lanes read)
