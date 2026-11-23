@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 _KIND: RunKind = "stripe_reconcile"
 
 
-def _would_do(plan: ReconcilePlan) -> dict[str, int]:
+def would_do(plan: ReconcilePlan) -> dict[str, int]:
     """What a dry run reports. The plan cannot tell grants or tier changes: reported as 0."""
     by_kind = {k: sum(1 for a in plan.actions if a.kind == k) for k in ("create", "update", "end")}
     moved = sum(1 for a in plan.actions if a.kind == "move" and a.entitlement.status != "expired")
@@ -70,7 +70,7 @@ def _work(
     )
     counts.update(guard_ends=plan.ends, live_before=plan.live_before)
     if dry_run:
-        counts.update(_would_do(plan))
+        counts.update(would_do(plan))
     else:
         counts["applying"] = 1  # from here a failure may have applied some writes
         report = entitlements.apply_plan(plan, run_id, now)

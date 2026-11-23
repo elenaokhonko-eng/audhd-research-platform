@@ -1,9 +1,10 @@
 from datetime import datetime
 
 from platform_api.commerce.reconcile import stripe_reconcile
+from platform_api.commerce.roster import roster_import
 from platform_api.commerce.runtime import get_runtime
 
-__all__ = ["last_reconcile_completed_at", "stripe_reconcile"]
+__all__ = ["last_reconcile_completed_at", "roster_import", "stripe_reconcile"]
 
 
 def last_reconcile_completed_at() -> datetime | None:
