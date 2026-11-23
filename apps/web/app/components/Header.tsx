@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { PromotionBanner } from "./PromotionBanner";
 
 const links = [
   ["Research", "/research-agenda"],
@@ -17,6 +18,7 @@ export function Header() {
   const [open, setOpen] = useState(false);
 
   return (
+    <>
     <header className="site-header">
       <div className="header-inner">
         <Link className="brand" href="/" onClick={() => setOpen(false)}>
@@ -66,5 +68,7 @@ export function Header() {
         </div>
       </div>
     </header>
+    <PromotionBanner />
+    </>
   );
 }

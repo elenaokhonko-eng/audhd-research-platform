@@ -80,6 +80,13 @@ export class FakePlatformApi implements PlatformApi {
     return { ...item, can_open };
   }
 
+  private downloadUrl: string | null = null;
+
+  // Test hook: the next download returns this URL instead of the usual one.
+  nextDownloadUrl(url: string): void {
+    this.downloadUrl = url;
+  }
+
   failNext(code: ApiErrorCode): void {
     this.failure = code;
   }
@@ -266,7 +273,9 @@ export class FakePlatformApi implements PlatformApi {
       const reason = item.access === "paid" ? "paid_required" : "purchase_required";
       throw new ApiError(403, "forbidden", "This item is not included in your access.", null, reason);
     }
-    return { url: `https://files.invalid/${sku}`, expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString() };
+    const url = this.downloadUrl ?? `https://files.invalid/${sku}`;
+    this.downloadUrl = null;
+    return { url, expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString() };
   }
 
   async requestDeletion(session: string): Promise<void> {

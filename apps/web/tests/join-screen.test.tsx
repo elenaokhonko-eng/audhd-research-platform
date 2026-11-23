@@ -20,7 +20,7 @@ const setup = (props: Partial<Parameters<typeof JoinScreen>[0]> = {}) => {
   const postSession = vi.fn().mockResolvedValue({ next: "/welcome" });
   const navigate = vi.fn();
   render(<JoinScreen campaign={open} slug="founding" siteOrigin="https://dev.example.org" senderHint="signin@dev.example.org"
-    identity={{ kind: "fake" }} authClient={client} postSession={postSession} navigate={navigate} {...props} />);
+    identity={{ kind: "fake", googleEnabled: true }} authClient={client} postSession={postSession} navigate={navigate} {...props} />);
   return { client, postSession, navigate, user: userEvent.setup() };
 };
 
@@ -110,6 +110,22 @@ describe("JoinScreen", () => {
     setup({ identity: { kind: "missing" } });
     expect(screen.getByText("Sign-in is not set up in this environment.")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});
+
+describe("JoinScreen Google button", () => {
+  it("shows neither the button nor any mention of Google when it is off", async () => {
+    const { user } = setup({ identity: { kind: "firebase", apiKey: "k", authDomain: "d", googleEnabled: false } });
+    expect(screen.queryByRole("button", { name: "Continue with Google" })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("Email address"), "ana@example.org");
+    await user.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    expect(await screen.findByText("If it is not there after a minute, look in the spam folder.")).toBeInTheDocument();
+    expect(screen.queryByText(/Continue with Google/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/Google/);
+  });
+  it("shows the button when it is on", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Continue with Google" })).toBeInTheDocument();
   });
 });
 

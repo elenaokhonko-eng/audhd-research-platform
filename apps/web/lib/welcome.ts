@@ -2,7 +2,7 @@ import { ApiError } from "@/lib/platform-api/errors";
 import type { Access, Member } from "@/lib/platform-api/types";
 
 export type WelcomeView =
-  | { kind: "terms" }
+  | { kind: "terms"; versions: { terms: string; privacy: string } }
   | { kind: "paid"; grantUntil: string | null; includedWhilePaying: boolean }
   | { kind: "other_plan"; planInterval: "month" | "year" }
   | { kind: "free"; checking: boolean };
@@ -15,7 +15,10 @@ export function termsCurrent(member: Member): boolean {
 }
 
 export function welcomeView(me: { member: Member; access: Access }, check: string | null): WelcomeView {
-  if (!termsCurrent(me.member)) return { kind: "terms" };
+  if (!termsCurrent(me.member)) {
+    const { required } = me.member.terms;
+    return { kind: "terms", versions: { terms: required.terms_version, privacy: required.privacy_version } };
+  }
   if (me.access.tier === "paid") {
     const reasons = me.access.reasons;
     const dates = reasons

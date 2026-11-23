@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 
-export function DeleteAccount({ onDone = () => window.location.assign("/") }: { onDone?: () => void }) {
+export function DeleteAccount({
+  onDone = () => window.location.assign("/"),
+  navigate = (to: string) => window.location.assign(to),
+}: {
+  onDone?: () => void;
+  navigate?: (to: string) => void;
+}) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -24,12 +30,20 @@ export function DeleteAccount({ onDone = () => window.location.assign("/") }: { 
     setFailed(false);
     try {
       const res = await fetch("/api/account/delete", { method: "POST" });
+      if (res.status === 401) return navigate("/join");
+      if (res.status === 409) return navigate("/welcome");
       if (!res.ok) throw new Error("failed");
-      onDone();
     } catch {
       setFailed(true);
       setBusy(false);
+      return;
     }
+    try {
+      localStorage.removeItem("signin.email");
+    } catch {
+      // Storage unavailable: nothing to remove.
+    }
+    onDone();
   }
 
   if (!asking) {

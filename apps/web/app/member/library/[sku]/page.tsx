@@ -1,0 +1,38 @@
+import { notFound } from "next/navigation";
+import { loadItem, KIND_LABEL } from "@/lib/library";
+import { requireMember, sessionForRequest } from "@/lib/member";
+import { getPlatformApi } from "@/lib/platform-api/client";
+import { ItemAction } from "../../components/ItemList";
+
+export const dynamic = "force-dynamic";
+
+export default async function LibraryItem({ params }: { params: Promise<{ sku: string }> }) {
+  const { sku } = await params;
+  const result = await loadItem(
+    sku,
+    () => requireMember("library"),
+    sessionForRequest,
+    (session) => getPlatformApi().libraryItem(session, sku),
+  );
+  if (result.kind === "not_found") notFound();
+  if (result.kind === "message")
+    return (
+      <main>
+        <h1>Library</h1>
+        <p role="status">{result.text}</p>
+      </main>
+    );
+  const { item, description, citation } = result.detail;
+  return (
+    <main>
+      <h1>{item.title}</h1>
+      <p>
+        {KIND_LABEL[item.kind]}, version {item.version}
+        {item.pages !== 0 ? `, ${item.pages} pages` : ""}
+      </p>
+      <p>{description}</p>
+      {citation ? <p>{citation}</p> : null}
+      <ItemAction item={item} />
+    </main>
+  );
+}
