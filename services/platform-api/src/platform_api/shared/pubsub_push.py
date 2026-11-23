@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from platform_api.shared.auth import NotAuthorised, PushIdentity
 from platform_api.shared.events import DomainEvent
 from platform_api.shared.handlers import HandlerRegistry
+from platform_api.shared.http import _where
 from platform_api.shared.inbox import Inbox
 
 log = logging.getLogger(__name__)
@@ -43,8 +44,9 @@ def _process(inbox: Inbox, registry: HandlerRegistry, event: DomainEvent) -> int
     try:
         for handler in registry.handlers_for(event.type):
             handler(event)
-    except Exception:
-        log.exception("Handler failed for event %s of type %s", event.id, event.type)
+    except Exception as exc:
+        # The type and the frames only: a handler's message or traceback can carry an address.
+        log.error("Handler failed for event %s of type %s: %s", event.id, event.type, _where(exc))
         return 500
     inbox.record(event.id, event_type=event.type, received_at=datetime.now(UTC))
     return 204

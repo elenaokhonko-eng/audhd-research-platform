@@ -829,6 +829,7 @@ dependencies = [
     { name = "google-cloud-run" },
     { name = "google-cloud-secret-manager" },
     { name = "google-cloud-storage" },
+    { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -840,7 +841,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },
@@ -859,6 +859,7 @@ requires-dist = [
     { name = "google-cloud-run" },
     { name = "google-cloud-secret-manager" },
     { name = "google-cloud-storage" },
+    { name = "httpx" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings" },
     { name = "pyyaml" },
@@ -870,7 +871,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },

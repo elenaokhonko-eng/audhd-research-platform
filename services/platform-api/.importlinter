@@ -32,3 +32,17 @@ forbidden_modules =
     platform_api.library
     platform_api.content
     platform_api.admin
+
+[importlinter:contract:nothing-imports-adapters]
+name = No feature module and no shared module imports the cloud adapters
+type = forbidden
+source_modules =
+    platform_api.shared
+    platform_api.identity
+    platform_api.entitlements
+    platform_api.commerce
+    platform_api.library
+    platform_api.content
+    platform_api.admin
+forbidden_modules =
+    platform_api.adapters

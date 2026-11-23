@@ -68,3 +68,8 @@ def test_a_naive_timestamp_is_refused_and_the_error_does_not_show_the_address():
             provider_time=datetime(2026, 1, 1, tzinfo=UTC),
         )
     assert "@" not in str(err.value)
+
+
+def test_normalise_email_is_public():
+    assert "normalise_email" in ent_api.__all__
+    assert ent_api.normalise_email(" Ana@Example.org ") == "ana@example.org"
