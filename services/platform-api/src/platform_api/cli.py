@@ -62,6 +62,10 @@ def _identity_token() -> str:
     return done.stdout.strip()
 
 
+class _Refused(Exception):
+    """A command that ran and printed its answer, and whose answer is a refusal: exit 1."""
+
+
 def admin_client() -> AdminClient:
     """The owner's client: `PLATFORM_API_URL`, and the token of the gcloud account signed in."""
     base_url = os.environ.get("PLATFORM_API_URL", "").strip()
@@ -181,6 +185,20 @@ def _support_list(client: AdminClient, args: argparse.Namespace) -> None:
         _say("request", f"{r['id']} " + _pairs({k: r[k] for k in keys}) + f" note={r['note']!r}")
 
 
+def _library_publish(client: AdminClient, args: argparse.Namespace) -> None:
+    report = client.library_publish(args.staging_prefix, args.dry_run)
+    if report["dry_run"]:
+        _say("dry_run", "true")
+    refused = False
+    for outcome in report["items"]:
+        _say(outcome["sku"], outcome["action"])
+        for problem in outcome["problems"]:
+            print(_EMAIL.sub("[email]", f"  {problem}"))
+        refused = refused or outcome["action"] == "refused"
+    if refused:
+        raise _Refused
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="platform-cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +250,14 @@ def _parser() -> argparse.ArgumentParser:
         dest="action", required=True
     )
     support.add_parser("list").set_defaults(run=_support_list)
+
+    library = sub.add_parser("library", help="the library").add_subparsers(
+        dest="action", required=True
+    )
+    publish = library.add_parser("publish", help="publish the items staged under a prefix")
+    publish.add_argument("--staging-prefix", required=True)
+    publish.add_argument("--dry-run", action="store_true")
+    publish.set_defaults(run=_library_publish)
     return parser
 
 
@@ -278,6 +304,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     except CliError as exc:
         print(str(exc), file=sys.stderr)
+        return 1
+    except _Refused:
         return 1
     except httpx.HTTPError:
         print("Could not reach platform-api at PLATFORM_API_URL.", file=sys.stderr)
