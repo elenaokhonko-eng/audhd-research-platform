@@ -59,3 +59,12 @@ module "roster_job" {
   deletion_protection       = local.job_deletion_protection
   depends_on                = [google_project_service.enabled]
 }
+
+# Composite indexes and the time-to-live policies of records with a stated lifetime
+# (download records, support messages, audit records, rate-limit counters).
+module "firestore_schema" {
+  source     = "../../modules/firestore_schema"
+  project_id = var.project_id
+  database   = google_firestore_database.default.name
+  depends_on = [google_firestore_database.default]
+}

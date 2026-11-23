@@ -108,7 +108,19 @@ variable "reconcile_schedule" {
 }
 
 variable "reconcile_schedule_enabled" {
-  description = "Run the reconcile schedule. Created paused; the launch runbook switches it on after the first good real run."
+  description = "Run the reconcile schedule and let platform-api start the reconcile (\"Check again\" and the sign-in refresh). Off at first; the launch runbook switches it on after the first good real run."
+  type        = bool
+  default     = false
+}
+
+variable "owner_account_ids" {
+  description = "Google account ids (the sub of an identity token) allowed to call the owner's routes of platform-api (PLATFORM_OWNER_ACCOUNTS). Set in terraform.tfvars; never committed."
+  type        = list(string)
+  default     = []
+}
+
+variable "google_sign_in_enabled" {
+  description = "Offer \"Sign in with Google\" on the website (IDENTITY_GOOGLE_ENABLED). Switch on once the Google provider is set up."
   type        = bool
   default     = false
 }

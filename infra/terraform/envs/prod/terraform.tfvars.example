@@ -22,5 +22,10 @@ substack_grant_month = "status:substack_paid"
 substack_grant_year  = "status:substack_paid"
 # How often the reconcile runs (cron, UTC, at least 10 minutes apart); shorten while a campaign is open.
 reconcile_schedule = "*/30 * * * *"
-# Created paused; set to true after the first good real run (launch runbook).
+# Runs the schedule and lets platform-api start the reconcile ("Check again", sign-in refresh).
+# Off at first; set to true after the first good real run (launch runbook).
 reconcile_schedule_enabled = false
+# Your Google account ids allowed to call the owner's routes: the "sub" of your identity token (the launch runbook gives the command). Empty until then.
+owner_account_ids = []
+# Offer "Sign in with Google" on the website; true once the Google provider is set up.
+google_sign_in_enabled = false
