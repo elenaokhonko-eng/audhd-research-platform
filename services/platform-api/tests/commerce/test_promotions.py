@@ -243,3 +243,48 @@ def test_the_upgrade_route_asks_for_the_terms_first(open_shop, member_client):
     cookie = {"X-Member-Session": sign_in(client, "fay").json()["session"]["cookie"]}
     r = client.get("/v1/me/upgrade-options", headers=cookie)
     assert r.status_code == 409 and r.json()["error"]["code"] == "terms_required"
+
+
+def checkout_and_offer():
+    """A platform checkout that starts first, then the Substack offer."""
+    checkout = promo(
+        id="checkout-1",
+        channel="platform_checkout",
+        substack_offer_url=None,
+        starts_at=START - timedelta(days=1),
+    )
+    commerce.put_promotions([checkout, promo()], "owner:acc-1")
+
+
+def test_one_promotion_gives_both_the_words_and_the_link(
+    open_shop, signed_in, owner_client, monkeypatch
+):
+    from platform_api.shared import clock
+
+    checkout_and_offer()
+    options = commerce.upgrade_options(signed_in("bo"), START)
+    assert (options.promotion.id, options.promotion.url, options.routes[0].url) == (
+        "offer-1",
+        "https://example.org/offer",
+        "https://example.org/offer",
+    )
+    monkeypatch.setattr(clock, "utcnow", lambda: START)
+    r = owner_client.get("/v1/public/promotions/active")
+    assert [p["id"] for p in r.json()["promotions"]] == ["offer-1"]
+
+
+def test_only_a_substack_offer_counts_upgrades_until_platform_checkout_exists(open_shop):
+    checkout_and_offer()
+    inside = START + timedelta(days=1)
+    open_shop.stripe = InMemoryStripeReader([sub("cy", start_date=inside)])
+    commerce.stripe_reconcile(False, "schedule", inside + timedelta(hours=1))
+    counts = {p.id: p.counts for p in open_shop.promotions.list()}
+    assert counts == {"checkout-1": {}, "offer-1": {"upgrades_in_window": 1}}
+
+
+def test_the_cache_ends_with_the_offer(open_shop, owner_client, monkeypatch):
+    from platform_api.shared import clock
+
+    monkeypatch.setattr(clock, "utcnow", lambda: END - timedelta(seconds=20))
+    r = owner_client.get("/v1/public/promotions/active")
+    assert r.headers["cache-control"] == "public, max-age=20" and len(r.json()["promotions"]) == 1

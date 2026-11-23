@@ -10,6 +10,9 @@ GAP = timedelta(seconds=60)  # a run completed this recently is fresh; one start
 # A run still `running` blocks a new start for at most this long after it started, so a run
 # that crashed without finishing does not block "Check again" for ever.
 RUNNING_BOUND = timedelta(minutes=30)
+# After a run the guard blocked, "Check again" starts nothing for this long: the same
+# source would trip the same guard, and the owner has an alert to look at first.
+BLOCKED_BACKOFF = timedelta(minutes=15)
 _LIMITS = (("m", 1, timedelta(minutes=1)), ("h", 6, timedelta(hours=1)))
 
 
@@ -52,6 +55,13 @@ def request_refresh(uid: str | None, now: datetime) -> RefreshTicket:
     # Whatever its guard: a blocked run is not restarted at the floor rate.
     latest = runtime.runs.latest("stripe_reconcile", completed_only=True, real_only=True)
     if latest is not None and latest.finished_at is not None and now - latest.finished_at < GAP:
+        return ticket("fresh")
+    if (
+        latest is not None
+        and latest.guard == "blocked"
+        and latest.finished_at is not None
+        and now - latest.finished_at < BLOCKED_BACKOFF
+    ):
         return ticket("fresh")
     if runtime.jobs is None or not runtime.settings.reconcile_job:
         return ticket("fresh")

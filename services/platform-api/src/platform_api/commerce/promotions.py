@@ -46,7 +46,8 @@ def _in_window(p: Promotion, when: datetime) -> bool:
 
 
 def active_promotions(audience: Audience, now: datetime) -> list[PromotionView]:
-    """Nothing while `promotions_open` is off. A Substack offer without a link is never shown."""
+    """Nothing while `promotions_open` is off. A Substack offer without a link is never shown,
+    and until platform checkout exists only Substack offers are."""
     if not entitlements.launch_config().promotions_open:
         return []
     shown = [
@@ -54,7 +55,8 @@ def active_promotions(audience: Audience, now: datetime) -> list[PromotionView]:
         for p in get_runtime().promotions.list()
         if _in_window(p, now)
         and audience in p.audience
-        and not (p.channel == "substack_offer" and not p.substack_offer_url)
+        and p.channel == "substack_offer"
+        and p.substack_offer_url
     ]
     shown.sort(key=lambda p: (p.starts_at, p.id))
     return [_view(p) for p in shown]
@@ -72,15 +74,15 @@ def upgrade_options(uid: str, now: datetime) -> UpgradeOptions:
             kind="substack_change_plan", available=account_url is not None, url=account_url
         )
         return UpgradeOptions(routes=[route], promotion=None)
-    active = active_promotions("free_members", now)
-    offer = next((v.url for v in active if v.channel == "substack_offer" and v.url), None)
-    url = offer or account_url
+    # One promotion gives both the words shown and the link followed.
+    offer = next((v for v in active_promotions("free_members", now) if v.url), None)
+    url = offer.url if offer is not None else account_url
     return UpgradeOptions(
         routes=[
             Route(kind="substack", available=url is not None, url=url),
             Route(kind="platform_only", available=False, url=None),
         ],
-        promotion=active[0] if active else None,
+        promotion=offer,
     )
 
 
@@ -122,6 +124,8 @@ def count_upgrades(
     seen = {e.source_ref for e in existing if e.source == "substack_stripe"}
     counted = 0
     for p in rt.promotions.list():
+        if p.channel != "substack_offer":
+            continue  # until platform checkout exists, only a Substack offer is counted
         for record in created:
             if record.source != "substack_stripe" or record.valid_from is None:
                 continue
