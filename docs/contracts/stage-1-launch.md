@@ -112,7 +112,7 @@ Other modules and the HTTP layer use only these. Types are Pydantic models in th
 | | `grants_due(entitlements: list[Entitlement], campaigns: list[Campaign], now) -> list[GrantSpec]` | **Pure.** The grant policy of the design, §5.4, over every open campaign that has one. Uses each entitlement's `valid_from` for `paid_since_before` and its `plan_interval` for `plan_intervals`; an entitlement without a plan interval never satisfies a policy that sets `plan_intervals` |
 | | `apply_grant_policies(contact_id: str, now) -> list[str]` | Creates the grants that are due for a contact that has a member. Called at sign-in and from `apply_plan`. Idempotent |
 | | `record_arrival(uid: str, campaign: Campaign, recognition: str) -> None` | Sets `joined_via` on first sign-in only; increments the campaign's counts |
-| `commerce` | `stripe_reconcile(dry_run: bool) -> SyncRun` | Lists subscriptions, maps each to a `SourceState`, calls `plan_reconcile` and `apply_plan` |
+| `commerce` | `stripe_reconcile(dry_run: bool, requested_by: RequestedBy, now) -> SyncRun` | Lists subscriptions, maps each to a `SourceState`, calls `plan_reconcile` and `apply_plan` |
 | | `request_refresh(uid: str \| None, now) -> RefreshTicket` | Starts the `stripe-reconcile` job through the Cloud Run Jobs API unless one completed within the last 60 seconds or one is running. `platform-api` never reads the Stripe key |
 | | `active_promotions(audience: Audience, now) -> list[Promotion]` · `upgrade_options(uid, now) -> UpgradeOptions` | |
 | `library` | `catalogue(access: Access) -> list[ItemCard]` · `item(sku, access) -> ItemDetail` | |
@@ -190,13 +190,15 @@ class FileDirectory:                 # reads Substack's export file; satisfies S
 | Collection | Fields |
 | --- | --- |
 | `campaigns/{slug}` (replaces `invite_waves`; the slug is the id and never changes) | `audience`, `opens_at`, `closes_at`, `is_default`, `grant` (`grant`, `months`, `starts`, `fixed_until`, `requires_live_source[]`, `paid_since_before`, `plan_intervals[]` or null) or null, `copy` (`headline`, `body`, `cta`), `counts` (`arrivals`, `recognised_paid`, `grants_created`), `updated_at`, `updated_by` |
-| `promotions/{promotion_id}` | `channel`, `audience[]`, `plan_interval`, `starts_at`, `ends_at`, `substack_offer_url`, `stripe_coupon_id` (later), `display`, `counts` (`upgrades_in_window`), `updated_at`, `updated_by` |
+| `promotions/{promotion_id}` (an id never contains `:` or `/`) | `channel`, `audience[]`, `plan_interval`, `starts_at`, `ends_at`, `substack_offer_url`, `stripe_coupon_id` (later), `display`, `counts` (`upgrades_in_window`), `updated_at`, `updated_by` |
 | `support_requests/{auto}` | `member_uid`, `kind`, `note`, `status` (`open`, `done`), `created_at`. Zone 1; the note is never copied into an event or a log |
 | `config/launch` | `join_open`, `library_open`, `promotions_open` (booleans), `reconcile_max_age_seconds`, `required_terms_version`, `required_privacy_version`, `substack_account_url` (the page of the publication where a subscriber changes their plan) |
 | `members/{uid}` gains | `joined_via` (campaign slug), `terms_accepted.privacy_version` |
 | `contacts/{contact_id}` changes | `invite` becomes `{campaign, state}`; `channels.substack.last_seen_in_roster` is written by every roster import |
 | `entitlements/{entitlement_id}` clarifies | `valid_from` is the source's `started_at`. For an owner grant or a launch grant it is the moment of the grant. `plan_interval` (`month`, `year` or null) is stored from the source state. A grant whose name starts with `status:` unlocks no section and no item; it is listed in `reasons` so the Account page can explain it |
-| `sync_runs/{auto}` gains | `kind` (`stripe_reconcile`, `roster_import`), `dry_run`, `state` (`running`, `completed`, `failed`), `guard` (`passed`, `blocked`), `unseen`, counts by action, `requested_by` (`schedule`, `member`, `owner`) |
+| `sync_runs/{auto}` gains | `kind` (`stripe_reconcile`, `roster_import`), `dry_run`, `state` (`running`, `completed`, `failed`), `guard` (`passed`, `blocked`), `counts` (counts by action, `unseen` among them, and the run's other counts), `requested_by` (`schedule`, `member`, `owner`), `started_at`, `finished_at` |
+| `promotion_upgrades/{promotion_id}:{contact_id}` | `promotion_id`, `contact_id`. Written once, in the transaction that adds one to the promotion's `counts.upgrades_in_window`, so a contact is counted once per promotion. A promotion id never contains `:` or `/` |
+| `config/reconcile_slot` | One field per run kind (`stripe_reconcile`): the time of the last start. Taken in a transaction by `request_refresh`, so two requests in the same 60 seconds start one job |
 
 ## 5. Events (additions to [09 §4](../architecture/09-events-and-data-model.md))
 
@@ -226,6 +228,8 @@ Settings are read by `Settings` with the `PLATFORM_` prefix. Values that identif
 | `PLATFORM_STRIPE_SUBSTACK_APPLICATION` | The application id that marks a subscription as created by Substack |
 | `PLATFORM_STRIPE_TEST_CHANNEL_METADATA` | Dev only. When true, a sandbox subscription with metadata `test_channel=substack` is classified as created by Substack, because a sandbox cannot reproduce another platform's application id. `Settings` refuses to start with this set when `PLATFORM_ENV` is `prod` |
 | `PLATFORM_SUBSTACK_GRANT_MONTH`, `PLATFORM_SUBSTACK_GRANT_YEAR` | What a paying Substack reader on a monthly, respectively annual, plan is recorded as: `tier:paid` (the platform is included) or `status:substack_paid` (a status that unlocks nothing by itself and only satisfies a grant policy). A reader whose plan interval is unknown (a roster row with an empty plan: complimentary, gift, billed by Apple) is always recorded as `status:substack_paid`; the owner gives such a reader the paid tier with an owner grant after review. The owner's commercial decision; set on the reconcile and roster jobs from Terraform variables |
+| `PLATFORM_GRACE_DAYS` | Days a `past_due` Stripe subscription keeps access, counted from its latest unpaid invoice. Default 21, at least 1 |
+| `PLATFORM_JOB_DRY_RUN`, `PLATFORM_JOB_REQUESTED_BY` | Set by the owner on one execution of `stripe-reconcile` or `roster-import` (`--update-env-vars`): `1` for a dry run (anything but empty, `0` or `1` stops the job), and `owner`. A job exits `0` when its run completed and passed, `1` when it failed (also for a failure before the run starts), `2` when the guard blocked it |
 | `PLATFORM_LIBRARY_BUCKET` | Private bucket for library files |
 | `PLATFORM_LIBRARY_STAGING_BUCKET` | Bucket where the owner places item folders before publishing |
 | `PLATFORM_SESSION_TTL_DAYS` | Session cookie lifetime |
@@ -245,14 +249,14 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 | Job (`platform-cli job <name>`) | Runs | Schedule |
 | --- | --- | --- |
 | `stripe-reconcile` | `commerce.stripe_reconcile(dry_run=False)` | Cloud Scheduler; the period is a Terraform variable, shortened while a campaign is open. Also started by `platform-api` on request |
-| `roster-import` | Reads the newest object in the roster inbox, builds states for paid rows that have no live `substack_stripe` entitlement, plans and applies. Refuses to write unless the latest `stripe_reconcile` run completed and passed its guard in the last 24 hours | Started by the owner |
+| `roster-import` | Reads the newest object in the roster inbox, builds states for paid rows that have no live `substack_stripe` entitlement, plans and applies. Refuses to write unless the latest real `stripe_reconcile` run completed and passed its guard in the last 24 hours. Also refuses, writing nothing, an export without a `Stripe plan` column, a cut-off export, or one holding a plan value the Desk does not recognise. Builds no state for a row with a plan interval (a card payer), nor for a row whose paid-until date has passed | Started by the owner |
 | `selfcheck` | As in S1.0 | On deploy |
 
 | Owner command | Does |
 | --- | --- |
 | `gcloud run jobs execute stripe-reconcile --wait` (with `--update-env-vars PLATFORM_JOB_DRY_RUN=1` for a dry run) | Runs the job; the runbook has the exact command. At launch this replaces a `platform-cli` wrapper |
 | `gcloud storage cp <csv> gs://<roster inbox>/` then `gcloud run jobs execute roster-import --wait` | Places the export in the roster inbox and runs the import; dry run as above |
-| `platform-cli runs show [--kind stripe_reconcile \| roster_import]` | Prints the latest runs: counts by action, the unseen list's size and the guard decision |
+| `platform-cli runs show [--kind stripe_reconcile \| roster_import] [--limit 1–20]` | Prints the latest runs: counts by action, the unseen list's size and the guard decision |
 | `platform-cli campaign apply --file <yaml>` · `platform-cli promo apply --file <yaml>` | Validates and writes campaigns and promotions |
 | `platform-cli launch set --join-open true \| false` (and `--library-open`, `--promotions-open`) | The layer switches |
 | `platform-cli launch report` | Counts per campaign and promotion; no emails |
