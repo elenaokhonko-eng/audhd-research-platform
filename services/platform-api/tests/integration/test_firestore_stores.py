@@ -164,8 +164,10 @@ def _at_once(*calls: Any) -> list[Any]:
 
 
 # A race won once proves little: each concurrency test runs its race this many times, each
-# round on a fresh project, and asserts the same things after every round.
-ROUNDS = 15
+# round on a fresh project, and asserts the same things after every round. Six, because a race
+# takes about 1.9 s on the emulator (its lock waits): 5 tests x 6 rounds keeps the file near
+# 60 s on CI. Fifteen rounds (75 races, 143 s) were run once and all passed.
+ROUNDS = 6
 
 
 def test_two_writers_create_one_grant() -> None:

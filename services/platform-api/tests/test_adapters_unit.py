@@ -530,15 +530,20 @@ def test_a_rate_limit_expires_two_days_after_its_window_ends():
     assert _expiries(db, "rate_limits") == [T0 + timedelta(days=3)]
 
 
-def test_a_transaction_that_gives_up_is_a_runtime_error_not_a_refusal():
+def test_a_transaction_that_gives_up_is_a_runtime_error_not_a_refusal(monkeypatch):
+    import time
+
     from platform_api.adapters import in_transaction
 
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)  # the backoffs, without waiting
     db = FakeFirestore()
     db.abort_commits = True
     store = FirestoreEntitlementStore(db)
     with pytest.raises(RuntimeError) as err:
         store.merge_contact("c1", lambda held: _contact_for_abort("c1"))
     assert not isinstance(err.value, ValueError)
+    assert len(slept) == 3 and all(0 <= s <= 0.2 for s in slept)
     # A ValueError of the work itself is still a ValueError.
     with pytest.raises(ValueError):
         in_transaction(FakeFirestore(), lambda tx: (_ for _ in ()).throw(ValueError("refused")))
@@ -548,3 +553,115 @@ def _contact_for_abort(contact_id: str) -> Any:
     from tests.entitlements.store_conformance import _contact
 
     return _contact(contact_id)
+
+
+# The outer retry of `in_transaction`: the library's own retries come back at once and can
+# lose to the same rival every time, so a give-up runs the work again after a jittered backoff.
+
+
+class _Contended(FakeFirestore):
+    """A client whose first `aborted` transactions are aborted at every commit."""
+
+    def __init__(self, aborted: int) -> None:
+        super().__init__()
+        self.aborted, self.begun = aborted, 0
+
+    def transaction(self) -> Any:
+        from tests.fake_firestore import Transaction
+
+        self.begun += 1
+        return Transaction(abort=self.begun <= self.aborted)
+
+
+class _Backoff:
+    """Records the bounds asked of `uniform` and the sleeps taken; each sleep is the bound."""
+
+    def __init__(self) -> None:
+        self.bounds: list[tuple[float, float]] = []
+        self.sleeps: list[float] = []
+
+    def uniform(self, low: float, high: float) -> float:
+        self.bounds.append((low, high))
+        return high
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+
+def test_a_transaction_that_gives_up_twice_backs_off_and_succeeds():
+    from platform_api.adapters import in_transaction
+
+    db, backoff = _Contended(aborted=2), _Backoff()
+    result = in_transaction(db, lambda tx: "done", sleep=backoff.sleep, uniform=backoff.uniform)
+    assert result == "done" and db.begun == 3
+    assert backoff.bounds == [(0, 0.05), (0, 0.1)]  # jittered, doubling from 50 ms
+    assert backoff.sleeps == [0.05, 0.1]
+
+
+def test_a_transaction_that_gives_up_on_every_round_is_a_runtime_error_after_four():
+    from platform_api.adapters import in_transaction
+
+    db, backoff = _Contended(aborted=99), _Backoff()
+    with pytest.raises(RuntimeError, match="gave up after its retries"):
+        in_transaction(db, lambda tx: "done", sleep=backoff.sleep, uniform=backoff.uniform)
+    assert db.begun == 4  # four rounds, with a backoff between each two and none after the last
+    assert backoff.sleeps == [0.05, 0.1, 0.2]
+
+
+def test_an_abort_at_the_first_read_is_retried_too():
+    from google.api_core.exceptions import Aborted
+
+    from platform_api.adapters import in_transaction
+
+    calls: list[int] = []
+
+    def work(tx: Any) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise Aborted("contention at the read")
+        return "done"
+
+    db, backoff = _Contended(aborted=0), _Backoff()
+    assert in_transaction(db, work, sleep=backoff.sleep, uniform=backoff.uniform) == "done"
+    assert len(calls) == 2 and backoff.sleeps == [0.05]
+
+
+@pytest.mark.parametrize("error", [ValueError("refused"), KeyError("k")])
+def test_any_other_error_of_the_work_is_raised_at_once_without_a_retry(error: Exception):
+    from platform_api.adapters import in_transaction
+
+    calls: list[int] = []
+
+    def work(tx: Any) -> str:
+        calls.append(1)
+        raise error
+
+    db, backoff = _Contended(aborted=0), _Backoff()
+    with pytest.raises(type(error)):
+        in_transaction(db, work, sleep=backoff.sleep, uniform=backoff.uniform)
+    assert len(calls) == 1 and db.begun == 1 and backoff.sleeps == []
+
+
+def test_each_backoff_is_a_warning_with_the_round_and_no_data(caplog):
+    import logging
+
+    from google.api_core.exceptions import Aborted
+
+    from platform_api.adapters import in_transaction
+
+    calls: list[int] = []
+
+    def work(tx: Any) -> str:
+        calls.append(1)
+        if len(calls) == 1:
+            raise Aborted("contention on the contact of ana@example.org")
+        return "done"
+
+    db, backoff = _Contended(aborted=2), _Backoff()  # an abort at the read, then a give-up
+    with caplog.at_level(logging.WARNING, logger="platform_api.adapters"):
+        assert in_transaction(db, work, sleep=backoff.sleep, uniform=backoff.uniform) == "done"
+    warnings = [r for r in caplog.records if r.name == "platform_api.adapters"]
+    assert [r.levelno for r in warnings] == [logging.WARNING] * 2
+    assert "Aborted" in warnings[0].getMessage() and "round 1" in warnings[0].getMessage()
+    assert "round 2" in warnings[1].getMessage()
+    assert "@" not in caplog.text and "contact" not in caplog.text
