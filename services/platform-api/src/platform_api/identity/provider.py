@@ -51,13 +51,15 @@ _COOKIE = "fake-session:"
 class FakeIdentityProvider:
     """A provider for tests. Never used outside them.
 
-    A token `fake-token:<name>` is accepted for a name in the address table and gives the
-    uid `u-<name>`; any other token raises InvalidToken. Names in `unverified` have an
-    address that is not verified. A cookie is `fake-session:<uid>:<n>`, where n counts the
-    cookies issued. The fake remembers each cookie it issued and, per uid, the count at the
-    moment its sessions were revoked: it accepts only a cookie it issued, for a known uid,
-    issued after the last revocation of that uid. A cookie issued here carries no expiry,
-    so a cookie is never refused for its age (the real provider refuses expired cookies).
+    A token `fake-token:<name>` is accepted for a name in the address table and gives the name's
+    current uid (`u-<name>` until it is deleted); `fake-token:<name>:<uid>` is a token of that
+    account, refused once the account is deleted. Any other token raises InvalidToken. Names in
+    `unverified` have an address that is not verified. A cookie is `fake-session:<uid>:<n>`,
+    where n counts the cookies issued. The fake remembers each cookie it issued and, per uid,
+    the count at the moment its sessions were revoked: it accepts only a cookie it issued, for a
+    known uid, issued after the last revocation of that uid. A cookie issued here carries no
+    expiry, so a cookie is never refused for its age (the real provider refuses expired
+    cookies).
 
     `delete_user` records the uid in `deleted` and ends its sessions. As at the real
     provider, the next sign-in with the same address is a new account: the name then gives
@@ -74,8 +76,9 @@ class FakeIdentityProvider:
         self.deleted: list[str] = []
 
     def verify_id_token(self, token: str) -> VerifiedIdentity:
-        name = token.removeprefix(_TOKEN) if token.startswith(_TOKEN) else None
-        if name is None or name not in self._emails:
+        rest = token.removeprefix(_TOKEN) if token.startswith(_TOKEN) else None
+        name, _, bound = (rest or "").partition(":")
+        if rest is None or name not in self._emails or bound not in ("", self._uids[name]):
             raise InvalidToken("the sign-in token was refused")
         return VerifiedIdentity(
             uid=self._uids[name],

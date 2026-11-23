@@ -470,7 +470,9 @@ from tests.entitlements.test_reconcile import (  # noqa: E402
 from tests.identity.test_deletion import (  # noqa: E402
     test_a_contact_another_member_owns_survives_the_delete,  # noqa: F401
     test_a_deleted_member_leaves_nothing_but_one_audit_entry,  # noqa: F401
+    test_a_failed_provider_step_keeps_the_record_for_a_retry,  # noqa: F401
     test_a_second_delete_is_harmless,  # noqa: F401
+    test_a_sign_in_during_the_gap_before_the_record_is_deleted_is_refused,  # noqa: F401
     test_only_requests_are_pending_and_oldest_first,  # noqa: F401
     test_records_that_name_the_member_hold_no_address_and_are_left_to_expire,  # noqa: F401
     test_the_same_address_signs_in_again_as_a_new_free_member,  # noqa: F401
@@ -652,5 +654,8 @@ def test_the_fake_provider_forgets_a_deleted_account_and_its_sessions():
     assert again.uid != "u-ana" and again.email == EMAIL["ana"]
     fresh = provider.create_session_cookie("fake-token:ana", timedelta(days=1))
     assert provider.verify_session_cookie(fresh) == again.uid
+    with pytest.raises(InvalidToken):  # a token bound to the deleted account is refused
+        provider.verify_id_token("fake-token:ana:u-ana")
+    assert provider.verify_id_token(f"fake-token:ana:{again.uid}").uid == again.uid
     provider.delete_user("u-nobody")  # not found is not an error
     assert provider.deleted == ["u-ana", "u-nobody"]

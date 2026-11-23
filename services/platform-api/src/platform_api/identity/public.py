@@ -22,7 +22,7 @@ from platform_api.identity.models import (
     TermsVersions,
     TermsView,
 )
-from platform_api.identity.provider import InvalidToken
+from platform_api.identity.provider import InvalidToken, ProviderError
 from platform_api.identity.runtime import get_runtime
 from platform_api.identity.store import MemberChange
 from platform_api.shared.events import new_event
@@ -33,6 +33,7 @@ __all__ = [
     "Member",
     "MemberRef",
     "MemberView",
+    "ProviderError",
     "SessionResult",
     "SupportRequest",
     "Unauthenticated",
@@ -338,24 +339,28 @@ def delete_member(uid: str, actor: str, now: datetime) -> None:
     """Delete a member who asked to be deleted, and everything that holds their address.
 
     In this order: each contact the member owns, with its entitlements (`forget_contact`, one
-    `contact.forgotten` entry each); the member's support requests; the member record; the
-    sign-in account at the provider. A contact another uid owns, or no one owns, is never
+    `contact.forgotten` entry each); the member's support requests; the sign-in account at the
+    provider; the member record, last. A contact another uid owns, or no one owns, is never
     touched, even when the member names it. ValueError when the member exists and did not
-    ask. When the member is gone already, only the provider step runs again (it tolerates
-    an account that is gone), so a run that stopped after removing the member can be
-    finished; a second call changes nothing else. Audit entries and records that name the
-    member by id stay, to expire.
+    ask. An absent member means the deletion is complete: nothing is done. Audit entries and
+    records that name the member by id stay, to expire.
+
+    The plan lists the provider step last. By the coordinator's ruling on Task 10 the member
+    record goes last instead: in status `deletion_requested` it is the handle for a retry. If
+    the provider step fails, ProviderError propagates, the record stays, and the owner's
+    route or CLI runs the delete again to finish. A deleted account cannot sign in meanwhile.
     """
     runtime = get_runtime()
     member = runtime.members.get(uid)
-    if member is not None:
-        if member.status != "deletion_requested":
-            raise ValueError("this member has not asked to be deleted")
-        for contact_id in entitlements.contact_ids_for_member(uid):
-            entitlements.forget_contact(contact_id, actor, now)
-        runtime.members.delete_support_requests(uid)
-        runtime.members.delete(uid)
-    runtime.provider.delete_user(uid)
+    if member is None:
+        return  # deleted already
+    if member.status != "deletion_requested":
+        raise ValueError("this member has not asked to be deleted")
+    for contact_id in entitlements.contact_ids_for_member(uid):
+        entitlements.forget_contact(contact_id, actor, now)
+    runtime.members.delete_support_requests(uid)
+    runtime.provider.delete_user(uid)  # not found counts as deleted, so a retry passes here
+    runtime.members.delete(uid)  # last: the retry handle (coordinator's ruling, Task 10)
 
 
 def member_count() -> int:

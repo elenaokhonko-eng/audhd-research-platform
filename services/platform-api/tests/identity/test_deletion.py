@@ -72,7 +72,7 @@ def test_a_second_delete_is_harmless(world, idn, ent):
     assert idn.members.get(uid) is None and ent.store.get_contact(cid) is None
     assert len(ent.store.audit_for(cid)) == 1
     assert identity.pending_deletions() == []
-    assert idn.provider.deleted == [uid, uid]  # the provider step is retried and tolerated
+    assert idn.provider.deleted == [uid]  # an absent member means the deletion is complete
 
 
 def test_records_that_name_the_member_hold_no_address_and_are_left_to_expire(world, idn, ent):
@@ -140,3 +140,57 @@ def test_nothing_in_the_deletion_path_logs_or_returns_an_address(world, idn, ent
     assert all("@" not in r.model_dump_json() for r in pending)
     assert "@" not in caplog.text
     assert all("@" not in e.model_dump_json() for e in ent.bus.published)
+
+
+# Added by the coordinator's ruling on the order of removal: the member record goes last.
+
+
+def test_a_sign_in_during_the_gap_before_the_record_is_deleted_is_refused(world, idn, ent):
+    uid = _sign_in_and_ask(world, idn, "ana")
+    old_token = f"fake-token:ana:{uid}"  # a token of the account about to be deleted
+    delete = idn.members.delete
+    during = []
+
+    def delete_after_a_sign_in(target):
+        from platform_api.identity.provider import InvalidToken
+
+        held = idn.members.get(target)
+        r = world.post("/v1/session/resolve", json={"id_token": old_token, "campaign": None})
+        try:
+            idn.provider.verify_id_token(old_token)
+            provider_refused = False
+        except InvalidToken:
+            provider_refused = True
+        during.append((r.status_code, held is not None and held.status, provider_refused))
+        return delete(target)
+
+    idn.members.delete = delete_after_a_sign_in
+    assert idn.provider.verify_id_token(old_token).uid == uid  # accepted before the delete
+    identity.delete_member(uid, OWNER, T0)
+    assert during == [(401, "deletion_requested", True)]
+    assert idn.provider.deleted == [uid] and idn.members.get(uid) is None
+
+
+def test_a_failed_provider_step_keeps_the_record_for_a_retry(world, idn, ent):
+    from platform_api.identity.provider import ProviderError
+
+    uid = _sign_in_and_ask(world, idn, "ana")
+    [cid] = ent.store.contact_ids_for_member(uid)
+    real = idn.provider.delete_user
+
+    def fails(target):
+        raise ProviderError("the sign-in account could not be deleted")
+
+    idn.provider.delete_user = fails
+    with pytest.raises(ProviderError):
+        identity.delete_member(uid, OWNER, T0)
+    held = idn.members.get(uid)
+    assert held is not None and held.status == "deletion_requested"
+    assert ent.store.get_contact(cid) is None
+    assert [r for r in idn.members.support_requests() if r.member_uid == uid] == []
+    assert [r.uid for r in identity.pending_deletions()] == [uid]
+
+    idn.provider.delete_user = real
+    identity.delete_member(uid, OWNER, T0)
+    assert idn.members.get(uid) is None and idn.provider.deleted == [uid]
+    assert len(ent.store.audit_for(cid)) == 1

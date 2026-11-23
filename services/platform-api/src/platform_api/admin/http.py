@@ -248,7 +248,8 @@ def deletions() -> dict[str, Any]:
 
 @router.post("/v1/admin/members/{uid}/delete")
 def delete_member(request: Request, uid: str, account: Owner) -> dict[str, Any]:
-    """Delete a member who asked to be. 404 when there is no member (deleted already)."""
+    """Delete a member who asked to be. 404 when there is no member (deleted already); 503
+    when the provider could not delete the sign-in account, and a second call finishes."""
     _about(request, uid)
     try:
         identity.member_view(uid)
@@ -258,4 +259,11 @@ def delete_member(request: Request, uid: str, account: Owner) -> dict[str, Any]:
         identity.delete_member(uid, f"owner:{account}", clock.utcnow())
     except ValueError:
         raise _invalid("This member has not asked to be deleted.") from None
+    except identity.ProviderError:
+        # The member record stays (it is removed last), so running the delete again finishes.
+        raise ApiError(
+            503,
+            "unavailable",
+            "The sign-in account could not be deleted. Nothing is lost; run the delete again.",
+        ) from None
     return {}

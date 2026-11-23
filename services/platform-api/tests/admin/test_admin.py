@@ -356,3 +356,49 @@ def test_the_owner_deletes_a_member_who_asked_and_no_one_else(admin, idn, ent):
         "admin.read",
     ]
     assert route_entries(ent, "u-nobody") == [("owner:acc-1", "member.deleted", "404")]
+
+
+def test_a_provider_that_fails_once_answers_503_and_a_retry_finishes(admin, idn, ent):
+    from platform_api.identity import public as identity
+    from platform_api.identity.provider import ProviderError
+    from tests.fixtures.launch import TERMS
+
+    ent.store.put_launch_config(TERMS)
+    signed = admin.post("/v1/session/resolve", json={"id_token": "fake-token:ana"}).json()
+    cookie = {"X-Member-Session": signed["session"]["cookie"]}
+    admin.post(
+        "/v1/me/terms-acceptance",
+        headers=cookie,
+        json={"terms_version": "t1", "privacy_version": "p1"},
+    )
+    filed = admin.post(
+        "/v1/me/support-requests", headers=cookie, json={"kind": "other", "note": "n"}
+    )
+    assert filed.status_code == 200
+    admin.post("/v1/me/deletion-request", headers=cookie)
+    [cid] = ent.store.contact_ids_for_member("u-ana")
+    real, calls = idn.provider.delete_user, []
+
+    def fails_once(uid):
+        calls.append(uid)
+        if len(calls) == 1:
+            raise ProviderError("the sign-in account could not be deleted")
+        real(uid)
+
+    idn.provider.delete_user = fails_once
+    first = admin.post("/v1/admin/members/u-ana/delete")
+    assert first.status_code == 503 and first.json()["error"]["code"] == "unavailable"
+    assert "u-ana" not in first.text and "@" not in first.text
+    held = idn.members.get("u-ana")
+    assert held is not None and held.status == "deletion_requested"
+    assert ent.store.get_contact(cid) is None
+    assert [r for r in idn.members.support_requests() if r.member_uid == "u-ana"] == []
+    assert [r.uid for r in identity.pending_deletions()] == ["u-ana"]
+
+    second = admin.post("/v1/admin/members/u-ana/delete")
+    assert (second.status_code, second.json()) == (200, {})
+    assert idn.members.get("u-ana") is None and idn.provider.deleted == ["u-ana"]
+    assert route_entries(ent, "u-ana") == [
+        ("owner:acc-1", "member.deleted", "503"),
+        ("owner:acc-1", "member.deleted", "200"),
+    ]
