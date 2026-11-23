@@ -9,7 +9,7 @@ import json
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from platform_api.admin.public import owner
@@ -38,7 +38,7 @@ class PublishBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     staging_prefix: str
-    dry_run: bool
+    dry_run: StrictBool
 
 
 def _not_found() -> ApiError:
@@ -108,6 +108,7 @@ async def publish_items(request: Request, account: Owner) -> PublishReport:
     now = clock.utcnow()
     status = 500
     dry_run = False
+    staging_prefix: str | None = None
     try:
         try:
             raw: Any = json.loads(await request.body())
@@ -115,6 +116,8 @@ async def publish_items(request: Request, account: Owner) -> PublishReport:
             raw = None
         if isinstance(raw, dict):
             dry_run = raw.get("dry_run") is True
+            named = raw.get("staging_prefix")
+            staging_prefix = named if isinstance(named, str) else None
         try:
             body = PublishBody.model_validate(raw)
         except ValidationError as invalid:
@@ -134,13 +137,16 @@ async def publish_items(request: Request, account: Owner) -> PublishReport:
         status = 200
         return report
     finally:
+        evidence = {"route": "library/publish", "outcome": str(status)}
+        if staging_prefix is not None:
+            evidence["staging_prefix"] = staging_prefix
         entry = entitlements.AuditEntry(
             at=now,
             actor=f"owner:{account}",
             action="library.dry_run" if dry_run else "library.published",
             subject="admin",
             reason=None,
-            evidence={"route": "library/publish", "outcome": str(status)},
+            evidence=evidence,
         )
         await run_in_threadpool(entitlements.write_audit, entry)
 
