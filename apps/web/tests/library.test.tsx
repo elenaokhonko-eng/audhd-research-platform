@@ -134,6 +134,7 @@ describe("ItemList and DownloadButton", () => {
     expect(screen.getByRole("link", { name: "Buy" })).toHaveAttribute("href", "https://example.org/buy");
     expect(screen.getByRole("link", { name: "Buy" })).toHaveAttribute("rel", "noreferrer");
     expect(screen.getAllByRole("link", { name: "Upgrade to open" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Buy" }).compareDocumentPosition(screen.getAllByRole("link", { name: "Upgrade to open" })[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "Upgrade to open" })[0]).toHaveAttribute("href", "/upgrade");
     expect(screen.getByRole("link", { name: "A" })).toHaveAttribute("href", "/member/library/a");
   });

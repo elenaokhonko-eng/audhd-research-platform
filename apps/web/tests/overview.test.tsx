@@ -19,4 +19,13 @@ describe("LibraryCount", () => {
     rerender(<LibraryCount counts={null} tier="free" />);
     expect(screen.queryByText(/The library has/)).toBeNull();
   });
+  it("tells a free member the number even when all are open, with no link", () => {
+    render(<LibraryCount counts={{ total: 2, open: 2 }} tier="free" />);
+    expect(screen.getByText("The library has 2 items. You can open 2 of them.")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+  it("shows nothing for an empty library", () => {
+    render(<LibraryCount counts={{ total: 0, open: 0 }} tier="paid" />);
+    expect(screen.queryByText(/The library has/)).toBeNull();
+  });
 });
