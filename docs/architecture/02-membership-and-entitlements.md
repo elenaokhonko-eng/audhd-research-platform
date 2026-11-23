@@ -28,8 +28,8 @@ The question this module answers, thousands of times a day: **what may this pers
 | Surveys (Stage 3) | – | Yes | Yes |
 | Practice Exchange (later; moderation model undecided) | – | Yes | Yes |
 | Account: profile, membership, linked emails, data requests | – | Yes | Yes |
-| **Research**: meta-reviews, evidence maps, clinician one-pagers, all downloads | – | Bought items only | Yes |
-| **Guides**: all downloads | – | Bought items only | Yes |
+| **Research**: meta-reviews, evidence maps, clinician one-pagers, all downloads | – | Sent to the upgrade page; items bought one by one are opened from the Library | Yes |
+| **Guides**: all downloads | – | Sent to the upgrade page; items bought one by one are opened from the Library | Yes |
 | **Ask AuDHD Research** (Stage 2, monthly quota) | – | – | Yes |
 
 Tiers are configuration, not code:
