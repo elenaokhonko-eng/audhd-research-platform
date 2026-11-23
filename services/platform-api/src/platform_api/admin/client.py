@@ -105,3 +105,11 @@ class AdminClient:
     def support_list(self) -> list[dict[str, Any]]:
         requests: list[dict[str, Any]] = self._call("GET", "/v1/admin/support-requests")["requests"]
         return requests
+
+    def library_publish(self, staging_prefix: str, dry_run: bool) -> dict[str, Any]:
+        report: dict[str, Any] = self._call(
+            "POST",
+            "/v1/admin/library/publish",
+            {"staging_prefix": staging_prefix, "dry_run": dry_run},
+        )
+        return report
