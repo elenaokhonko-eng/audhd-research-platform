@@ -489,3 +489,8 @@ p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }
+.promotion-banner { background: var(--mist); border-bottom: 1px solid var(--line); font-size: .9rem; margin: 0; padding: 10px 20px; text-align: center; }
+
+.legal { max-width: 70ch; }
+.legal table { border-collapse: collapse; width: 100%; }
+.legal th, .legal td { border: 1px solid currentColor; padding: 0.4em 0.6em; text-align: left; vertical-align: top; }

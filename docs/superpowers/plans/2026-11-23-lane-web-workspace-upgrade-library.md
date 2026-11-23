@@ -750,6 +750,79 @@ git commit -m "web: terms and privacy pages from the approved texts; terms step 
 
 ---
 
+### Task 7 (added on 2026-11-23, the owner's decisions after reading the lane's hand-over)
+
+Branch `web/library-counts-and-wording` from `integration/stage-1`; one pull request.
+
+**Files:**
+- Modify: `lib/library.ts`, `app/member/components/ItemList.tsx`, `app/member/library/[sku]/page.tsx`, `app/member/library/page.tsx`, `app/member/page.tsx`, `app/upgrade/page.tsx`, `tests/library.test.tsx`, `tests/upgrade.test.tsx`
+- Create: `tests/overview.test.tsx`
+
+**Interfaces:**
+- **A locked item offers every way to open it.** `cardActions(item: ItemCard): CardAction[]` replaces `cardAction`: `can_open` → `[download]`; otherwise `buy` when there is a `buy_url`, then `upgrade` when the item's access is `paid` (full access does not open a `purchase_only` item, so no upgrade is offered for one); an item with neither → `[]`. So a free member sees "Buy" **and** "Upgrade to open" on a paid item that is also sold, in that order. `ItemList` and the item page render every action.
+- **Counts.** `libraryCounts(items: ItemCard[]): { total: number; open: number }` (`open` = cards with `can_open`). The overview (`/member`) loads the catalogue and shows, under the sentence about the tier: for a paid member "The library has `<total>` items. You can open all of them." when `open === total`, otherwise "The library has `<total>` items. You can open `<open>` of them."; for a free member the second form, followed by the link "See how to open the rest" to `/upgrade` when `open < total`. The Library page shows the same sentence under its heading. One item reads "1 item". When the catalogue cannot be loaded, or the library is switched off, the overview shows no count (it never fails because of the library).
+- **Wording.**
+  - Upgrade page, `subscribe` view without a link: "Subscribe from the newsletter's page on Substack."
+  - Item page while the library is switched off (the service answers `not_found` for the list as well as for the item): "The library opens soon." An item that does not exist while the library is on stays "This item is no longer available."
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/library.test.tsx`, replace the `cardAction` block by:
+
+```tsx
+describe("cardActions", () => {
+  it.each([
+    [card({ can_open: true, buy_url: "https://example.org/buy" }), [{ kind: "download" }]],
+    [card({ buy_url: "https://example.org/buy" }), [{ kind: "buy", url: "https://example.org/buy" }, { kind: "upgrade" }]],
+    [card({}), [{ kind: "upgrade" }]],
+    [card({ access: "purchase_only", buy_url: "https://example.org/buy" }), [{ kind: "buy", url: "https://example.org/buy" }]],
+    [card({ access: "purchase_only" }), []],
+  ])("%#", (item, actions) => expect(cardActions(item)).toEqual(actions));
+});
+
+describe("libraryCounts", () => {
+  it("counts what exists and what this member can open", () =>
+    expect(libraryCounts([card({ can_open: true }), card({}), card({})])).toEqual({ total: 3, open: 1 }));
+});
+```
+
+and in the `ItemList` test expect, for the card with a buy URL, both a link "Buy" and a link "Upgrade to open".
+
+```tsx
+// tests/overview.test.tsx
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { LibraryCount } from "@/app/member/components/LibraryCount";
+
+describe("LibraryCount", () => {
+  it("tells a paid member that everything is open", () => {
+    render(<LibraryCount counts={{ total: 12, open: 12 }} tier="paid" />);
+    expect(screen.getByText("The library has 12 items. You can open all of them.")).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+  it("tells a free member how many are open and where to open the rest", () => {
+    render(<LibraryCount counts={{ total: 12, open: 0 }} tier="free" />);
+    expect(screen.getByText("The library has 12 items. You can open 0 of them.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "See how to open the rest" })).toHaveAttribute("href", "/upgrade");
+  });
+  it("says 1 item, and shows nothing without counts", () => {
+    const { rerender } = render(<LibraryCount counts={{ total: 1, open: 1 }} tier="paid" />);
+    expect(screen.getByText("The library has 1 item. You can open all of them.")).toBeInTheDocument();
+    rerender(<LibraryCount counts={null} tier="free" />);
+    expect(screen.queryByText(/The library has/)).toBeNull();
+  });
+});
+```
+
+`LibraryCount` is a new component in `app/member/components/`, used by the overview and the Library page. In `tests/upgrade.test.tsx`, add one test of the page's `subscribe` view component without a link: it shows "Subscribe from the newsletter's page on Substack." and no link named "Subscribe on Substack". Add one test that the item page's helper returns "The library opens soon." when both the item and the list answer `not_found`, and "This item is no longer available." when only the item does.
+
+- [ ] **Step 2: See them fail** (`npm test`: `cardActions` is not exported).
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: See them pass.** Run the check command. Expected: 11 new or changed tests pass (5 and 1, 3, 2).
+- [ ] **Step 5: Commit** (`web: every way to open a locked item; library counts on the overview; three wordings the owner chose`), then the pull request.
+
+---
+
 ## Exit test for this plan
 
 1. The check command passes in CI.

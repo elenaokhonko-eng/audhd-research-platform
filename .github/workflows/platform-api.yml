@@ -2,9 +2,10 @@
 # Deploy the image to the dev project on every push to integration/stage-1, or a manual run
 # (workflow_dispatch) on that branch, once the owner has switched dev deploys on (Gate 1), and
 # to prod when a v* tag is pushed and the owner approves. One image serves platform-api
-# (PLATFORM_APP_MODE=api), platform-hooks (hooks) and the job platform-selfcheck
-# (platform-cli job selfcheck). The deploy changes only the image; every other setting of the
-# services and the job belongs to Terraform. Each deploy job reads GCP_PROJECT_ID, GCP_REGION,
+# (PLATFORM_APP_MODE=api), platform-hooks (hooks) and the jobs platform-selfcheck, stripe-reconcile
+# and roster-import (platform-cli job <name>); a job that Terraform has not created yet is skipped
+# with a notice. The deploy changes only the image; every other setting of the services and the
+# jobs belongs to Terraform. Each deploy job reads GCP_PROJECT_ID, GCP_REGION,
 # WIF_PROVIDER, DEPLOYER_SA and REGISTRY from its GitHub environment (dev or production),
 # which ops/scripts/20-stage1-foundations.sh fills from Terraform's outputs.
 name: platform-api
@@ -146,6 +147,17 @@ jobs:
             gcloud run deploy "$svc" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
           done
           gcloud run jobs update platform-selfcheck --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+          # The launch jobs exist once the owner has applied wave 2's Terraform; until then they are skipped.
+          for job in stripe-reconcile roster-import; do
+            if err="$(gcloud run jobs describe "$job" --region="$REGION" --project="$PROJECT" --format='value(name)' 2>&1 >/dev/null)"; then
+              gcloud run jobs update "$job" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+            elif grep -qiE 'cannot find|not found' <<<"$err"; then
+              echo "::notice::The job $job does not exist in $PROJECT yet (wave 2's Terraform is not applied there); its image was not updated."
+            else
+              echo "::error::Could not read the job $job in $PROJECT: $err"
+              exit 1
+            fi
+          done
 
   deploy-prod:
     # The prod deployer accepts only jobs in the environment production on a v* tag
@@ -182,3 +194,14 @@ jobs:
             gcloud run deploy "$svc" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
           done
           gcloud run jobs update platform-selfcheck --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+          # The launch jobs exist once the owner has applied wave 2's Terraform; until then they are skipped.
+          for job in stripe-reconcile roster-import; do
+            if err="$(gcloud run jobs describe "$job" --region="$REGION" --project="$PROJECT" --format='value(name)' 2>&1 >/dev/null)"; then
+              gcloud run jobs update "$job" --image="$IMAGE" --region="$REGION" --project="$PROJECT" --quiet
+            elif grep -qiE 'cannot find|not found' <<<"$err"; then
+              echo "::notice::The job $job does not exist in $PROJECT yet (wave 2's Terraform is not applied there); its image was not updated."
+            else
+              echo "::error::Could not read the job $job in $PROJECT: $err"
+              exit 1
+            fi
+          done

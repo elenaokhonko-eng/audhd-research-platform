@@ -165,11 +165,13 @@ export function JoinScreen({
               </div>
             </form>
           )}
-          <div className="button-row">
-            <button className="button button-secondary" disabled={busy} onClick={google} type="button">
-              Continue with Google
-            </button>
-          </div>
+          {identity.kind !== "missing" && identity.googleEnabled ? (
+            <div className="button-row">
+              <button className="button button-secondary" disabled={busy} onClick={google} type="button">
+                Continue with Google
+              </button>
+            </div>
+          ) : null}
         </>
       )}
       <div aria-live="polite" id="join-status" ref={liveRef} role="status" tabIndex={-1}>
@@ -177,7 +179,11 @@ export function JoinScreen({
           <>
             <p>Check your inbox.</p>
             {senderHint ? <p>The email comes from {senderHint}.</p> : null}
-            <p>If it is not there after a minute, look in the spam folder or use Continue with Google.</p>
+            <p>
+              {identity.kind !== "missing" && identity.googleEnabled
+                ? "If it is not there after a minute, look in the spam folder or use Continue with Google."
+                : "If it is not there after a minute, look in the spam folder."}
+            </p>
           </>
         ) : null}
         {message ? <p>{message}</p> : null}

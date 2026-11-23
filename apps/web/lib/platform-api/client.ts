@@ -1,7 +1,20 @@
 import { GoogleAuth } from "google-auth-library";
 import { ApiError } from "./errors";
 import { FakePlatformApi } from "./fake";
-import type { Access, ApiErrorCode, Campaign, Member, SessionResult } from "./types";
+import type {
+  Access,
+  ApiErrorCode,
+  Campaign,
+  ItemCard,
+  ItemDetail,
+  Member,
+  Promotion,
+  Reason,
+  RefreshTicket,
+  SessionResult,
+  SignedLink,
+  UpgradeOptions,
+} from "./types";
 
 export { ApiError };
 
@@ -16,6 +29,14 @@ export interface PlatformApi {
     kind: "paid_not_recognised" | "other",
     note: string,
   ): Promise<{ id: string }>;
+  entitlements(session: string): Promise<Reason[]>;
+  refreshAccess(session: string): Promise<RefreshTicket>;
+  upgradeOptions(session: string): Promise<UpgradeOptions>;
+  activePromotions(): Promise<Promotion[]>;
+  libraryItems(session: string): Promise<ItemCard[]>;
+  libraryItem(session: string, sku: string): Promise<ItemDetail>;
+  download(session: string, sku: string): Promise<SignedLink>;
+  requestDeletion(session: string): Promise<void>;
 }
 
 const CODES: ApiErrorCode[] = [
@@ -61,7 +82,7 @@ export class HttpPlatformApi implements PlatformApi {
     } finally {
       clearTimeout(timer);
     }
-    let parsed: { error?: { code?: string; message?: string; retry_after?: number | null } };
+    let parsed: { error?: { code?: string; message?: string; retry_after?: number | null; reason?: string | null } };
     try {
       parsed = await response.json();
     } catch {
@@ -69,7 +90,13 @@ export class HttpPlatformApi implements PlatformApi {
     }
     const err = parsed?.error;
     if (!err || !CODES.includes(err.code as ApiErrorCode)) throw unavailable();
-    throw new ApiError(response.status, err.code as ApiErrorCode, err.message ?? "", err.retry_after ?? null);
+    throw new ApiError(
+      response.status,
+      err.code as ApiErrorCode,
+      err.message ?? "",
+      err.retry_after ?? null,
+      err.reason === "paid_required" || err.reason === "purchase_required" ? err.reason : null,
+    );
   }
 
   campaign(slug: string | null): Promise<Campaign> {
@@ -102,6 +129,38 @@ export class HttpPlatformApi implements PlatformApi {
     note: string,
   ): Promise<{ id: string }> {
     return this.call("POST", "/v1/me/support-requests", { session, body: { kind, note } });
+  }
+
+  async entitlements(session: string): Promise<Reason[]> {
+    return (await this.call<{ entitlements: Reason[] }>("GET", "/v1/me/entitlements", { session })).entitlements;
+  }
+
+  refreshAccess(session: string): Promise<RefreshTicket> {
+    return this.call("POST", "/v1/me/refresh-access", { session });
+  }
+
+  upgradeOptions(session: string): Promise<UpgradeOptions> {
+    return this.call("GET", "/v1/me/upgrade-options", { session });
+  }
+
+  async activePromotions(): Promise<Promotion[]> {
+    return (await this.call<{ promotions: Promotion[] }>("GET", "/v1/public/promotions/active")).promotions;
+  }
+
+  async libraryItems(session: string): Promise<ItemCard[]> {
+    return (await this.call<{ items: ItemCard[] }>("GET", "/v1/library/items", { session })).items;
+  }
+
+  libraryItem(session: string, sku: string): Promise<ItemDetail> {
+    return this.call("GET", `/v1/library/items/${encodeURIComponent(sku)}`, { session });
+  }
+
+  download(session: string, sku: string): Promise<SignedLink> {
+    return this.call("POST", `/v1/library/items/${encodeURIComponent(sku)}/download`, { session });
+  }
+
+  async requestDeletion(session: string): Promise<void> {
+    await this.call("POST", "/v1/me/deletion-request", { session });
   }
 }
 
