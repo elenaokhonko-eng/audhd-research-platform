@@ -97,6 +97,20 @@ def test_the_sandbox_marker_works_only_when_switched_on_and_never_in_prod():
         CommerceSettings(env="prod", stripe_test_channel_metadata=True)
 
 
+def test_a_refused_setting_never_repeats_the_values_it_was_given():
+    with pytest.raises(ValueError) as err:
+        CommerceSettings(
+            env="prod",
+            stripe_test_channel_metadata=True,
+            stripe_substack_application="ca_test_secretish",
+        )
+    text = str(err.value)
+    assert "sandbox" in text and "ca_test_secretish" not in text
+    # pydantic shortens a long input in its message, so the id alone could be cut out by
+    # chance: the input must not be shown at all.
+    assert "input_value" not in text
+
+
 def test_a_subscription_never_prints_its_address():
     assert "@" not in repr(sub()) and "@" not in repr(to_state(sub(), S, T0))
 

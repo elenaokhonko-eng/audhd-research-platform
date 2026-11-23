@@ -18,8 +18,9 @@ class Runtime:
     bus: EventBus
     session_ttl: timedelta
     limiter: RateLimiter
-    # None until the Commerce lane wires its request_refresh; its "already_running" is
-    # passed on as "started".
+    # Set by `adapters.configure_runtimes`: `adapters.sign_in_refresh`, which passes
+    # Commerce's "already_running" on as "started", and Commerce's
+    # `last_reconcile_completed_at`. None only in a test that leaves Commerce out.
     request_refresh: Callable[[str, datetime], Literal["fresh", "started"]] | None
     last_reconcile_at: Callable[[], datetime | None] | None
 
