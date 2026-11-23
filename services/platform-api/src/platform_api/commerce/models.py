@@ -66,6 +66,8 @@ class Promotion(BaseModel):
     only by `count_once`, never from the file.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str = Field(min_length=1)
     channel: Literal["substack_offer", "platform_checkout"]
     audience: list[Audience]

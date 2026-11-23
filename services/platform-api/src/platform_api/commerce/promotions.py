@@ -117,10 +117,15 @@ def count_upgrades(
     """Count the `substack_stripe` records a real reconcile created inside a promotion's
     window, once per promotion and contact, for a contact that was not paying already."""
     rt = get_runtime()
+    # A created record of a subscription already seen continues it (a move to another
+    # address): it was counted, if at all, when it was first created.
+    seen = {e.source_ref for e in existing if e.source == "substack_stripe"}
     counted = 0
     for p in rt.promotions.list():
         for record in created:
             if record.source != "substack_stripe" or record.valid_from is None:
+                continue
+            if record.source_ref in seen:
                 continue
             if not _in_window(p, record.valid_from):
                 continue

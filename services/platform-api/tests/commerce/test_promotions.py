@@ -1,4 +1,5 @@
 # tests/commerce/test_promotions.py
+import logging
 from datetime import timedelta
 
 import pytest
@@ -128,3 +129,117 @@ def test_the_public_route_is_cacheable_for_a_minute(open_shop, owner_client):
         and r.headers["cache-control"] == "public, max-age=60"
         and "promotions" in r.json()
     )
+
+
+def test_a_failure_while_counting_leaves_the_reconcile_completed(
+    open_shop, ent, caplog, monkeypatch
+):
+    def broken(promotion_id, contact_id):
+        raise RuntimeError("the store is down")
+
+    monkeypatch.setattr(open_shop.promotions, "count_once", broken)
+    inside = START + timedelta(days=1)
+    open_shop.stripe = InMemoryStripeReader([sub("cy", start_date=inside)])
+    with caplog.at_level(logging.ERROR):
+        run = commerce.stripe_reconcile(False, "schedule", inside + timedelta(hours=1))
+    assert (run.state, run.guard, run.counts["created"], run.counts["upgrade_count_failed"]) == (
+        "completed",
+        "passed",
+        1,
+        1,
+    )
+    assert [e.source_ref for e in ent.store.entitlements_by_source("substack_stripe")] == [
+        "sub_test_cy"
+    ]
+    assert "reconcile_failed" not in caplog.text and "alert=" not in caplog.text
+    assert "upgrade_count_failed" in caplog.text and "the store is down" not in caplog.text
+    assert any(e.type.endswith("commerce.reconcile.completed") for e in ent.bus.published)
+
+
+def test_a_subscription_that_moves_to_another_address_is_not_counted_again(open_shop):
+    from tests.fixtures.people import EMAIL
+
+    inside = START + timedelta(days=1)
+    open_shop.stripe = InMemoryStripeReader([sub("cy", start_date=inside)])
+    commerce.stripe_reconcile(False, "schedule", inside + timedelta(hours=1))
+    open_shop.stripe = InMemoryStripeReader(
+        [sub("cy", start_date=inside, customer_email=EMAIL["di"])]
+    )
+    run = commerce.stripe_reconcile(False, "schedule", inside + timedelta(hours=2))
+    assert run.counts["moved"] == 1
+    [stored] = open_shop.promotions.list()
+    assert stored.counts == {"upgrades_in_window": 1}
+
+
+def test_every_owner_call_on_promotions_is_audited_once_with_its_outcome(
+    open_shop, owner_client, ent
+):
+    good = promo(id="offer-2").model_dump(mode="json")
+    assert owner_client.put("/v1/admin/promotions", json={"promotions": [good]}).status_code == 200
+    assert (
+        owner_client.put("/v1/admin/promotions", json={"promotions": [good, good]}).status_code
+        == 422
+    )
+    assert owner_client.get("/v1/admin/promotions").status_code == 200
+    entries = [(a.actor, a.action, a.subject, a.evidence) for a in ent.store.audit_for("admin")]
+    assert entries == [
+        ("owner:acc-1", "promotions.written", "admin", {"route": "promotions", "outcome": "200"}),
+        ("owner:acc-1", "promotions.written", "admin", {"route": "promotions", "outcome": "422"}),
+        ("owner:acc-1", "admin.read", "admin", {"route": "promotions", "outcome": "200"}),
+    ]
+
+
+def test_a_refused_caller_gets_403_and_leaves_no_entry(open_shop, owner_client, ent):
+    from tests.admin.test_admin import token
+
+    good = promo(id="offer-2").model_dump(mode="json")
+    for headers in ({"Authorization": ""}, {"Authorization": f"Bearer {token('acc-2')}"}):
+        assert owner_client.get("/v1/admin/promotions", headers=headers).status_code == 403
+        put = owner_client.put("/v1/admin/promotions", headers=headers, json={"promotions": [good]})
+        assert put.status_code == 403
+    assert ent.store.audit_for("admin") == []
+    assert [p.id for p in open_shop.promotions.list()] == ["offer-1"]
+
+
+def test_an_owner_route_without_an_audit_action_cannot_be_added():
+    from fastapi import APIRouter
+
+    from platform_api.commerce.http import _AuditedRoute
+
+    router = APIRouter(route_class=_AuditedRoute)
+    with pytest.raises(RuntimeError):
+
+        @router.get("/v1/admin/undeclared")
+        def undeclared():
+            return {}
+
+
+def test_an_unknown_field_in_a_promotion_is_refused(open_shop, owner_client):
+    good = promo(id="offer-2").model_dump(mode="json")
+    r = owner_client.put("/v1/admin/promotions", json={"promotions": [{**good, "colour": "red"}]})
+    assert r.status_code == 422 and r.json()["error"]["code"] == "validation_failed"
+
+
+def test_without_an_account_link_the_routes_are_not_available(open_shop, signed_in, ent):
+    hal, bo = signed_in("hal"), signed_in("bo")
+    config = ent.store.get_launch_config()
+    ent.store.put_launch_config(config.model_copy(update={"substack_account_url": ""}))
+    change = commerce.upgrade_options(hal, START)
+    assert [(r.kind, r.available, r.url) for r in change.routes] == [
+        ("substack_change_plan", False, None)
+    ]
+    neither = commerce.upgrade_options(bo, END)
+    assert [(r.kind, r.available, r.url) for r in neither.routes] == [
+        ("substack", False, None),
+        ("platform_only", False, None),
+    ]
+    assert neither.promotion is None
+
+
+def test_the_upgrade_route_asks_for_the_terms_first(open_shop, member_client):
+    from tests.identity.test_sessions import sign_in
+
+    client, _ = member_client("bo")
+    cookie = {"X-Member-Session": sign_in(client, "fay").json()["session"]["cookie"]}
+    r = client.get("/v1/me/upgrade-options", headers=cookie)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "terms_required"

@@ -97,8 +97,13 @@ def _work(
         )
         if not plan.blocked:
             # Roster records are read for this count only: the plan sees its own source.
-            prior = [*existing, *entitlements.existing_for(["substack_roster"])]
-            counts["upgrades_counted"] = count_upgrades(created_records(plan), prior, now)
+            # The writes have landed: a failure here is logged, never the run's failure.
+            try:
+                prior = [*existing, *entitlements.existing_for(["substack_roster"])]
+                counts["upgrades_counted"] = count_upgrades(created_records(plan), prior, now)
+            except Exception as exc:
+                counts["upgrade_count_failed"] = 1
+                logger.error("upgrade_count_failed run=%s error=%s", run_id, type(exc).__name__)
     return "blocked" if plan.blocked else "passed"
 
 

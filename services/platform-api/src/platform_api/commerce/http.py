@@ -61,6 +61,9 @@ AUDIT_ACTIONS: dict[tuple[str, str], tuple[str, str]] = {
 }
 
 
+# `_status_of` and `_AuditedRoute` mirror `_status_of` and `AuditedRoute` in
+# `platform_api/admin/http.py`, which is not public. They must change together: same actor,
+# subject, evidence and outcome, one entry per call by a verified owner.
 def _status_of(exc: Exception) -> int:
     if isinstance(exc, ApiError):
         return exc.status
