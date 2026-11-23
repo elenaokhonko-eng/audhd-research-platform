@@ -28,6 +28,16 @@ class FakeSubscriptions:
         return adapters.page_from_json(self.pages[index])
 
 
+class _StandIn:
+    """Replaces StripeSdkReader in the jobs' runtime; `for_test` stays the real one."""
+
+    def __init__(self, build):
+        self._build, self.for_test = build, adapters.StripeSdkReader.for_test
+
+    def __call__(self, key):
+        return self._build(key)
+
+
 def reader(pages, fail_on=None):
     fake = FakeSubscriptions(pages, fail_on)
     return adapters.StripeSdkReader.for_test(subscriptions=fake), fake
@@ -209,17 +219,36 @@ class OrderedFirestore(FakeFirestore):
         return OrderedCollection(self, name)
 
 
-# The composite indexes the Infra lane creates on sync_runs (contracts 6, infra plan).
-INDEXES = [("kind",), ("kind", "state", "dry_run")]
+# The composite indexes the Infra lane creates on sync_runs
+# (infra/terraform/modules/firestore_schema/main.tf), each ending in `finished_at` descending.
+INDEXES = [("kind",), ("kind", "state", "dry_run"), ("kind", "dry_run")]
 
 
-def _ordered_queries_match_the_indexes(db):
-    for collection, filters, order, direction in db.queries:
-        if collection != "sync_runs" or order is None:
-            continue  # equality filters only: served by Firestore's single-field indexes
+def _queries_are_served_by_the_indexes(db):
+    """Every sync_runs query: equality filters only, and either no order (served by the
+    single-field indexes) or an order on `finished_at` descending over exactly the fields of
+    one composite index (or none, for the single-field index of `finished_at`)."""
+    seen = [q for q in db.queries if q[0] == "sync_runs"]
+    assert seen
+    for _, filters, order, direction in seen:
+        assert all(op == "==" for _, op in filters), filters
+        if order is None:
+            continue
         assert order == "finished_at" and direction == "DESCENDING"
         fields = {f for f, _ in filters}
         assert fields == set() or any(fields == set(index) for index in INDEXES), filters
+
+
+def test_the_real_latest_run_is_read_with_the_kind_and_dry_run_index():
+    from platform_api.commerce.adapters import FirestoreRunStore
+
+    db = OrderedFirestore()
+    store = FirestoreRunStore(db)
+    _runs_on(store)
+    db.queries.clear()
+    store.latest("stripe_reconcile", real_only=True)
+    ordered = [(f, o) for c, f, o, _ in db.queries if o is not None]
+    assert ordered == [((("dry_run", "=="), ("kind", "==")), "finished_at")]
 
 
 def _runs_on(store):
@@ -259,7 +288,7 @@ def test_the_firestore_run_store_answers_as_the_in_memory_one():
         for limit in (1, 3, 20):
             got = [_shape(r) for r in cloud.recent(kind, limit)]
             assert got == [_shape(r) for r in memory.recent(kind, limit)]
-    _ordered_queries_match_the_indexes(db)
+    _queries_are_served_by_the_indexes(db)
 
 
 def test_a_run_round_trips_and_its_document_holds_counts_only():
@@ -345,8 +374,10 @@ def test_a_count_that_cannot_commit_raises_and_counts_nothing():
     with pytest.raises(RuntimeError):
         store.count_once("offer-1", "c-1")
     assert store.list()[0].counts == {} and ("promotion_upgrades", "offer-1:c-1") not in db.docs
-    with pytest.raises(ValueError):
-        store.count_once("offer/1", "c-1")
+    db.abort_commits = False
+    for bad in ("offer/1", "offer:1"):
+        with pytest.raises(ValueError):
+            store.count_once(bad, "c-1")
 
 
 # Cloud Run, the bucket and Secret Manager, with stand-ins for their clients.
@@ -460,7 +491,8 @@ def cloud(ent, monkeypatch):
         return reader(seen["pages"], seen.get("fail_on"))[0]
 
     monkeypatch.setattr(cloud_adapters, "read_secret", read_secret)
-    monkeypatch.setattr(cloud_adapters, "StripeSdkReader", stripe_reader)
+    # build_runtime imports the reader from its module when it is given a key
+    monkeypatch.setattr(adapters, "StripeSdkReader", _StandIn(stripe_reader))
     monkeypatch.setenv("PLATFORM_STRIPE_KEY_SECRET", "projects/p/secrets/k/versions/latest")
     monkeypatch.setenv("PLATFORM_STRIPE_SUBSTACK_APPLICATION", "ca_test_substack")
     return seen
@@ -626,3 +658,56 @@ def test_listing_runs_is_audited_and_refused_to_anyone_else(com, owner_client, e
         ("owner:acc-1", "admin.read", "admin", {"route": "sync-runs", "outcome": "200"}),
         ("owner:acc-1", "admin.read", "admin", {"route": "sync-runs", "outcome": "422"}),
     ]
+
+
+def test_importing_the_adapters_does_not_import_stripe():
+    import subprocess
+    import sys
+
+    probe = "import sys, platform_api.commerce.adapters; assert 'stripe' not in sys.modules"
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)  # noqa: S603
+    assert done.returncode == 0, done.stderr[-400:]
+
+
+def test_a_failure_after_the_run_started_finishes_it_as_failed(cloud, capsys, monkeypatch):
+    from platform_api.commerce import adapters as cloud_adapters
+
+    real_finish = cloud_adapters.FirestoreRunStore.finish
+    calls = []
+
+    def finish_fails_once(self, *args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("firestore unavailable")
+        return real_finish(self, *args, **kwargs)
+
+    monkeypatch.setattr(cloud_adapters.FirestoreRunStore, "finish", finish_fails_once)
+    code, line = _job("stripe-reconcile", capsys)
+    assert code == 1 and set(line) == {"job", "run_id", "error"}
+    assert line["error"] == "RuntimeError"
+    stored = cloud["db"].docs[("sync_runs", line["run_id"])]
+    assert stored["state"] == "failed" and stored["counts"]["seen"] == 4
+
+
+def test_a_run_that_finished_is_not_marked_failed_afterwards(cloud, capsys, monkeypatch):
+    from platform_api.commerce import adapters as cloud_adapters
+
+    real_get = cloud_adapters.FirestoreRunStore.get
+    asked = []
+
+    def get_misses_once(self, run_id):  # the run's own read misses; the job's check does not
+        asked.append(run_id)
+        return None if len(asked) == 1 else real_get(self, run_id)
+
+    monkeypatch.setattr(cloud_adapters.FirestoreRunStore, "get", get_misses_once)
+    code, line = _job("stripe-reconcile", capsys)
+    assert code == 1 and set(line) == {"job", "run_id", "error"}
+    assert cloud["db"].docs[("sync_runs", line["run_id"])]["state"] == "completed"
+
+
+def test_a_promotion_id_that_could_make_two_upgrade_keys_alike_is_refused(com, owner_client):
+    body = {**_promotion().model_dump(mode="json"), "id": "a:b"}
+    assert owner_client.put("/v1/admin/promotions", json={"promotions": [body]}).status_code == 422
+    for bad in ("a:b", "a/b"):
+        with pytest.raises(ValueError):
+            _promotion(id=bad)

@@ -68,7 +68,9 @@ class Promotion(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1)
+    # No ':' and no '/': the id names a document and is half of the upgrade key
+    # `{promotion_id}:{contact_id}`, which must not be the same for two pairs.
+    id: str = Field(min_length=1, pattern=r"^[^:/]+$")
     channel: Literal["substack_offer", "platform_checkout"]
     audience: list[Audience]
     plan_interval: Literal["month", "year"] | None

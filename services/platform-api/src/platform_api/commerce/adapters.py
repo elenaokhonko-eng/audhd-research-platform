@@ -9,11 +9,15 @@ transaction helper and the lazy client below follow Core's `in_transaction` and 
 without importing them. The stores ask the client for a collection on each use, so a lazy
 client is not built until a store is used.
 
-`sync_runs` is read with the composite indexes of the Infra lane: (`kind`, `finished_at`
-descending) and (`kind`, `state`, `dry_run`, `finished_at` descending). A run still running
+`sync_runs` is read with the three composite indexes of the Infra lane (`kind`;
+`kind`, `state`, `dry_run`; `kind`, `dry_run`; each then `finished_at` descending) and
+equality filters only; each query names the index that serves it. A run still running
 has `finished_at` null, which Firestore sorts after every time when descending; running runs
 are therefore read by equality filters alone and merged, newest first by finish time, or by
 start time while unfinished, as the in-memory store orders them.
+
+Importing this module does not import the Stripe library: only `build_runtime` with a key
+does, so the api service never loads it.
 """
 
 import threading
@@ -36,7 +40,6 @@ from platform_api.commerce.ports import (
 )
 from platform_api.commerce.runtime import Runtime
 from platform_api.commerce.settings import CommerceSettings
-from platform_api.commerce.stripe_adapter import StripeSdkReader
 
 if TYPE_CHECKING:
     from platform_api.shared.bus import EventBus
@@ -132,41 +135,54 @@ class FirestoreRunStore:
     def _query(self, **equal: object) -> Any:
         query = self._runs()
         for field, value in equal.items():
-            if isinstance(value, list):
-                query = query.where(filter=FieldFilter(field, "in", value))
-            else:
-                query = query.where(filter=FieldFilter(field, "==", value))
+            query = query.where(filter=FieldFilter(field, "==", value))
         return query
 
     def _read(self, query: Any) -> list[SyncRun]:
         return [SyncRun.model_validate(s.to_dict()) for s in query.stream()]
 
-    def _finished_first(self, query: Any, limit: int) -> list[SyncRun]:
-        ordered = query.order_by("finished_at", direction=firestore.Query.DESCENDING)
-        return self._read(ordered.limit(limit))
+    def _newest_finished(self, query: Any) -> Any:
+        # Unfinished runs (finished_at null) come after every finished one in this order.
+        return query.order_by("finished_at", direction=firestore.Query.DESCENDING)
+
+    def _running(self, **equal: object) -> list[SyncRun]:
+        # Equality filters only, no order: served by Firestore's single-field indexes.
+        return self._read(self._query(**equal, state="running"))
 
     def recent(self, kind: RunKind | None, limit: int) -> list[SyncRun]:
         by_kind: dict[str, object] = {"kind": kind} if kind is not None else {}
-        # index (kind, finished_at desc), or the single-field index when no kind is named
-        finished = self._finished_first(self._query(**by_kind), limit)
-        running = self._read(self._query(**by_kind, state="running"))  # equality only
-        merged = {r.run_id: r for r in (*finished, *running)}
+        # Index sync_runs_by_kind (kind, finished_at desc); with no kind, the single-field
+        # index of finished_at.
+        finished = self._read(self._newest_finished(self._query(**by_kind)).limit(limit))
+        merged = {r.run_id: r for r in (*finished, *self._running(**by_kind))}
         return sorted(merged.values(), key=_newest_first, reverse=True)[:limit]
 
     def latest(
         self, kind: RunKind, *, completed_only: bool = False, real_only: bool = False
     ) -> SyncRun | None:
-        if not completed_only and not real_only:
-            found = self.recent(kind, 1)
+        if completed_only and real_only:
+            # Index sync_runs_by_kind_state_dry_run (kind, state, dry_run, finished_at desc).
+            query = self._query(kind=kind, state="completed", dry_run=False)
+            found = self._read(self._newest_finished(query).limit(1))
             return found[0] if found else None
-        dry_runs: object = False if real_only else [False, True]
-        states: object = "completed" if completed_only else ["completed", "failed"]
-        # index (kind, state, dry_run, finished_at desc)
-        candidates = self._finished_first(self._query(kind=kind, state=states, dry_run=dry_runs), 1)
-        if not completed_only:
-            running = {"kind": kind, "state": "running", "dry_run": False}  # equality only
-            candidates += self._read(self._query(**running))
-        return max(candidates, key=_newest_first) if candidates else None
+        if real_only:
+            # Index sync_runs_by_kind_dry_run (kind, dry_run, finished_at desc), merged with
+            # the real runs still running, which that order puts last.
+            query = self._query(kind=kind, dry_run=False)
+            candidates = [
+                *self._read(self._newest_finished(query).limit(1)),
+                *self._running(kind=kind, dry_run=False),
+            ]
+            return max(candidates, key=_newest_first) if candidates else None
+        if completed_only:
+            # No caller asks for this. Index sync_runs_by_kind, read until the first completed.
+            for snapshot in self._newest_finished(self._query(kind=kind)).stream():
+                run = SyncRun.model_validate(snapshot.to_dict())
+                if run.state == "completed":
+                    return run
+            return None
+        found = self.recent(kind, 1)
+        return found[0] if found else None
 
     def acquire_start_slot(self, kind: RunKind, now: datetime, gap: timedelta) -> bool:
         ref = self._slot()
@@ -225,6 +241,8 @@ class FirestorePromotionStore:
     def count_once(self, promotion_id: str, contact_id: str) -> bool:
         if not promotion_id or not contact_id or "/" in promotion_id + contact_id:
             raise ValueError("a promotion id and a contact id are names without '/'")
+        if ":" in promotion_id:  # as `Promotion` refuses it: the key stays one per pair
+            raise ValueError("a promotion id has no ':'")
         promotion = self._promotions().document(promotion_id)
         upgrade = self._upgrades().document(f"{promotion_id}:{contact_id}")
 
@@ -328,7 +346,12 @@ def build_runtime(
     `settings.roster_inbox_bucket` names a bucket. `firestore_client` and `limiter` are the
     caller's, so that the api service shares Core's.
     """
-    stripe: StripeReader | None = StripeSdkReader(stripe_key) if stripe_key else None
+    stripe: StripeReader | None = None
+    if stripe_key:
+        # Only a job with the key imports the Stripe library; the api service never does.
+        from platform_api.commerce.stripe_adapter import StripeSdkReader
+
+        stripe = StripeSdkReader(stripe_key)
     jobs: JobStarter | None = (
         CloudRunJobStarter(_Lazy(_jobs_client)) if settings.reconcile_job else None
     )
