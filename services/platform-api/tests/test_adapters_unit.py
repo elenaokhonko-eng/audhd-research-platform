@@ -664,4 +664,22 @@ def test_each_backoff_is_a_warning_with_the_round_and_no_data(caplog):
     assert [r.levelno for r in warnings] == [logging.WARNING] * 2
     assert "Aborted" in warnings[0].getMessage() and "round 1" in warnings[0].getMessage()
     assert "round 2" in warnings[1].getMessage()
+    assert "Aborted" in warnings[1].getMessage()  # the give-up names its cause, not ValueError
     assert "@" not in caplog.text and "contact" not in caplog.text
+
+
+def test_an_abort_at_the_read_on_every_round_is_a_runtime_error_after_four():
+    from google.api_core.exceptions import Aborted
+
+    from platform_api.adapters import in_transaction
+
+    calls: list[int] = []
+
+    def work(tx: Any) -> str:
+        calls.append(1)
+        raise Aborted("contention at the read")
+
+    db, backoff = _Contended(aborted=0), _Backoff()
+    with pytest.raises(RuntimeError, match="gave up after its retries"):
+        in_transaction(db, work, sleep=backoff.sleep, uniform=backoff.uniform)
+    assert len(calls) == 4 and len(backoff.sleeps) == 3
