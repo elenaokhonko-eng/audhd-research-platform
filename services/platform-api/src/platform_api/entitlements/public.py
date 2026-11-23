@@ -54,6 +54,7 @@ __all__ = [
     "SourceState",
     "contact_id_for",
     "entitlement_id",
+    "normalise_email",
     "upsert_contact",
     "Campaign",
     "ContactView",
