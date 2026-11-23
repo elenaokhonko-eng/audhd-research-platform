@@ -3,16 +3,18 @@
 from datetime import datetime, timedelta
 from typing import Literal
 
-from platform_api.commerce.models import RefreshTicket
+from platform_api.commerce.models import RefreshTicket, SyncRun
 from platform_api.commerce.runtime import get_runtime
 
 GAP = timedelta(seconds=60)  # a run completed this recently is fresh; one start per gap
 # A run still `running` blocks a new start for at most this long after it started, so a run
-# that crashed without finishing does not block "Check again" for ever.
-RUNNING_BOUND = timedelta(minutes=30)
-# After a run the guard blocked, "Check again" starts nothing for this long: the same
-# source would trip the same guard, and the owner has an alert to look at first.
-BLOCKED_BACKOFF = timedelta(minutes=15)
+# that crashed without finishing does not block "Check again" for ever. Tied to Infra's
+# timeout of the stripe-reconcile job (540 s): a run still `running` after it was stopped.
+RUNNING_BOUND = timedelta(minutes=10)
+# After a real run the guard blocked, or one that failed, "Check again" (and a sign-in)
+# starts nothing for this long: the same source would trip the same guard or fail the same
+# way, and the owner has an alert to look at first.
+BACKOFF = timedelta(minutes=15)
 _LIMITS = (("m", 1, timedelta(minutes=1)), ("h", 6, timedelta(hours=1)))
 
 
@@ -24,12 +26,22 @@ class RateLimited(Exception):
         self.retry_after = retry_after
 
 
-def last_reconcile_completed_at() -> datetime | None:
-    """When the last real reconcile finished with its guard passed; a dry run does not count."""
-    run = get_runtime().runs.latest("stripe_reconcile", completed_only=True, real_only=True)
+def _checked_at(run: SyncRun | None) -> datetime | None:
+    """When a completed real run finished, if its guard passed."""
     if run is None or run.guard != "passed":
         return None
     return run.finished_at
+
+
+def last_reconcile_completed_at() -> datetime | None:
+    """When the last real reconcile finished with its guard passed; a dry run does not count."""
+    return _checked_at(
+        get_runtime().runs.latest("stripe_reconcile", completed_only=True, real_only=True)
+    )
+
+
+def _within(run: SyncRun | None, window: timedelta, now: datetime) -> bool:
+    return run is not None and run.finished_at is not None and now - run.finished_at < window
 
 
 def request_refresh(uid: str | None, now: datetime) -> RefreshTicket:
@@ -47,25 +59,26 @@ def request_refresh(uid: str | None, now: datetime) -> RefreshTicket:
             if wait is not None:
                 raise RateLimited(retry_after=wait)
 
+    # Two reads per request: the latest completed real run, and the latest real run in any
+    # state. The ticket's `last_completed_at` comes from the first.
+    latest = runtime.runs.latest("stripe_reconcile", completed_only=True, real_only=True)
+    current = runtime.runs.latest("stripe_reconcile", real_only=True)
+
     def ticket(check: Literal["fresh", "started", "already_running"]) -> RefreshTicket:
         return RefreshTicket(
-            check=check, last_completed_at=last_reconcile_completed_at(), next_allowed_at=now + GAP
+            check=check, last_completed_at=_checked_at(latest), next_allowed_at=now + GAP
         )
 
     # Whatever its guard: a blocked run is not restarted at the floor rate.
-    latest = runtime.runs.latest("stripe_reconcile", completed_only=True, real_only=True)
-    if latest is not None and latest.finished_at is not None and now - latest.finished_at < GAP:
+    if _within(latest, GAP, now):
         return ticket("fresh")
-    if (
-        latest is not None
-        and latest.guard == "blocked"
-        and latest.finished_at is not None
-        and now - latest.finished_at < BLOCKED_BACKOFF
-    ):
+    # A blocked guard or a failed run is not restarted for BACKOFF: one alert, not one a minute.
+    if latest is not None and latest.guard == "blocked" and _within(latest, BACKOFF, now):
+        return ticket("fresh")
+    if current is not None and current.state == "failed" and _within(current, BACKOFF, now):
         return ticket("fresh")
     if runtime.jobs is None or not runtime.settings.reconcile_job:
         return ticket("fresh")
-    current = runtime.runs.latest("stripe_reconcile", real_only=True)
     if (
         current is not None
         and current.state == "running"

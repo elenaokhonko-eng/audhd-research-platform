@@ -1,0 +1,143 @@
+{
+  "object": "list",
+  "url": "/v1/subscriptions",
+  "has_more": true,
+  "data": [
+    {
+      "id": "sub_test_1",
+      "object": "subscription",
+      "application": "ca_test_substack",
+      "billing_cycle_anchor": 1777852800,
+      "cancel_at": null,
+      "cancel_at_period_end": false,
+      "canceled_at": null,
+      "collection_method": "charge_automatically",
+      "created": 1777852800,
+      "currency": "usd",
+      "customer": {
+        "id": "cus_test_1",
+        "object": "customer",
+        "created": 1777852800,
+        "email": "ana@example.org",
+        "livemode": false,
+        "metadata": {}
+      },
+      "ended_at": null,
+      "items": {
+        "object": "list",
+        "data": [
+          {
+            "id": "si_test_1",
+            "object": "subscription_item",
+            "created": 1777852800,
+            "current_period_start": 1777852800,
+            "current_period_end": 1809388800,
+            "metadata": {},
+            "price": {
+              "id": "price_test_year",
+              "object": "price",
+              "active": true,
+              "currency": "usd",
+              "livemode": false,
+              "metadata": {},
+              "product": "prod_test_newsletter",
+              "type": "recurring",
+              "recurring": {
+                "interval": "year",
+                "interval_count": 1,
+                "meter": null,
+                "usage_type": "licensed"
+              }
+            },
+            "quantity": 1,
+            "subscription": "sub_test_1"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/subscription_items?subscription=sub_test_1"
+      },
+      "latest_invoice": {
+        "id": "in_test_1",
+        "object": "invoice",
+        "created": 1777852800,
+        "status": "paid",
+        "livemode": false
+      },
+      "livemode": false,
+      "metadata": {},
+      "start_date": 1777852800,
+      "status": "active",
+      "trial_end": null,
+      "trial_start": null
+    },
+    {
+      "id": "sub_test_2",
+      "object": "subscription",
+      "application": "ca_test_other",
+      "billing_cycle_anchor": 1785542400,
+      "cancel_at": null,
+      "cancel_at_period_end": false,
+      "canceled_at": null,
+      "collection_method": "charge_automatically",
+      "created": 1785542400,
+      "currency": "usd",
+      "customer": {
+        "id": "cus_test_2",
+        "object": "customer",
+        "created": 1777852800,
+        "email": "bo@example.org",
+        "livemode": false,
+        "metadata": {}
+      },
+      "ended_at": null,
+      "items": {
+        "object": "list",
+        "data": [
+          {
+            "id": "si_test_2",
+            "object": "subscription_item",
+            "created": 1794268800,
+            "current_period_start": 1794268800,
+            "current_period_end": 1796860800,
+            "metadata": {},
+            "price": {
+              "id": "price_test_month",
+              "object": "price",
+              "active": true,
+              "currency": "usd",
+              "livemode": false,
+              "metadata": {},
+              "product": "prod_test_newsletter",
+              "type": "recurring",
+              "recurring": {
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "usage_type": "licensed"
+              }
+            },
+            "quantity": 1,
+            "subscription": "sub_test_2"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/subscription_items?subscription=sub_test_2"
+      },
+      "latest_invoice": {
+        "id": "in_test_2",
+        "object": "invoice",
+        "created": 1794268800,
+        "status": "paid",
+        "livemode": false
+      },
+      "livemode": false,
+      "metadata": {},
+      "start_date": 1785542400,
+      "status": "active",
+      "trial_end": null,
+      "trial_start": null
+    }
+  ]
+}

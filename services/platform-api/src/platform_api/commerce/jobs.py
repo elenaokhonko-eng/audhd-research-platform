@@ -1,5 +1,209 @@
-from collections.abc import Callable
+"""The commerce jobs, run as `platform-cli job <name>` (contracts section 6).
 
+Each job builds the commerce runtime from the cloud adapters, reads
+`PLATFORM_JOB_DRY_RUN` (`1` is a dry run; unset, empty or `0` a real one; anything else
+stops the job) and `PLATFORM_JOB_REQUESTED_BY` (default `schedule`), runs once at
+`clock.utcnow()`, and prints the run as one JSON line: counts only, never an address.
+
+Exit codes: 0 completed with the guard passed; 1 failed; 2 completed with the guard
+blocked. Any other ending exits 1 and prints one line naming the exception's class only:
+- a job that cannot set up (a setting refused, the secret unreadable, a client that cannot
+  be built) prints `{"job", "error"}`; it stops before a run is started;
+- an exception that escapes the run after it started (`stripe_reconcile` and
+  `roster_import` catch their own; this is a run record that could not be written or read)
+  prints `{"job", "run_id", "error"}` and, unless the run is known to have finished, tries
+  once more to finish it as `failed` with the counts it was last given, so it is not left
+  `running`.
+
+Cloud Run stops a job that runs too long (Infra's timeout: 540 s) with SIGTERM. While a job
+runs, SIGTERM raises `JobStopped`: `stripe_reconcile` and `roster_import` finish their run
+as `failed` and log their own markers; a stop that escapes them goes through the step above.
+
+A run's `finished_at` is the time it really finished: the run store the job hands to
+commerce records the later of the run's `now` and the clock at that moment.
+
+Only `stripe-reconcile` reads the Stripe key, from the Secret Manager name in
+`PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client.
+"""
+
+import json
+import os
+import signal
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from pydantic import TypeAdapter
+
+from platform_api.commerce.models import RequestedBy, RunKind, SyncRun
 from platform_api.settings import Settings
+from platform_api.shared import clock
 
-JOBS: dict[str, Callable[[Settings], int]] = {}
+if TYPE_CHECKING:
+    from platform_api.commerce.ports import RunStore
+    from platform_api.shared.bus import EventBus
+
+_DRY_RUN = {"": False, "0": False, "1": True}
+
+
+class SettingRefused(Exception):
+    """A setting the job needs is missing or not one it accepts."""
+
+
+class JobStopped(Exception):
+    """Cloud Run asked the job to stop (SIGTERM)."""
+
+
+def _stop(signum: int, frame: object) -> None:
+    raise JobStopped
+
+
+@contextmanager
+def stop_on_sigterm() -> Iterator[None]:
+    """While inside, SIGTERM raises JobStopped; the previous handler is put back after."""
+    previous = signal.signal(signal.SIGTERM, _stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def exit_code(run: SyncRun) -> int:
+    if run.state == "completed" and run.guard == "passed":
+        return 0
+    if run.state == "completed" and run.guard == "blocked":
+        return 2
+    return 1
+
+
+def _job_environment() -> tuple[bool, RequestedBy]:
+    flag = os.environ.get("PLATFORM_JOB_DRY_RUN", "").strip()
+    if flag not in _DRY_RUN:
+        raise SettingRefused
+    requested_by: RequestedBy = TypeAdapter(RequestedBy).validate_python(
+        os.environ.get("PLATFORM_JOB_REQUESTED_BY", "schedule").strip()
+    )
+    return _DRY_RUN[flag], requested_by
+
+
+def _clients(settings: Settings) -> "tuple[EventBus, Any]":
+    """The bus and the Firestore client of the job's project."""
+    from google.cloud import firestore
+    from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
+
+    from platform_api.shared.bus import PubSubBus
+
+    bus = PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
+    return bus, firestore.Client(project=settings.gcp_project)
+
+
+class _WatchedRuns:
+    """The run store, remembering the run started and the counts last handed to `finish`."""
+
+    def __init__(self, runs: "RunStore") -> None:
+        self._runs = runs
+        self.run_id: str | None = None
+        self.counts: dict[str, int] = {}
+
+    def start(self, kind: RunKind, dry_run: bool, requested_by: RequestedBy, now: datetime) -> str:
+        self.run_id = self._runs.start(kind, dry_run, requested_by, now)
+        return self.run_id
+
+    def finish(
+        self,
+        run_id: str,
+        state: Literal["completed", "failed"],
+        guard: Literal["passed", "blocked"] | None,
+        counts: dict[str, int],
+        now: datetime,
+    ) -> None:
+        self.counts = dict(counts)
+        # the run's `now` is when it started its work; the finish is recorded as it happens
+        self._runs.finish(run_id, state, guard, counts, max(now, clock.utcnow()))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._runs, name)
+
+
+def _set_up(settings: Settings, *, stripe: bool) -> tuple[bool, RequestedBy, _WatchedRuns]:
+    from platform_api.commerce import adapters
+    from platform_api.commerce.runtime import set_runtime
+    from platform_api.commerce.settings import CommerceSettings
+    from platform_api.shared.ratelimit import InMemoryRateLimiter
+
+    dry_run, requested_by = _job_environment()
+    commerce_settings = CommerceSettings()  # refuses the sandbox marker in prod
+    key = None
+    if stripe:
+        name = os.environ.get("PLATFORM_STRIPE_KEY_SECRET", "").strip()
+        if not name:
+            raise SettingRefused
+        key = adapters.read_secret(name)
+    bus, client = _clients(settings)
+    runtime = adapters.build_runtime(
+        commerce_settings, bus, client, stripe_key=key, limiter=InMemoryRateLimiter()
+    )
+    watched = _WatchedRuns(runtime.runs)
+    runtime.runs = cast("RunStore", watched)
+    set_runtime(runtime)
+    return dry_run, requested_by, watched
+
+
+def _finish_as_failed(watched: _WatchedRuns, run_id: str, now: datetime) -> None:
+    """Through the wrapper, so the finish time recorded is the later of `now` and the clock."""
+    try:
+        held = watched.get(run_id)
+        if held is None or held.state == "running":
+            watched.finish(run_id, "failed", None, watched.counts, now)
+    except Exception:  # noqa: S110  # the line printed already names the first failure
+        pass
+
+
+def _run(
+    job: str, settings: Settings, work: Callable[[bool, RequestedBy, datetime], SyncRun]
+) -> int:
+    with stop_on_sigterm():
+        return _run_until_stopped(job, settings, work)
+
+
+def _run_until_stopped(
+    job: str, settings: Settings, work: Callable[[bool, RequestedBy, datetime], SyncRun]
+) -> int:
+    try:
+        dry_run, requested_by, watched = _set_up(settings, stripe=job == "stripe-reconcile")
+    except Exception as exc:
+        print(json.dumps({"job": job, "error": type(exc).__name__}))
+        return 1
+    now = clock.utcnow()
+    try:
+        run = work(dry_run, requested_by, now)
+    except Exception as exc:
+        if watched.run_id is None:  # the run was never started
+            print(json.dumps({"job": job, "error": type(exc).__name__}))
+            return 1
+        print(json.dumps({"job": job, "run_id": watched.run_id, "error": type(exc).__name__}))
+        _finish_as_failed(watched, watched.run_id, now)
+        return 1
+    print(run.model_dump_json())
+    return exit_code(run)
+
+
+def _stripe_reconcile(settings: Settings) -> int:
+    from platform_api.commerce.reconcile import stripe_reconcile
+
+    return _run("stripe-reconcile", settings, stripe_reconcile)
+
+
+def _roster_import(settings: Settings) -> int:
+    from platform_api.commerce.roster import roster_import
+
+    # The import records the owner as the one who asked (`roster_import`); the variable is
+    # still checked, so a value the job does not accept stops it as it stops the reconcile.
+    return _run("roster-import", settings, lambda dry_run, _, now: roster_import(dry_run, now))
+
+
+JOBS: dict[str, Callable[[Settings], int]] = {
+    "stripe-reconcile": _stripe_reconcile,
+    "roster-import": _roster_import,
+}

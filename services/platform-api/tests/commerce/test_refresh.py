@@ -93,9 +93,17 @@ def test_a_running_reconcile_is_not_started_again(com):
     assert (ticket.check, com.jobs.started) == ("already_running", [])
 
 
-def test_a_run_left_running_for_over_half_an_hour_no_longer_blocks(com):
+def test_a_run_left_running_for_over_ten_minutes_no_longer_blocks(com):
     com.runs.start("stripe_reconcile", False, "schedule", T0)
-    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=31)).check == "started"
+    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=11)).check == "started"
+
+
+def test_the_running_bound_outlasts_the_job_timeout():
+    from platform_api.commerce.refresh import RUNNING_BOUND
+
+    # Infra's stripe-reconcile job times out after 540 seconds; a run still `running` past
+    # that was stopped without finishing.
+    assert timedelta(seconds=540) < RUNNING_BOUND <= timedelta(minutes=10)
 
 
 def test_the_route_refuses_a_caller_without_a_session(com, member_client):
@@ -149,3 +157,40 @@ def test_after_a_blocked_guard_check_again_waits_a_quarter_of_an_hour(com):
     assert (early.check, early.last_completed_at, com.jobs.started) == ("fresh", None, [])
     late = commerce.request_refresh("u-bo", T0 + timedelta(minutes=16))
     assert (late.check, com.jobs.started) == ("started", [com.settings.reconcile_job])
+
+
+def test_after_a_failed_run_check_again_waits_a_quarter_of_an_hour(com):
+    run_id = com.runs.start("stripe_reconcile", False, "schedule", T0)
+    com.runs.finish(run_id, "failed", None, {}, T0)
+    early = commerce.request_refresh("u-bo", T0 + timedelta(minutes=2))
+    assert (early.check, early.last_completed_at, com.jobs.started) == ("fresh", None, [])
+    late = commerce.request_refresh("u-bo", T0 + timedelta(minutes=16))
+    assert (late.check, com.jobs.started) == ("started", [com.settings.reconcile_job])
+
+
+def test_a_failed_dry_run_does_not_hold_back_a_real_check(com):
+    run_id = com.runs.start("stripe_reconcile", True, "owner", T0)
+    com.runs.finish(run_id, "failed", None, {}, T0)
+    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=2)).check == "started"
+
+
+def test_one_backoff_serves_blocked_and_failed_runs():
+    from platform_api.commerce import refresh
+
+    assert refresh.BACKOFF == timedelta(minutes=15)
+
+
+def test_a_stale_request_reads_the_runs_twice(com, monkeypatch):
+    calls = []
+    real_latest = com.runs.latest
+
+    def counted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_latest(*args, **kwargs)
+
+    monkeypatch.setattr(com.runs, "latest", counted)
+    com.stripe = InMemoryStripeReader([sub("ana")])
+    commerce.stripe_reconcile(False, "schedule", T0)
+    ticket = commerce.request_refresh("u-bo", T0 + timedelta(minutes=5))
+    assert (ticket.check, ticket.last_completed_at) == ("started", T0)
+    assert len(calls) == 2
