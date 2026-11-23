@@ -53,6 +53,9 @@ def test_the_same_address_signs_in_again_as_a_new_free_member(world, idn, ent):
     assert again["member"]["uid"] != uid and again["access"]["tier"] == "free"
     new = idn.members.get(again["member"]["uid"])
     assert new is not None and new.status == "active" and new.created_at == T0
+    from platform_api.entitlements import public as ent_api
+
+    assert ent.store.contact_ids_for_member(new.uid) == [ent_api.contact_id_for(EMAIL["ana"])]
 
 
 def test_a_member_who_did_not_ask_cannot_be_deleted(world, idn, ent):
