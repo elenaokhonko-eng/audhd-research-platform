@@ -189,6 +189,11 @@ def _library_publish(client: AdminClient, args: argparse.Namespace) -> None:
     report = client.library_publish(args.staging_prefix, args.dry_run)
     if report["dry_run"]:
         _say("dry_run", "true")
+    _say("items", len(report["items"]))
+    if not report["items"]:
+        prefix = args.staging_prefix
+        print(f"nothing found under {prefix}/; each item needs its own folder {prefix}/<sku>/")
+        raise _Refused
     refused = False
     for outcome in report["items"]:
         _say(outcome["sku"], outcome["action"])

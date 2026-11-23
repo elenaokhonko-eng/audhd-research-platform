@@ -179,6 +179,7 @@ def test_library_publish_prints_one_line_per_item_and_exits_1_on_a_refusal(monke
     assert code == 1 and calls == [("batch-1", True)]
     assert capsys.readouterr().out.splitlines() == [
         "dry_run: true",
+        "items: 2",
         "guide-a: created",
         "guide-b: refused",
         "  no file for [email]",
@@ -208,4 +209,19 @@ def test_library_publish_exits_0_when_nothing_was_refused(monkeypatch, capsys):
             '{"staging_prefix":"b","dry_run":false}',
         )
     ]
-    assert capsys.readouterr().out == "s: unchanged\n"
+    assert capsys.readouterr().out == "items: 1\ns: unchanged\n"
+
+
+def test_library_publish_says_when_nothing_was_found_and_exits_1(monkeypatch, capsys):
+    class Fake:
+        def library_publish(self, staging_prefix, dry_run):
+            return {"dry_run": True, "staging_prefix": staging_prefix, "items": []}
+
+    monkeypatch.setattr(cli, "admin_client", lambda: Fake())
+    code = cli.main(["library", "publish", "--staging-prefix", "batch-1", "--dry-run"])
+    assert code == 1
+    assert capsys.readouterr().out.splitlines() == [
+        "dry_run: true",
+        "items: 0",
+        "nothing found under batch-1/; each item needs its own folder batch-1/<sku>/",
+    ]
