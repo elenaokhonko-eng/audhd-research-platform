@@ -257,7 +257,7 @@ def test_in_local_the_runtimes_are_in_memory(monkeypatch, restore_root_logger):
 
 def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):
     from platform_api import cli
-    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api import jobs as shared_jobs
     from platform_api.entitlements import runtime as ent_runtime
     from platform_api.identity import runtime as id_runtime
 
@@ -270,7 +270,7 @@ def test_a_job_runs_on_the_same_runtimes(monkeypatch, restore_root_logger):
         seen.append((ent_runtime.get_runtime(), id_runtime.get_runtime()))
         return 0
 
-    monkeypatch.setattr(commerce_jobs, "JOBS", {"probe": job})
+    monkeypatch.setattr(shared_jobs, "JOBS", {"probe": job})
     assert cli.main(["job", "probe"]) == 0 and len(seen) == 1
 
 
@@ -357,11 +357,10 @@ def test_a_commerce_job_reuses_the_clients_the_cli_built(monkeypatch, restore_ro
 
     monkeypatch.setattr(firestore, "Client", make_client)
     monkeypatch.setattr(pubsub, "PublisherClient", lambda: built.append("pubsub"))
-    monkeypatch.setattr(commerce_jobs, "_provided", None)
     monkeypatch.setenv("PLATFORM_ENV", "dev")
     settings = Settings()
     cli._configure_job_runtimes(settings)
-    bus, client = commerce_jobs._clients(settings)
+    bus, client = commerce_jobs._clients()
     client.collection("sync_runs")
     ent_runtime().store.get_contact("c1")
     assert len(built) == 1  # one Firestore client in the job's process; no publisher yet
@@ -385,6 +384,37 @@ def test_a_job_whose_settings_are_refused_prints_one_line_and_exits_1(
     out = capsys.readouterr().out
     assert json.loads(out) == {"job": "probe", "error": "ValidationError"}
     assert "ca_test" not in out
+
+
+def test_a_commerce_job_without_its_clients_prints_one_line_and_exits_1(capsys):
+    import json
+
+    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api.settings import Settings
+
+    with pytest.raises(RuntimeError):
+        commerce_jobs._clients()
+    assert commerce_jobs.JOBS["roster-import"](Settings()) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines] == [
+        {"job": "roster-import", "error": "RuntimeError"}
+    ]
+
+
+@pytest.mark.parametrize("name", ["stripe-reconcile", "roster-import"])
+def test_in_local_the_commerce_jobs_refuse_to_run(monkeypatch, restore_root_logger, capsys, name):
+    import json
+
+    from platform_api import cli
+    from platform_api.commerce import adapters as cloud_adapters
+
+    read = []
+    monkeypatch.setattr(cloud_adapters, "read_secret", lambda n: read.append(n) or "rk_test_x")
+    monkeypatch.setenv("PLATFORM_ENV", "local")
+    monkeypatch.setenv("PLATFORM_STRIPE_KEY_SECRET", "projects/p/secrets/k")
+    assert cli.main(["job", name]) == 1 and read == []
+    lines = capsys.readouterr().out.splitlines()
+    assert [json.loads(line) for line in lines] == [{"job": name, "error": "JobRefusedInLocal"}]
 
 
 def test_hooks_mode_starts_without_the_contact_key(monkeypatch, restore_root_logger):

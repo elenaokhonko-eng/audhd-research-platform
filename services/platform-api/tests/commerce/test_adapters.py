@@ -480,7 +480,7 @@ def cloud(ent, monkeypatch):
     monkeypatch.setattr(runtime_module, "_runtime", None)
     db = OrderedFirestore()
     seen: dict[str, Any] = {"secrets": [], "keys": [], "db": db, "pages": pages()}
-    monkeypatch.setattr(jobs, "_clients", lambda settings: (ent.bus, db))
+    monkeypatch.setattr(jobs, "_clients", lambda: (ent.bus, db))
 
     def read_secret(name):
         seen["secrets"].append(name)

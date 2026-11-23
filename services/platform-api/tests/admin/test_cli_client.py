@@ -335,3 +335,45 @@ def test_launch_report_also_prints_each_promotion(monkeypatch, capsys):
     assert any(
         line.startswith("promotion: o2 ") and line.endswith("upgrades_in_window=0") for line in out
     )
+
+
+@pytest.mark.parametrize("limit", ["0", "21", "-1", "many"])
+def test_runs_show_takes_a_limit_from_1_to_20(monkeypatch, limit):
+    _cli_with(monkeypatch, {})
+    with pytest.raises(SystemExit):
+        cli.main(["runs", "show", "--limit", limit])
+
+
+def test_runs_show_accepts_the_largest_limit(monkeypatch):
+    sent = _cli_with(monkeypatch, {("GET", "/v1/admin/sync-runs"): {"runs": []}})
+    assert cli.main(["runs", "show", "--limit", "20"]) == 0
+    assert dict(sent[0][2]) == {"limit": "20"}
+
+
+@pytest.mark.parametrize(
+    "field", [{"counts": {"upgrades_in_window": 1}}, {"updated_at": START}, {"updated_by": "x"}]
+)
+def test_promo_apply_refuses_the_fields_the_service_writes(monkeypatch, capsys, tmp_path, field):
+    sent = _cli_with(monkeypatch, {})
+    path = _promo_file(tmp_path, [_promotion(**field)])
+    assert cli.main(["promo", "apply", "--file", path]) == 1
+    assert sent == []
+    assert "counts and update stamps are written by the service" in capsys.readouterr().err
+
+
+def test_a_cli_error_never_shows_an_address(monkeypatch, capsys, tmp_path):
+    _cli_with(monkeypatch, {})
+    path = _promo_file(tmp_path, [_promotion(**{"ana@example.org": "x"})])
+    assert cli.main(["promo", "apply", "--file", path]) == 1
+    err = capsys.readouterr().err
+    assert "[email]" in err and "ana@example.org" not in err
+
+
+def test_the_cli_takes_promotions_from_commerce_public():
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(cli.__file__).read_text())
+    modules = {n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom)}
+    assert "platform_api.commerce.models" not in modules
+    assert "platform_api.commerce.public" in modules

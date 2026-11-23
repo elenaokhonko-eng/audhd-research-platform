@@ -14,7 +14,7 @@ import yaml
 from pydantic import ValidationError
 
 from platform_api.admin.client import AdminClient, AdminError
-from platform_api.commerce.models import Promotion
+from platform_api.commerce.public import Promotion
 from platform_api.modules import FEATURE_MODULES
 from platform_api.settings import Settings
 from platform_api.shared.logging import configure_logging
@@ -46,6 +46,10 @@ def build_registry() -> JobTable:
 
 class CliError(Exception):
     """A command that cannot run; the message is plain words for the owner."""
+
+
+class JobRefusedInLocal(Exception):
+    """A commerce job would write to a real Firestore while entitlements stay in memory."""
 
 
 def _identity_token() -> str:
@@ -161,6 +165,11 @@ def _promo_apply(client: AdminClient, args: argparse.Namespace) -> None:
         raise CliError("The file needs a list under the key 'promotions'.")
     ready = []
     for number, entry in enumerate(entries, start=1):
+        if isinstance(entry, dict) and _PROMOTION_STAMPS & set(entry):
+            raise CliError(
+                f"Promotion {number} in the file: counts and update stamps are written by "
+                "the service. Remove them from the file."
+            )
         try:
             promotion = Promotion.model_validate(entry)
         except ValidationError as exc:
@@ -170,10 +179,21 @@ def _promo_apply(client: AdminClient, args: argparse.Namespace) -> None:
                 for e in exc.errors(include_input=False, include_url=False)
             )
             raise CliError(f"Promotion {number} in the file is not valid: {problems}") from None
-        ready.append(
-            promotion.model_dump(mode="json", exclude_unset=True, exclude=_PROMOTION_STAMPS)
-        )
+        ready.append(promotion.model_dump(mode="json", exclude_unset=True))
     _say("written", client.promotions_put(ready))
+
+
+MAX_RUNS = 20  # as the route allows
+
+
+def _run_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"use a whole number from 1 to {MAX_RUNS}") from None
+    if not 1 <= limit <= MAX_RUNS:
+        raise argparse.ArgumentTypeError(f"use a whole number from 1 to {MAX_RUNS}")
+    return limit
 
 
 _RUN_ACTIONS = ("created", "updated", "ended", "moved", "unchanged", "unseen")
@@ -284,7 +304,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     runs_show = runs.add_parser("show")
     runs_show.add_argument("--kind", choices=("stripe_reconcile", "roster_import"))
-    runs_show.add_argument("--limit", type=int, default=20)
+    runs_show.add_argument("--limit", type=_run_limit, default=MAX_RUNS)
     runs_show.set_defaults(run=_runs_show)
 
     launch = sub.add_parser("launch", help="the launch switches").add_subparsers(
@@ -314,6 +334,12 @@ def _run_job(name: str) -> int:
         return 2
     settings = Settings()
     configure_logging(settings.service_name)
+    from platform_api.commerce import jobs as commerce_jobs
+
+    if settings.env == "local" and name in commerce_jobs.JOBS:
+        # In `local` entitlements are in memory; the job would write runs to a real Firestore.
+        print(json.dumps({"job": name, "error": JobRefusedInLocal.__name__}))
+        return 1
     try:
         _configure_job_runtimes(settings)
     except Exception as exc:
@@ -367,7 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_EMAIL.sub("[email]", exc.message), file=sys.stderr)
         return 1
     except CliError as exc:
-        print(str(exc), file=sys.stderr)
+        print(_EMAIL.sub("[email]", str(exc)), file=sys.stderr)
         return 1
     except httpx.HTTPError:
         print("Could not reach platform-api at PLATFORM_API_URL.", file=sys.stderr)

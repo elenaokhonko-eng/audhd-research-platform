@@ -19,8 +19,9 @@ class Runtime:
     session_ttl: timedelta
     limiter: RateLimiter
     # Set by `adapters.configure_runtimes`: `adapters.sign_in_refresh`, which passes
-    # Commerce's "already_running" on as "started", and Commerce's
-    # `last_reconcile_completed_at`. None only in a test that leaves Commerce out.
+    # Commerce's "already_running" on as "started", and `adapters.sign_in_last_reconcile`
+    # (Commerce's `last_reconcile_completed_at`). Neither raises. None only in a test that
+    # leaves Commerce out.
     request_refresh: Callable[[str, datetime], Literal["fresh", "started"]] | None
     last_reconcile_at: Callable[[], datetime | None] | None
 

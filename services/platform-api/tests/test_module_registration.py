@@ -88,13 +88,14 @@ def test_job_logs_go_out_as_redacted_json(
     import json
     import logging
 
-    from platform_api.commerce import jobs as commerce_jobs
+    from platform_api import jobs as shared_jobs
 
     def noisy(settings: Settings) -> int:
         logging.getLogger("job").warning("saw ana@example.org")
         return 0
 
-    monkeypatch.setattr(commerce_jobs, "JOBS", {"noisy": noisy})
+    # A shared job: in `local` the commerce jobs refuse to run.
+    monkeypatch.setattr(shared_jobs, "JOBS", {"noisy": noisy})
     assert cli.main(["job", "noisy"]) == 0
     data = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
     assert data["severity"] == "WARNING"

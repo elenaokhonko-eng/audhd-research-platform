@@ -41,6 +41,12 @@ def _runtimes_restored(monkeypatch: pytest.MonkeyPatch) -> None:
         except ImportError:
             continue
         monkeypatch.setattr(module, "_runtime", module._runtime)
+    try:
+        from platform_api.commerce import jobs as commerce_jobs
+    except ImportError:
+        return
+    # `platform-cli job` hands the commerce jobs its clients; no test passes them on.
+    monkeypatch.setattr(commerce_jobs, "_provided", None)
 
 
 @pytest.fixture

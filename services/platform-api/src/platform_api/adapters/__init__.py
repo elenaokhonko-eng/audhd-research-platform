@@ -5,6 +5,7 @@ Only `main.py` and `cli.py` import this package; no feature module and no shared
 each cloud client is made on first use, so importing and `/health` need no credentials.
 """
 
+import logging
 import threading
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -72,12 +73,16 @@ class _MissingKey:
         raise RuntimeError(_NO_KEY)
 
 
+logger = logging.getLogger(__name__)
+
+
 def sign_in_refresh(uid: str, now: datetime) -> Literal["fresh", "started"]:
     """Identity's `request_refresh`: a sign-in asks Commerce for a fresh look at Stripe.
 
     A sign-in is not rate-limited, so the uid is not passed on. `fresh` stays "fresh";
-    `started` and `already_running` are "started". A job that cannot start, or a limit,
-    answers "fresh", so that it never fails a sign-in.
+    `started` and `already_running` are "started". Nothing on this path fails a sign-in:
+    a job that cannot start, or a limit, answers "fresh"; any other error is logged by its
+    class only and answers "fresh".
     """
     from platform_api.commerce import public as commerce
 
@@ -85,7 +90,22 @@ def sign_in_refresh(uid: str, now: datetime) -> Literal["fresh", "started"]:
         ticket = commerce.request_refresh(None, now)
     except (commerce.JobStartError, commerce.RateLimited):
         return "fresh"
+    except Exception as exc:
+        logger.error("sign_in_refresh_failed error=%s", type(exc).__name__)
+        return "fresh"
     return "fresh" if ticket.check == "fresh" else "started"
+
+
+def sign_in_last_reconcile() -> datetime | None:
+    """Identity's `last_reconcile_at`: Commerce's `last_reconcile_completed_at`, or None
+    when it cannot be read (logged by the error's class only), so a sign-in never fails."""
+    from platform_api.commerce import public as commerce
+
+    try:
+        return commerce.last_reconcile_completed_at()
+    except Exception as exc:
+        logger.error("last_reconcile_read_failed error=%s", type(exc).__name__)
+        return None
 
 
 def configure_runtimes(
@@ -109,13 +129,12 @@ def configure_runtimes(
     Commerce's settings are read here, at start, so that a refused setting (the sandbox
     marker in prod) stops the start. Commerce runs on the same Firestore client and rate
     limiter, and never with a Stripe key: only the `stripe-reconcile` job reads one.
-    Identity's `request_refresh` is `sign_in_refresh`, and `last_reconcile_at` Commerce's
-    `last_reconcile_completed_at`.
+    Identity's `request_refresh` is `sign_in_refresh`, and `last_reconcile_at`
+    `sign_in_last_reconcile`.
     """
     from functools import cache
 
     from platform_api.adapters.firebase import FirebaseIdentityProvider
-    from platform_api.commerce import public as commerce
     from platform_api.commerce import runtime as commerce_runtime
     from platform_api.commerce.settings import CommerceSettings
     from platform_api.entitlements import runtime as entitlements_runtime
@@ -202,7 +221,7 @@ def configure_runtimes(
             session_ttl=timedelta(days=settings.session_ttl_days),
             limiter=limiter,
             request_refresh=sign_in_refresh,
-            last_reconcile_at=commerce.last_reconcile_completed_at,
+            last_reconcile_at=sign_in_last_reconcile,
         )
     )
     commerce_runtime.set_runtime(shop)

@@ -70,7 +70,7 @@ def use_clients(bus: "EventBus", firestore_client: Any) -> None:
     _provided = (bus, firestore_client)
 
 
-def _clients(settings: Settings) -> "tuple[EventBus, Any]":
+def _clients() -> "tuple[EventBus, Any]":
     """The bus and the Firestore client of the job's project, as `use_clients` set them."""
     if _provided is None:
         raise RuntimeError("the job's clients were not set: run it as 'platform-cli job'")
@@ -118,7 +118,7 @@ def _set_up(settings: Settings, *, stripe: bool) -> tuple[bool, RequestedBy, _Wa
         if not name:
             raise SettingRefused
         key = adapters.read_secret(name)
-    bus, client = _clients(settings)
+    bus, client = _clients()
     runtime = adapters.build_runtime(
         commerce_settings, bus, client, stripe_key=key, limiter=InMemoryRateLimiter()
     )

@@ -1,5 +1,6 @@
 """Sign-in asks Commerce for a fresh look at Stripe through the seam `configure_runtimes` sets."""
 
+import logging
 from datetime import timedelta
 from typing import Any
 
@@ -14,8 +15,7 @@ JOB = "projects/p/locations/l/jobs/stripe-reconcile"
 @pytest.fixture
 def wired(world: Any, idn: Any, ent: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Commerce on in-memory ports with a job to start, and identity's seam set as at start-up."""
-    from platform_api.adapters import sign_in_refresh
-    from platform_api.commerce import public as commerce
+    from platform_api.adapters import sign_in_last_reconcile, sign_in_refresh
     from platform_api.commerce import runtime as runtime_module
     from platform_api.commerce.ports import InMemoryJobStarter, InMemoryRunStore
     from platform_api.commerce.runtime import Runtime
@@ -30,7 +30,7 @@ def wired(world: Any, idn: Any, ent: Any, monkeypatch: pytest.MonkeyPatch) -> An
     )
     monkeypatch.setattr(runtime_module, "_runtime", runtime)
     idn.request_refresh = sign_in_refresh
-    idn.last_reconcile_at = commerce.last_reconcile_completed_at
+    idn.last_reconcile_at = sign_in_last_reconcile
     return runtime
 
 
@@ -83,3 +83,47 @@ def test_a_recent_reconcile_makes_the_sign_in_fresh_without_a_start(wired, world
     run_id = wired.runs.start("stripe_reconcile", False, "schedule", T0 - timedelta(minutes=5))
     wired.runs.finish(run_id, "completed", "passed", {}, T0 - timedelta(minutes=4))
     assert sign_in(world, "bo").json()["join"]["check"] == "fresh" and wired.jobs.started == []
+
+
+def test_a_run_store_that_fails_never_fails_a_sign_in(wired, world, monkeypatch, caplog):
+    def latest(*args, **kwargs):
+        # stands in for FailedPrecondition: the library's text names the project
+        raise RuntimeError("the query requires an index in projects/p")
+
+    monkeypatch.setattr(wired.runs, "latest", latest)
+    with caplog.at_level(logging.ERROR):
+        response = sign_in(world, "bo")
+    assert response.status_code == 200 and response.json()["join"]["check"] == "fresh"
+    messages = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
+    assert "last_reconcile_read_failed error=RuntimeError" in messages
+    assert "sign_in_refresh_failed error=RuntimeError" in messages
+    assert "projects/p" not in caplog.text and wired.jobs.started == []
+
+
+def test_any_other_error_of_the_refresh_is_fresh(monkeypatch, caplog):
+    from platform_api import adapters
+    from platform_api.commerce import public as commerce
+
+    def broken(uid, now):
+        raise ValueError("ana@example.org")
+
+    monkeypatch.setattr(commerce, "request_refresh", broken)
+    with caplog.at_level(logging.ERROR):
+        assert adapters.sign_in_refresh("u-bo", T0) == "fresh"
+    assert [r.getMessage() for r in caplog.records] == ["sign_in_refresh_failed error=ValueError"]
+    assert "@" not in caplog.text
+
+
+def test_a_last_reconcile_that_cannot_be_read_is_none(monkeypatch, caplog):
+    from platform_api import adapters
+    from platform_api.commerce import public as commerce
+
+    def broken():
+        raise RuntimeError("projects/p")
+
+    monkeypatch.setattr(commerce, "last_reconcile_completed_at", broken)
+    with caplog.at_level(logging.ERROR):
+        assert adapters.sign_in_last_reconcile() is None
+    assert [r.getMessage() for r in caplog.records] == [
+        "last_reconcile_read_failed error=RuntimeError"
+    ]
