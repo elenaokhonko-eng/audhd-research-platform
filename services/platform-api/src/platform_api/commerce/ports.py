@@ -1,12 +1,18 @@
 import threading
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from datetime import datetime, timedelta
 from typing import Literal, Protocol
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from platform_api.commerce.models import RequestedBy, RunKind, StripeSubscription, SyncRun
+from platform_api.commerce.models import (
+    Promotion,
+    RequestedBy,
+    RunKind,
+    StripeSubscription,
+    SyncRun,
+)
 
 
 class StripeReadError(Exception):
@@ -165,3 +171,45 @@ class InMemoryRunStore:
             if (not completed_only or r.state == "completed") and (not real_only or not r.dry_run)
         ]
         return runs[0] if runs else None
+
+
+class PromotionStore(Protocol):
+    def list(self) -> list[Promotion]: ...
+
+    def put_all(self, promotions: Sequence[Promotion]) -> None:
+        """Write each promotion by id. An id that exists keeps its stored counts."""
+        ...
+
+    def count_once(self, promotion_id: str, contact_id: str) -> bool:
+        """Atomic. The first time only for this pair: adds one to
+        `counts["upgrades_in_window"]` and returns True; afterwards False and nothing changes."""
+        ...
+
+
+class InMemoryPromotionStore:
+    def __init__(self) -> None:
+        self._promotions: dict[str, Promotion] = {}
+        self._counted: set[tuple[str, str]] = set()
+        self._lock = threading.Lock()
+
+    def list(self) -> list[Promotion]:
+        with self._lock:
+            return list(self._promotions.values())
+
+    def put_all(self, promotions: Sequence[Promotion]) -> None:
+        with self._lock:  # a count landing meanwhile is not overwritten
+            for p in promotions:
+                held = self._promotions.get(p.id)
+                counts = dict(held.counts) if held is not None else dict(p.counts)
+                self._promotions[p.id] = p.model_copy(update={"counts": counts})
+
+    def count_once(self, promotion_id: str, contact_id: str) -> bool:
+        with self._lock:  # the check and the count are one step
+            held = self._promotions.get(promotion_id)
+            if held is None or (promotion_id, contact_id) in self._counted:
+                return False
+            self._counted.add((promotion_id, contact_id))
+            counts = {**held.counts}
+            counts["upgrades_in_window"] = counts.get("upgrades_in_window", 0) + 1
+            self._promotions[promotion_id] = held.model_copy(update={"counts": counts})
+            return True
