@@ -256,7 +256,7 @@ Settings of `web` (read on the server at request time; none is prefixed `NEXT_PU
 | --- | --- |
 | `gcloud run jobs execute stripe-reconcile --wait` (with `--update-env-vars PLATFORM_JOB_DRY_RUN=1` for a dry run) | Runs the job; the runbook has the exact command. At launch this replaces a `platform-cli` wrapper |
 | `gcloud storage cp <csv> gs://<roster inbox>/` then `gcloud run jobs execute roster-import --wait` | Places the export in the roster inbox and runs the import; dry run as above |
-| `platform-cli runs show [--kind stripe_reconcile \| roster_import]` | Prints the latest runs: counts by action, the unseen list's size and the guard decision |
+| `platform-cli runs show [--kind stripe_reconcile \| roster_import] [--limit 1–20]` | Prints the latest runs: counts by action, the unseen list's size and the guard decision |
 | `platform-cli campaign apply --file <yaml>` · `platform-cli promo apply --file <yaml>` | Validates and writes campaigns and promotions |
 | `platform-cli launch set --join-open true \| false` (and `--library-open`, `--promotions-open`) | The layer switches |
 | `platform-cli launch report` | Counts per campaign and promotion; no emails |
