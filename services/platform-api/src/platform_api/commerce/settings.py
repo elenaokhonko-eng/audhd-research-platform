@@ -17,7 +17,10 @@ class CommerceSettings(BaseSettings):
     stripe_test_channel_metadata: bool = False
     substack_grant_month: Grant = "status:substack_paid"
     substack_grant_year: Grant = "status:substack_paid"
-    reconcile_job: str = ""
+    # empty, or the job's full resource name
+    reconcile_job: str = Field(
+        default="", pattern=r"^(projects/[^/]+/locations/[^/]+/jobs/[^/]+)?$"
+    )
     roster_inbox_bucket: str = ""
     grace_days: int = Field(default=21, ge=1)
 

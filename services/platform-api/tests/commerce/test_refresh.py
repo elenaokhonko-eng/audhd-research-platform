@@ -157,3 +157,40 @@ def test_after_a_blocked_guard_check_again_waits_a_quarter_of_an_hour(com):
     assert (early.check, early.last_completed_at, com.jobs.started) == ("fresh", None, [])
     late = commerce.request_refresh("u-bo", T0 + timedelta(minutes=16))
     assert (late.check, com.jobs.started) == ("started", [com.settings.reconcile_job])
+
+
+def test_after_a_failed_run_check_again_waits_a_quarter_of_an_hour(com):
+    run_id = com.runs.start("stripe_reconcile", False, "schedule", T0)
+    com.runs.finish(run_id, "failed", None, {}, T0)
+    early = commerce.request_refresh("u-bo", T0 + timedelta(minutes=2))
+    assert (early.check, early.last_completed_at, com.jobs.started) == ("fresh", None, [])
+    late = commerce.request_refresh("u-bo", T0 + timedelta(minutes=16))
+    assert (late.check, com.jobs.started) == ("started", [com.settings.reconcile_job])
+
+
+def test_a_failed_dry_run_does_not_hold_back_a_real_check(com):
+    run_id = com.runs.start("stripe_reconcile", True, "owner", T0)
+    com.runs.finish(run_id, "failed", None, {}, T0)
+    assert commerce.request_refresh("u-bo", T0 + timedelta(minutes=2)).check == "started"
+
+
+def test_one_backoff_serves_blocked_and_failed_runs():
+    from platform_api.commerce import refresh
+
+    assert refresh.BACKOFF == timedelta(minutes=15)
+
+
+def test_a_stale_request_reads_the_runs_twice(com, monkeypatch):
+    calls = []
+    real_latest = com.runs.latest
+
+    def counted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_latest(*args, **kwargs)
+
+    monkeypatch.setattr(com.runs, "latest", counted)
+    com.stripe = InMemoryStripeReader([sub("ana")])
+    commerce.stripe_reconcile(False, "schedule", T0)
+    ticket = commerce.request_refresh("u-bo", T0 + timedelta(minutes=5))
+    assert (ticket.check, ticket.last_completed_at) == ("started", T0)
+    assert len(calls) == 2

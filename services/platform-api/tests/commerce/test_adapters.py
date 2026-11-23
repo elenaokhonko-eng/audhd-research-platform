@@ -827,3 +827,40 @@ def test_a_stop_that_escapes_the_run_still_fails_it(cloud, capsys, monkeypatch):
     code, line = _job("stripe-reconcile", capsys)
     assert (code, line["error"]) == (1, "JobStopped")
     assert cloud["db"].docs[("sync_runs", line["run_id"])]["state"] == "failed"
+
+
+# Branch review of 6b.
+
+
+def test_a_job_that_cannot_start_is_logged_by_class_only(caplog):
+    import logging
+
+    from google.api_core.exceptions import PermissionDenied
+
+    from platform_api.commerce.adapters import CloudRunJobStarter
+    from platform_api.commerce.ports import JobStartError
+
+    class Jobs:
+        def run_job(self, **kwargs):
+            raise PermissionDenied("caller sa@example.org may not run projects/p/jobs/j")
+
+    with caplog.at_level(logging.WARNING), pytest.raises(JobStartError):
+        CloudRunJobStarter(Jobs()).start("projects/p/locations/l/jobs/stripe-reconcile")
+    lines = [r.getMessage() for r in caplog.records]
+    assert lines == ["refresh_job_not_started error=PermissionDenied"]
+
+
+def test_the_reconcile_job_setting_is_a_job_resource_name():
+    from pydantic import ValidationError
+
+    assert CommerceSettings(reconcile_job="").reconcile_job == ""
+    ok = "projects/p/locations/l/jobs/stripe-reconcile"
+    assert CommerceSettings(reconcile_job=ok).reconcile_job == ok
+    for bad in (
+        "stripe-reconcile",
+        "projects/p/locations/l/jobs/",
+        "projects/p/locations/l/jobs/a/b",
+        "projects/p/jobs/stripe-reconcile",
+    ):
+        with pytest.raises(ValidationError):
+            CommerceSettings(reconcile_job=bad)
