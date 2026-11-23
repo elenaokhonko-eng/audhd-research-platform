@@ -1,7 +1,7 @@
 from collections.abc import Callable, Coroutine
 from typing import Annotated, Any, Self
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from platform_api.admin.public import owner
-from platform_api.commerce.models import Promotion
+from platform_api.commerce.models import Promotion, RunKind
 from platform_api.commerce.ports import JobStartError
 from platform_api.commerce.promotions import active_promotions, put_promotions, upgrade_options
 from platform_api.commerce.refresh import RateLimited, request_refresh
@@ -58,6 +58,7 @@ def me_upgrade_options(member: Termed) -> dict[str, Any]:
 AUDIT_ACTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("PUT", "/v1/admin/promotions"): ("promotions", "promotions.written"),
     ("GET", "/v1/admin/promotions"): ("promotions", "admin.read"),
+    ("GET", "/v1/admin/sync-runs"): ("sync-runs", "admin.read"),
 }
 
 
@@ -152,6 +153,19 @@ def get_admin_promotions() -> dict[str, Any]:
             for p in promotions
         ]
     }
+
+
+MAX_RUNS = 20
+
+
+@admin_router.get("/v1/admin/sync-runs")
+def get_admin_sync_runs(
+    kind: Annotated[RunKind | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUNS)] = MAX_RUNS,
+) -> dict[str, Any]:
+    """The latest runs, newest first: counts, the guard decision, never an address."""
+    runs = get_runtime().runs.recent(kind, limit)
+    return {"runs": [r.model_dump(mode="json") for r in runs]}
 
 
 router.include_router(admin_router)
