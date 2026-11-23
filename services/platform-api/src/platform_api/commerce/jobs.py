@@ -16,7 +16,8 @@ blocked. Any other ending exits 1 and prints one line naming the exception's cla
   `running`.
 
 Only `stripe-reconcile` reads the Stripe key, from the Secret Manager name in
-`PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client.
+`PLATFORM_STRIPE_KEY_SECRET`. Importing this module creates no cloud client; a job uses the
+bus and the Firestore client `platform-cli job` made (`use_clients`), never its own.
 """
 
 import json
@@ -59,15 +60,21 @@ def _job_environment() -> tuple[bool, RequestedBy]:
     return _DRY_RUN[flag], requested_by
 
 
+_provided: "tuple[EventBus, Any] | None" = None
+
+
+def use_clients(bus: "EventBus", firestore_client: Any) -> None:
+    """The bus and the Firestore client the process has already made (`platform-cli job`
+    sets them before a job runs), so that a job makes no second client."""
+    global _provided
+    _provided = (bus, firestore_client)
+
+
 def _clients(settings: Settings) -> "tuple[EventBus, Any]":
-    """The bus and the Firestore client of the job's project."""
-    from google.cloud import firestore
-    from google.cloud.pubsub_v1 import PublisherClient  # type: ignore[import-untyped]
-
-    from platform_api.shared.bus import PubSubBus
-
-    bus = PubSubBus(PublisherClient(), settings.gcp_project, settings.events_topic)
-    return bus, firestore.Client(project=settings.gcp_project)
+    """The bus and the Firestore client of the job's project, as `use_clients` set them."""
+    if _provided is None:
+        raise RuntimeError("the job's clients were not set: run it as 'platform-cli job'")
+    return _provided
 
 
 class _WatchedRuns:

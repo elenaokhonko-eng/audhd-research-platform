@@ -35,7 +35,7 @@ def _runtimes_restored(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test that sets a runtime (main, a job) leaves the next test as it found it."""
     import importlib
 
-    for name in ("entitlements", "identity"):
+    for name in ("entitlements", "identity", "commerce"):
         try:
             module = importlib.import_module(f"platform_api.{name}.runtime")
         except ImportError:

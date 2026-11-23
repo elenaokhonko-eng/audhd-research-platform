@@ -7,8 +7,8 @@ each cloud client is made on first use, so importing and `/health` need no crede
 
 import threading
 from collections.abc import Callable
-from datetime import timedelta
-from typing import TYPE_CHECKING, Any, TypeVar, cast
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 if TYPE_CHECKING:
     from google.cloud import firestore
@@ -72,8 +72,30 @@ class _MissingKey:
         raise RuntimeError(_NO_KEY)
 
 
-def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: bool) -> None:
-    """Set the runtimes of `entitlements` and `identity` for this process.
+def sign_in_refresh(uid: str, now: datetime) -> Literal["fresh", "started"]:
+    """Identity's `request_refresh`: a sign-in asks Commerce for a fresh look at Stripe.
+
+    A sign-in is not rate-limited, so the uid is not passed on. `fresh` stays "fresh";
+    `started` and `already_running` are "started". A job that cannot start, or a limit,
+    answers "fresh", so that it never fails a sign-in.
+    """
+    from platform_api.commerce import public as commerce
+
+    try:
+        ticket = commerce.request_refresh(None, now)
+    except (commerce.JobStartError, commerce.RateLimited):
+        return "fresh"
+    return "fresh" if ticket.check == "fresh" else "started"
+
+
+def configure_runtimes(
+    settings: "Settings",
+    bus: "EventBus",
+    *,
+    key_required: bool,
+    firestore_client: "Callable[[], firestore.Client] | None" = None,
+) -> None:
+    """Set the runtimes of `entitlements`, `identity` and `commerce` for this process.
 
     In `local`: the in-memory stores and a local contact key. Elsewhere: Firestore, the
     Cloud KMS key named by PLATFORM_CONTACT_KEY, and Identity Platform. When the key is not
@@ -81,11 +103,21 @@ def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: b
     setting; otherwise (hooks, jobs) the first use of the key raises that message. The
     identity provider is Identity
     Platform in every environment (in `local`, through its emulator when one is set).
-    `request_refresh` and `last_reconcile_at` stay None until the Commerce lane wires them.
+    `firestore_client` is the caller's (a job's), so a process makes one client; without
+    it, one is made here on first use.
+
+    Commerce's settings are read here, at start, so that a refused setting (the sandbox
+    marker in prod) stops the start. Commerce runs on the same Firestore client and rate
+    limiter, and never with a Stripe key: only the `stripe-reconcile` job reads one.
+    Identity's `request_refresh` is `sign_in_refresh`, and `last_reconcile_at` Commerce's
+    `last_reconcile_completed_at`.
     """
     from functools import cache
 
     from platform_api.adapters.firebase import FirebaseIdentityProvider
+    from platform_api.commerce import public as commerce
+    from platform_api.commerce import runtime as commerce_runtime
+    from platform_api.commerce.settings import CommerceSettings
     from platform_api.entitlements import runtime as entitlements_runtime
     from platform_api.entitlements.keys import ContactKey, LocalContactKey
     from platform_api.entitlements.store import EntitlementStore, InMemoryStore
@@ -94,13 +126,25 @@ def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: b
     from platform_api.identity.store import InMemoryMemberStore, MemberStore
     from platform_api.shared.ratelimit import InMemoryRateLimiter, RateLimiter
 
+    commerce_settings = CommerceSettings()  # refuses the sandbox marker in prod
     store: EntitlementStore
     key: ContactKey
     members: MemberStore
     limiter: RateLimiter
+    shop: commerce_runtime.Runtime
     if settings.env == "local":
+        from platform_api.commerce.ports import InMemoryPromotionStore, InMemoryRunStore
+
         store, members, limiter = InMemoryStore(), InMemoryMemberStore(), InMemoryRateLimiter()
         key = LocalContactKey(b"local-only")
+        shop = commerce_runtime.Runtime(
+            settings=commerce_settings,
+            stripe=None,
+            runs=InMemoryRunStore(),
+            bus=bus,
+            limiter=limiter,
+            promotions=InMemoryPromotionStore(),
+        )
     else:
         key_name = settings.contact_key.strip()
         if not key_name and key_required:
@@ -114,10 +158,12 @@ def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: b
             version_of(key_name)  # a name that is not a key version stops the start here
 
         @cache
-        def client() -> "firestore.Client":
+        def own_client() -> "firestore.Client":
             from google.cloud import firestore
 
             return firestore.Client(project=settings.gcp_project)
+
+        client = firestore_client or own_client
 
         def kms_key() -> KmsContactKey:
             from google.cloud import kms
@@ -131,6 +177,11 @@ def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: b
             cast(ContactKey, _KeyWithVersion(version_of(key_name), Lazy(kms_key)))
             if key_name
             else cast(ContactKey, _MissingKey())
+        )
+        from platform_api.commerce import adapters as commerce_adapters
+
+        shop = commerce_adapters.build_runtime(
+            commerce_settings, bus, Lazy(client), stripe_key=None, limiter=limiter
         )
 
     def provider() -> FirebaseIdentityProvider:
@@ -150,10 +201,11 @@ def configure_runtimes(settings: "Settings", bus: "EventBus", *, key_required: b
             bus=bus,
             session_ttl=timedelta(days=settings.session_ttl_days),
             limiter=limiter,
-            request_refresh=None,
-            last_reconcile_at=None,
+            request_refresh=sign_in_refresh,
+            last_reconcile_at=commerce.last_reconcile_completed_at,
         )
     )
+    commerce_runtime.set_runtime(shop)
 
 
 class _KeyWithVersion:
