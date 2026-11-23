@@ -37,12 +37,14 @@ __all__ = [
     "SupportRequest",
     "Unauthenticated",
     "accept_terms",
+    "delete_member",
     "end_sessions",
     "file_support_request",
     "list_support_requests",
     "member_count",
     "member_from_session",
     "member_view",
+    "pending_deletions",
     "request_deletion",
     "resolve_session",
 ]
@@ -320,6 +322,40 @@ def request_deletion(uid: str, now: datetime) -> None:
 
     _merged(uid, delete)
     end_sessions(uid)
+
+
+def pending_deletions() -> list[MemberRef]:
+    """The members who asked to be deleted, oldest request first (one without a time first)."""
+    asked = get_runtime().members.members_with_status("deletion_requested")
+    asked.sort(key=lambda m: (m.deletion_requested_at is not None, m.deletion_requested_at, m.uid))
+    return [
+        MemberRef(uid=m.uid, terms_ok=_terms_ok(m), requested_at=m.deletion_requested_at)
+        for m in asked
+    ]
+
+
+def delete_member(uid: str, actor: str, now: datetime) -> None:
+    """Delete a member who asked to be deleted, and everything that holds their address.
+
+    In this order: each contact the member owns, with its entitlements (`forget_contact`, one
+    `contact.forgotten` entry each); the member's support requests; the member record; the
+    sign-in account at the provider. A contact another uid owns, or no one owns, is never
+    touched, even when the member names it. ValueError when the member exists and did not
+    ask. When the member is gone already, only the provider step runs again (it tolerates
+    an account that is gone), so a run that stopped after removing the member can be
+    finished; a second call changes nothing else. Audit entries and records that name the
+    member by id stay, to expire.
+    """
+    runtime = get_runtime()
+    member = runtime.members.get(uid)
+    if member is not None:
+        if member.status != "deletion_requested":
+            raise ValueError("this member has not asked to be deleted")
+        for contact_id in entitlements.contact_ids_for_member(uid):
+            entitlements.forget_contact(contact_id, actor, now)
+        runtime.members.delete_support_requests(uid)
+        runtime.members.delete(uid)
+    runtime.provider.delete_user(uid)
 
 
 def member_count() -> int:

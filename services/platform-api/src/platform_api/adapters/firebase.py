@@ -1,8 +1,9 @@
 """Identity Platform through the Firebase Admin SDK: sign-in tokens and session cookies.
 
 Each call goes through the module `firebase_admin.auth` at call time, so a test can replace
-a function there. Every refusal becomes `InvalidToken` with a fixed message: the SDK's own
-messages can repeat the token or an address, and they are dropped (`from None`).
+a function there. Every refusal becomes `InvalidToken` (`ProviderError` for a deletion) with
+a fixed message: the SDK's own messages can repeat the token, a uid or an address, and they
+are dropped (`from None`).
 """
 
 from datetime import timedelta
@@ -11,7 +12,7 @@ from typing import Any
 from firebase_admin import auth  # type: ignore[import-untyped]
 from firebase_admin import exceptions as firebase_exceptions
 
-from platform_api.identity.provider import InvalidToken, VerifiedIdentity
+from platform_api.identity.provider import InvalidToken, ProviderError, VerifiedIdentity
 
 _REFUSED = (firebase_exceptions.FirebaseError, ValueError)
 
@@ -54,3 +55,11 @@ class FirebaseIdentityProvider:
             auth.revoke_refresh_tokens(uid, app=self._app)
         except _REFUSED:
             raise InvalidToken("the sessions could not be ended") from None
+
+    def delete_user(self, uid: str) -> None:
+        try:
+            auth.delete_user(uid, app=self._app)
+        except auth.UserNotFoundError:
+            return  # gone already: a retried deletion finishes here
+        except _REFUSED:
+            raise ProviderError("the sign-in account could not be deleted") from None

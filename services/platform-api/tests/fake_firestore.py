@@ -1,7 +1,7 @@
 """A small in-process stand-in for the Firestore client, for unit tests of the adapters.
 
-It covers only what the adapters call: documents (get, set, create, update with dotted
-paths and Increment), auto ids, equality and `in` filters, `order_by`, `count`, and
+It covers only what the adapters call: documents (get, set, create, delete, update with
+dotted paths and Increment), auto ids, equality and `in` filters, `order_by`, `count`, and
 transactions run through the real `firestore.transactional` (with `abort_commits`, every
 commit is aborted, so the transaction gives up as it would under endless contention). It does
 not model conflicts between transactions or check that reads come before writes. It checks the adapters'
@@ -60,6 +60,10 @@ class DocRef:
         if self._key in self._db.docs:
             raise AlreadyExists("exists")
         self.set(data)
+
+    def delete(self, data: Any = None) -> None:
+        self._db.writes.append(self._collection)
+        self._db.docs.pop(self._key, None)
 
     def update(self, changes: dict[str, Any]) -> None:
         if self._key not in self._db.docs:
@@ -168,6 +172,9 @@ class Transaction:
 
     def update(self, ref: DocRef, data: dict[str, Any]) -> None:
         self._staged.append(("update", ref, data))
+
+    def delete(self, ref: DocRef) -> None:
+        self._staged.append(("delete", ref, {}))
 
 
 class FakeFirestore:

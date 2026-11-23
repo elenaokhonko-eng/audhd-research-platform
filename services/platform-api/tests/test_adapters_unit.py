@@ -467,6 +467,14 @@ from tests.entitlements.test_contacts import (  # noqa: E402
 from tests.entitlements.test_reconcile import (  # noqa: E402
     test_first_run_creates_and_second_run_changes_nothing,  # noqa: F401
 )
+from tests.identity.test_deletion import (  # noqa: E402
+    test_a_contact_another_member_owns_survives_the_delete,  # noqa: F401
+    test_a_deleted_member_leaves_nothing_but_one_audit_entry,  # noqa: F401
+    test_a_second_delete_is_harmless,  # noqa: F401
+    test_only_requests_are_pending_and_oldest_first,  # noqa: F401
+    test_records_that_name_the_member_hold_no_address_and_are_left_to_expire,  # noqa: F401
+    test_the_same_address_signs_in_again_as_a_new_free_member,  # noqa: F401
+)
 from tests.identity.test_http_member import (  # noqa: E402
     test_the_sixth_request_in_a_day_is_limited,  # noqa: F401
 )
@@ -548,3 +556,101 @@ def _contact_for_abort(contact_id: str) -> Any:
     from tests.entitlements.store_conformance import _contact
 
     return _contact(contact_id)
+
+
+# Deleting a member (plan Task 10): the stores on the fake client, and the provider.
+
+
+def test_the_firestore_stores_pass_the_deletion_checks():
+    from tests.entitlements.store_conformance import (
+        check_forget_contact_removes_the_contact_and_its_records_only,
+    )
+    from tests.identity.store_conformance import (
+        check_delete_removes_one_member_and_their_requests,
+        check_members_with_status_finds_only_that_status,
+    )
+
+    check_forget_contact_removes_the_contact_and_its_records_only(
+        FirestoreEntitlementStore(FakeFirestore())
+    )
+    check_delete_removes_one_member_and_their_requests(FirestoreMemberStore(FakeFirestore()))
+    check_members_with_status_finds_only_that_status(FirestoreMemberStore(FakeFirestore()))
+
+
+def test_a_forgotten_contact_leaves_an_entry_that_expires_and_no_half_state():
+    from platform_api.entitlements.models import AuditEntry
+    from tests.entitlements.store_conformance import _contact
+    from tests.fixtures.people import record
+
+    def entry(removed: int) -> AuditEntry:
+        return AuditEntry(
+            at=T0,
+            actor="owner:acc-1",
+            action="contact.forgotten",
+            subject="c-ana",
+            reason=None,
+            evidence={"entitlements_removed": str(removed)},
+        )
+
+    db = FakeFirestore()
+    store = FirestoreEntitlementStore(db)
+    store.put_contact(_contact("c-ana"))
+    store.write("c-ana", [record("ana", "stripe_year")], [])
+    db.abort_commits = True
+    with pytest.raises(RuntimeError):
+        store.forget_contact("c-ana", entry)
+    # One transaction: when it gives up, the contact and its record are both still there.
+    assert store.get_contact("c-ana") is not None
+    assert len(store.entitlements_for_contacts(["c-ana"])) == 1
+    db.abort_commits = False
+    assert store.forget_contact("c-ana", entry) == 1
+    assert _expiries(db, "audit_log") == [T0 + timedelta(days=730)]
+    assert {name for name, _ in db.docs} == {"audit_log"}
+
+
+def test_deleting_a_provider_account_tolerates_one_already_gone(monkeypatch):
+    import firebase_admin.auth as fa
+
+    calls = []
+    monkeypatch.setattr(fa, "delete_user", lambda uid, app=None: calls.append(uid))
+    FirebaseIdentityProvider(app=None).delete_user("u-ana")
+
+    def gone(uid, app=None):
+        raise fa.UserNotFoundError("no user u-ana for ana@example.org")
+
+    monkeypatch.setattr(fa, "delete_user", gone)
+    FirebaseIdentityProvider(app=None).delete_user("u-ana")
+    assert calls == ["u-ana"]
+
+
+def test_a_provider_that_cannot_delete_says_so_without_the_uid_or_address(monkeypatch):
+    import firebase_admin.auth as fa
+    from firebase_admin import exceptions as fe
+
+    from platform_api.identity.provider import ProviderError
+
+    def boom(uid, app=None):
+        raise fe.UnavailableError("u-ana ana@example.org is unreachable")
+
+    monkeypatch.setattr(fa, "delete_user", boom)
+    with pytest.raises(ProviderError) as err:
+        FirebaseIdentityProvider(app=None).delete_user("u-ana")
+    assert "u-ana" not in str(err.value) and "@" not in str(err.value)
+    assert err.value.__cause__ is None and err.value.__suppress_context__
+
+
+def test_the_fake_provider_forgets_a_deleted_account_and_its_sessions():
+    from platform_api.identity.provider import FakeIdentityProvider
+    from tests.fixtures.people import EMAIL
+
+    provider = FakeIdentityProvider(EMAIL)
+    cookie = provider.create_session_cookie("fake-token:ana", timedelta(days=1))
+    provider.delete_user("u-ana")
+    with pytest.raises(InvalidToken):
+        provider.verify_session_cookie(cookie)
+    again = provider.verify_id_token("fake-token:ana")
+    assert again.uid != "u-ana" and again.email == EMAIL["ana"]
+    fresh = provider.create_session_cookie("fake-token:ana", timedelta(days=1))
+    assert provider.verify_session_cookie(fresh) == again.uid
+    provider.delete_user("u-nobody")  # not found is not an error
+    assert provider.deleted == ["u-ana", "u-nobody"]

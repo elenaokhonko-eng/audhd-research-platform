@@ -105,3 +105,10 @@ class AdminClient:
     def support_list(self) -> list[dict[str, Any]]:
         requests: list[dict[str, Any]] = self._call("GET", "/v1/admin/support-requests")["requests"]
         return requests
+
+    def member_deletions(self) -> list[dict[str, Any]]:
+        pending: list[dict[str, Any]] = self._call("GET", "/v1/admin/deletions")["pending"]
+        return pending
+
+    def member_delete(self, uid: str) -> None:
+        self._call("POST", f"/v1/admin/members/{quote(uid, safe='')}/delete")

@@ -181,6 +181,17 @@ def _support_list(client: AdminClient, args: argparse.Namespace) -> None:
         _say("request", f"{r['id']} " + _pairs({k: r[k] for k in keys}) + f" note={r['note']!r}")
 
 
+def _member_deletions(client: AdminClient, args: argparse.Namespace) -> None:
+    for r in client.member_deletions():
+        _say("uid", r["uid"])
+        _say("requested_at", r["requested_at"])
+
+
+def _member_delete(client: AdminClient, args: argparse.Namespace) -> None:
+    client.member_delete(args.uid)
+    _say("deleted", args.uid)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="platform-cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -232,6 +243,16 @@ def _parser() -> argparse.ArgumentParser:
         dest="action", required=True
     )
     support.add_parser("list").set_defaults(run=_support_list)
+
+    member = sub.add_parser("member", help="deletions members asked for").add_subparsers(
+        dest="action", required=True
+    )
+    member.add_parser("deletions", help="the requests that are waiting").set_defaults(
+        run=_member_deletions
+    )
+    delete = member.add_parser("delete", help="delete a member who asked to be deleted")
+    delete.add_argument("--uid", required=True)
+    delete.set_defaults(run=_member_delete)
     return parser
 
 

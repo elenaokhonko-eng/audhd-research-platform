@@ -181,3 +181,49 @@ def check_a_claim_keeps_the_stored_status(store: EntitlementStore) -> None:
     assert store.audit_for(taken.entitlement_id) == []
     assert store.claim_records("c1", "u-ana", later) == []
     assert store.claim_records("c9", "u-ana", later) == []
+
+
+def check_forget_contact_removes_the_contact_and_its_records_only(store: EntitlementStore) -> None:
+    from collections.abc import Callable
+
+    def forgotten(contact_id: str) -> Callable[[int], AuditEntry]:
+        def entry(removed: int) -> AuditEntry:
+            return AuditEntry(
+                at=NOW,
+                actor="owner:acc-1",
+                action="contact.forgotten",
+                subject=contact_id,
+                reason=None,
+                evidence={"entitlements_removed": str(removed)},
+            )
+
+        return entry
+
+    mine = _ent("c1")
+    also_mine = Entitlement(
+        **{
+            **_ent("c1").model_dump(),
+            "entitlement_id": entitlement_id("grant", "campaign:y", "c1", "tier:paid"),
+            "source_ref": "campaign:y",
+        }
+    )
+    other = _ent("c2")
+    store.put_contact(_contact("c1", platform={"member_uid": "u-ana"}))
+    store.put_contact(_contact("c2", platform={"member_uid": "u-bo"}))
+    store.write("c1", [mine, also_mine], [_audit(mine.entitlement_id)])
+    store.write("c2", [other], [])
+
+    assert store.forget_contact("c1", forgotten("c1")) == 2
+
+    assert store.get_contact("c1") is None
+    assert store.get_entitlement(mine.entitlement_id) is None
+    assert store.get_entitlement(also_mine.entitlement_id) is None
+    assert store.contact_ids_for_member("u-ana") == []
+    [entry] = store.audit_for("c1")
+    assert (entry.action, entry.evidence) == ("contact.forgotten", {"entitlements_removed": "2"})
+    assert store.audit_for(mine.entitlement_id) == [_audit(mine.entitlement_id)]  # left to expire
+    assert store.get_contact("c2") is not None and store.get_entitlement(other.entitlement_id)
+    # A contact that does not exist is a no-op: nothing removed, nothing audited.
+    assert store.forget_contact("c1", forgotten("c1")) is None
+    assert store.forget_contact("c9", forgotten("c9")) is None
+    assert len(store.audit_for("c1")) == 1 and store.audit_for("c9") == []

@@ -14,6 +14,7 @@ from platform_api.entitlements.models import (
 )
 
 ContactChange = Callable[[Contact | None], Contact | None]
+ForgetAudit = Callable[[int], AuditEntry]  # the entry of a forgotten contact, from the count
 
 
 def claimed_audit(entitlement_id: str, contact_id: str, uid: str, now: datetime) -> AuditEntry:
@@ -84,6 +85,17 @@ class EntitlementStore(Protocol):
         `updated_by = "member:<uid>"`; its status and every other field stay as stored, so a
         record a run ended meanwhile stays ended. One `entitlement.claimed` audit entry per
         record claimed is written in the same step. Returns the ids claimed.
+        """
+        ...
+
+    def forget_contact(self, contact_id: str, audit: ForgetAudit) -> int | None:
+        """Delete the contact and every entitlement of it, in one atomic step.
+
+        `audit(n)`, with n the number of entitlements deleted, is the entry written in the
+        same step. It may be called more than once (a Firestore transaction is retried), so
+        it must not have side effects. Returns n; None, with nothing deleted and nothing
+        written, when the contact does not exist. Audit entries about the contact's records
+        stay, to expire with the audit log.
         """
         ...
 
@@ -186,6 +198,17 @@ class InMemoryStore:
             self._entitlements[e.entitlement_id] = e
             self._audit.append(claimed_audit(e.entitlement_id, contact_id, uid, now))
         return [e.entitlement_id for e in claimed]
+
+    def forget_contact(self, contact_id: str, audit: ForgetAudit) -> int | None:
+        if contact_id not in self._contacts:
+            return None
+        gone = [eid for eid, e in self._entitlements.items() if e.contact_id == contact_id]
+        entry = audit(len(gone))
+        for eid in gone:
+            del self._entitlements[eid]
+        del self._contacts[contact_id]
+        self._audit.append(entry.model_copy(deep=True))
+        return len(gone)
 
     def audit_for(self, subject: str) -> list[AuditEntry]:
         return [a.model_copy(deep=True) for a in self._audit if a.subject == subject]

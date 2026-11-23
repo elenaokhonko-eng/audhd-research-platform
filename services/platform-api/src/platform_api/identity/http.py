@@ -53,23 +53,40 @@ def revoke(member: Signed) -> dict[str, Any]:
     return {}
 
 
+def _gone() -> ApiError:
+    """The member was removed after the session was checked: a refusal, not a fault."""
+    return ApiError(401, "unauthenticated", "Please sign in.")
+
+
 @router.get("/v1/me")
 def me(member: Signed) -> dict[str, Any]:
+    try:
+        view = public.member_view(member.uid)
+    except LookupError:
+        raise _gone() from None
     return {
-        "member": public.member_view(member.uid).model_dump(mode="json"),
+        "member": view.model_dump(mode="json"),
         "access": access_for(member.uid, clock.utcnow()).model_dump(mode="json"),
     }
 
 
 @router.post("/v1/me/terms-acceptance")
 def accept_terms(member: Signed, body: TermsBody) -> dict[str, Any]:
-    view = public.accept_terms(member.uid, body.terms_version, body.privacy_version, clock.utcnow())
+    try:
+        view = public.accept_terms(
+            member.uid, body.terms_version, body.privacy_version, clock.utcnow()
+        )
+    except LookupError:
+        raise _gone() from None
     return {"member": view.model_dump(mode="json")}
 
 
 @router.post("/v1/me/deletion-request")
 def deletion_request(member: Signed) -> dict[str, str]:
-    public.request_deletion(member.uid, clock.utcnow())
+    try:
+        public.request_deletion(member.uid, clock.utcnow())
+    except LookupError:
+        raise _gone() from None
     return {"status": "deletion_requested"}
 
 

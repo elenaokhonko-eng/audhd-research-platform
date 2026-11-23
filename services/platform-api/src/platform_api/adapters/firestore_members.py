@@ -8,10 +8,11 @@ from datetime import timedelta
 from typing import Any
 
 from google.cloud import firestore
+from google.cloud.firestore import FieldFilter
 
 from platform_api.adapters import in_transaction
 from platform_api.identity.models import Member, SupportRequest
-from platform_api.identity.store import MemberChange
+from platform_api.identity.store import MemberChange, Status
 
 SUPPORT_LIFETIME = timedelta(days=365)  # a request's `expires_at` is its `created_at` plus this
 
@@ -56,6 +57,22 @@ class FirestoreMemberStore:
 
         return in_transaction(self._client, work)
 
+    def delete(self, uid: str) -> bool:
+        ref = self._members.document(uid)
+
+        def work(transaction: firestore.Transaction) -> bool:
+            if not ref.get(transaction=transaction).exists:
+                return False
+            transaction.delete(ref)
+            return True
+
+        return in_transaction(self._client, work)
+
+    def members_with_status(self, status: Status) -> list[Member]:
+        """Uses the single-field index on `members.status`."""
+        query = self._members.where(filter=FieldFilter("status", "==", status))
+        return [Member.model_validate(s.to_dict()) for s in query.stream()]
+
     def count(self) -> int:
         result: Any = self._members.count().get()  # type: ignore[no-untyped-call]
         return int(result[0][0].value)
@@ -68,3 +85,12 @@ class FirestoreMemberStore:
         """Oldest first."""
         query = self._support.order_by("created_at")
         return [SupportRequest.model_validate(s.to_dict()) for s in query.stream()]
+
+    def delete_support_requests(self, uid: str) -> int:
+        """One document at a time: a run stopped halfway is finished by the next call."""
+        query = self._support.where(filter=FieldFilter("member_uid", "==", uid))
+        removed = 0
+        for snapshot in query.stream():
+            self._support.document(snapshot.id).delete()
+            removed += 1
+        return removed
