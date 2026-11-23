@@ -233,3 +233,19 @@ def test_handlers_run_off_the_event_loop(setup):
     body = envelope(new_event("x.y.happened", "s", {}, event_id="e-thread"))
     assert c.post(URL, json=body, headers=GOOD).status_code == 204
     assert off_loop == [True]
+
+
+def test_a_failing_handler_leaves_no_address_in_the_log(setup, caplog):
+    import logging
+
+    c, registry, _, _ = setup
+
+    def fails(e):
+        raise RuntimeError("could not reach ana@example.org")
+
+    registry.register("x.y.happened", fails)
+    body = envelope(new_event("x.y.happened", "s", {}, event_id="e-log"))
+    with caplog.at_level(logging.DEBUG):
+        assert c.post(URL, json=body, headers=GOOD).status_code == 500
+    assert "e-log" in caplog.text and "RuntimeError" in caplog.text
+    assert "@" not in caplog.text
