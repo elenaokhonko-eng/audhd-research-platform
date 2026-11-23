@@ -20,6 +20,7 @@ Importing this module does not import the Stripe library: only `build_runtime` w
 does, so the api service never loads it.
 """
 
+import logging
 import threading
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
@@ -44,6 +45,8 @@ from platform_api.commerce.settings import CommerceSettings
 if TYPE_CHECKING:
     from platform_api.shared.bus import EventBus
     from platform_api.shared.ratelimit import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 _GAVE_UP = "Failed to commit transaction"  # the start of the library's message
 
@@ -276,8 +279,9 @@ class CloudRunJobStarter:
 
         try:
             self._client.run_job(name=job, timeout=_START_TIMEOUT)
-        except (GoogleAPIError, GoogleAuthError):
+        except (GoogleAPIError, GoogleAuthError) as exc:
             # The library's text names the job and the caller's identity; it is not repeated.
+            logger.warning("refresh_job_not_started error=%s", type(exc).__name__)
             raise JobStartError("the job could not be started") from None
 
 
