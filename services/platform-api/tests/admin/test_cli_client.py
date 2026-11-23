@@ -156,3 +156,46 @@ def test_the_client_sends_the_token_for_cloud_run_and_for_the_service():
 
     client(handler).launch_report()
     assert seen == {"serverless": "Bearer tok", "auth": "Bearer tok"}
+
+
+def test_member_deletions_and_delete_print_uids_and_times_only(monkeypatch, capsys):
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, request.url.path, request.content.decode()))
+        if request.url.path == "/v1/admin/deletions":
+            return httpx.Response(
+                200, json={"pending": [{"uid": "u-bo", "requested_at": "2026-11-20T00:00:00Z"}]}
+            )
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(cli, "admin_client", lambda: client(handler))
+    assert cli.main(["member", "deletions"]) == 0
+    assert capsys.readouterr().out == "uid: u-bo\nrequested_at: 2026-11-20T00:00:00Z\n"
+    assert cli.main(["member", "delete", "--uid", "u-bo"]) == 0
+    assert capsys.readouterr().out == "deleted: u-bo\n"
+    assert seen == [
+        ("GET", "/v1/admin/deletions", ""),
+        ("POST", "/v1/admin/members/u-bo/delete", ""),
+    ]
+
+
+def test_a_delete_the_service_refuses_exits_non_zero(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "admin_client",
+        lambda: client(
+            lambda r: httpx.Response(
+                422,
+                json={
+                    "error": {
+                        "code": "validation_failed",
+                        "message": "This member has not asked to be deleted.",
+                        "retry_after": None,
+                    }
+                },
+            )
+        ),
+    )
+    assert cli.main(["member", "delete", "--uid", "u-bo"]) == 1
+    assert "not asked" in capsys.readouterr().err

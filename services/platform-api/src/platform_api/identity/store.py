@@ -1,11 +1,12 @@
 """The storage port of the identity module, and an in-memory implementation."""
 
 from collections.abc import Callable
-from typing import Protocol
+from typing import Literal, Protocol
 
 from platform_api.identity.models import Member, SupportRequest
 
 MemberChange = Callable[[Member | None], Member | None]
+Status = Literal["active", "deletion_requested"]
 
 
 class MemberStore(Protocol):
@@ -30,9 +31,20 @@ class MemberStore(Protocol):
         exists already (another sign-in created it first)."""
         ...
 
+    def delete(self, uid: str) -> bool:
+        """Remove the member. False, and nothing changed, when there is none."""
+        ...
+
+    def members_with_status(self, status: Status) -> list[Member]:
+        """Every member with this status, in no particular order."""
+        ...
+
     def count(self) -> int: ...
     def add_support_request(self, request: SupportRequest) -> None: ...
     def support_requests(self) -> list[SupportRequest]: ...
+    def delete_support_requests(self, uid: str) -> int:
+        """Remove every request of the member; the number removed."""
+        ...
 
 
 class InMemoryMemberStore:
@@ -63,6 +75,12 @@ class InMemoryMemberStore:
         self.put(member)
         return True
 
+    def delete(self, uid: str) -> bool:
+        return self._members.pop(uid, None) is not None
+
+    def members_with_status(self, status: Status) -> list[Member]:
+        return [m.model_copy(deep=True) for m in self._members.values() if m.status == status]
+
     def count(self) -> int:
         return len(self._members)
 
@@ -72,3 +90,9 @@ class InMemoryMemberStore:
     def support_requests(self) -> list[SupportRequest]:
         """Oldest first."""
         return [r.model_copy(deep=True) for r in self._support]
+
+    def delete_support_requests(self, uid: str) -> int:
+        kept = [r for r in self._support if r.member_uid != uid]
+        removed = len(self._support) - len(kept)
+        self._support = kept
+        return removed

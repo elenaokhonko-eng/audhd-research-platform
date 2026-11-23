@@ -321,3 +321,84 @@ def test_a_grant_with_a_bad_name_is_refused_before_any_contact_is_made(admin, en
     )
     assert r.status_code == 422 and r.json()["error"]["code"] == "validation_failed"
     assert ent.store.get_contact(ent_api.contact_id_for(EMAIL["di"])) is None
+
+
+def test_the_owner_deletes_a_member_who_asked_and_no_one_else(admin, idn, ent):
+    from platform_api.identity import public as identity
+    from tests.fixtures.launch import TERMS
+    from tests.fixtures.people import T0
+
+    ent.store.put_launch_config(TERMS)
+    signed = admin.post("/v1/session/resolve", json={"id_token": "fake-token:bo"})
+    assert signed.status_code == 200
+    assert admin.post("/v1/admin/members/u-nobody/delete").status_code == 404
+    refused = admin.post("/v1/admin/members/u-bo/delete")
+    assert refused.status_code == 422 and refused.json()["error"]["code"] == "validation_failed"
+    assert admin.get("/v1/admin/deletions").json() == {"pending": []}
+
+    identity.request_deletion("u-bo", T0)
+    assert admin.get("/v1/admin/deletions").json() == {
+        "pending": [{"uid": "u-bo", "requested_at": "2026-11-20T00:00:00Z"}]
+    }
+    done = admin.post("/v1/admin/members/u-bo/delete")
+    assert (done.status_code, done.json()) == (200, {})
+    assert idn.members.get("u-bo") is None and idn.provider.deleted == ["u-bo"]
+    assert admin.post("/v1/admin/members/u-bo/delete").status_code == 404
+    assert admin.get("/v1/admin/deletions").json() == {"pending": []}
+    assert route_entries(ent, "u-bo") == [
+        ("owner:acc-1", "member.deleted", "422"),
+        ("owner:acc-1", "member.deleted", "200"),
+        ("owner:acc-1", "member.deleted", "404"),
+    ]
+    assert [a.action for a in ent.store.audit_for("admin") if "route" in a.evidence] == [
+        "admin.read",
+        "admin.read",
+        "admin.read",
+    ]
+    assert route_entries(ent, "u-nobody") == [("owner:acc-1", "member.deleted", "404")]
+
+
+def test_a_provider_that_fails_once_answers_503_and_a_retry_finishes(admin, idn, ent):
+    from platform_api.identity import public as identity
+    from platform_api.identity.provider import ProviderError
+    from tests.fixtures.launch import TERMS
+
+    ent.store.put_launch_config(TERMS)
+    signed = admin.post("/v1/session/resolve", json={"id_token": "fake-token:ana"}).json()
+    cookie = {"X-Member-Session": signed["session"]["cookie"]}
+    admin.post(
+        "/v1/me/terms-acceptance",
+        headers=cookie,
+        json={"terms_version": "t1", "privacy_version": "p1"},
+    )
+    filed = admin.post(
+        "/v1/me/support-requests", headers=cookie, json={"kind": "other", "note": "n"}
+    )
+    assert filed.status_code == 200
+    admin.post("/v1/me/deletion-request", headers=cookie)
+    [cid] = ent.store.contact_ids_for_member("u-ana")
+    real, calls = idn.provider.delete_user, []
+
+    def fails_once(uid):
+        calls.append(uid)
+        if len(calls) == 1:
+            raise ProviderError("the sign-in account could not be deleted")
+        real(uid)
+
+    idn.provider.delete_user = fails_once
+    first = admin.post("/v1/admin/members/u-ana/delete")
+    assert first.status_code == 503 and first.json()["error"]["code"] == "unavailable"
+    assert "u-ana" not in first.text and "@" not in first.text
+    held = idn.members.get("u-ana")
+    assert held is not None and held.status == "deletion_requested"
+    assert ent.store.get_contact(cid) is None
+    assert [r for r in idn.members.support_requests() if r.member_uid == "u-ana"] == []
+    assert [r.uid for r in identity.pending_deletions()] == ["u-ana"]
+
+    second = admin.post("/v1/admin/members/u-ana/delete")
+    assert (second.status_code, second.json()) == (200, {})
+    assert idn.members.get("u-ana") is None and idn.provider.deleted == ["u-ana"]
+    assert route_entries(ent, "u-ana") == [
+        ("owner:acc-1", "member.deleted", "503"),
+        ("owner:acc-1", "member.deleted", "200"),
+    ]

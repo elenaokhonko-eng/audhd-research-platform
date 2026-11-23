@@ -329,3 +329,70 @@ def test_the_firestore_member_store_passes_the_store_checks() -> None:
     )
 
     check_merge_member_sees_the_stored_member_and_may_leave_it(FirestoreMemberStore(_client()))
+
+
+def test_the_firestore_stores_pass_the_deletion_checks() -> None:
+    from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
+    from platform_api.adapters.firestore_members import FirestoreMemberStore
+    from tests.entitlements.store_conformance import (
+        check_forget_contact_removes_the_contact_and_its_records_only,
+    )
+    from tests.identity.store_conformance import (
+        check_delete_removes_one_member_and_their_requests,
+        check_members_with_status_finds_only_that_status,
+    )
+
+    check_forget_contact_removes_the_contact_and_its_records_only(
+        FirestoreEntitlementStore(_client())
+    )
+    check_delete_removes_one_member_and_their_requests(FirestoreMemberStore(_client()))
+    check_members_with_status_finds_only_that_status(FirestoreMemberStore(_client()))
+
+
+def test_a_forgotten_contact_on_firestore_leaves_one_entry_that_expires() -> None:
+    from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
+    from platform_api.entitlements.models import AuditEntry, Contact
+    from tests.fixtures.people import T0, record
+
+    client = _client()
+    store = FirestoreEntitlementStore(client)
+    store.put_contact(
+        Contact(
+            contact_id="c-ana",
+            key_version="local",
+            email="ana@example.org",
+            channels={},
+            invite={"campaign": None, "state": "none"},
+            created_at=T0,
+            updated_at=T0,
+        )
+    )
+    store.write("c-ana", [record("ana", "stripe_year")], [])
+
+    def entry(removed: int) -> AuditEntry:
+        return AuditEntry(
+            at=T0,
+            actor="owner:acc-1",
+            action="contact.forgotten",
+            subject="c-ana",
+            reason=None,
+            evidence={"entitlements_removed": str(removed)},
+        )
+
+    assert store.forget_contact("c-ana", entry) == 1
+    assert list(client.collection("contacts").stream()) == []
+    assert list(client.collection("entitlements").stream()) == []
+    assert _expiries(client, "audit_log") == [T0 + timedelta(days=730)]
+
+
+# The deletion journey on both stores.
+from tests.identity.test_deletion import (  # noqa: E402
+    test_a_contact_another_member_owns_survives_the_delete,  # noqa: F401
+    test_a_deleted_member_leaves_nothing_but_one_audit_entry,  # noqa: F401
+    test_a_failed_provider_step_keeps_the_record_for_a_retry,  # noqa: F401
+    test_a_second_delete_is_harmless,  # noqa: F401
+    test_a_sign_in_during_the_gap_before_the_record_is_deleted_is_refused,  # noqa: F401
+    test_only_requests_are_pending_and_oldest_first,  # noqa: F401
+    test_records_that_name_the_member_hold_no_address_and_are_left_to_expire,  # noqa: F401
+    test_the_same_address_signs_in_again_as_a_new_free_member,  # noqa: F401
+)

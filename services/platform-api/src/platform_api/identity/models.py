@@ -82,6 +82,7 @@ class MemberRef(BaseModel):
 
     uid: str
     terms_ok: bool
+    requested_at: AwareDatetime | None = None  # when the member asked to be deleted
 
 
 class JoinGrant(BaseModel):

@@ -25,7 +25,12 @@ from platform_api.entitlements.models import (
     LaunchConfig,
     Source,
 )
-from platform_api.entitlements.store import ContactChange, check_write, claimed_audit
+from platform_api.entitlements.store import (
+    ContactChange,
+    ForgetAudit,
+    check_write,
+    claimed_audit,
+)
 
 _IN_LIMIT = 30  # the most values Firestore takes in one `in` filter
 AUDIT_LIFETIME = timedelta(days=730)  # an audit entry's `expires_at` is its `at` plus this
@@ -144,6 +149,24 @@ class FirestoreEntitlementStore:
                 transaction, [claimed_audit(eid, contact_id, uid, now) for eid in waiting]
             )
             return waiting
+
+        return in_transaction(self._client, work)
+
+    def forget_contact(self, contact_id: str, audit: ForgetAudit) -> int | None:
+        """One transaction: the entitlements, the contact and the entry go together or not at
+        all, so no contact is gone while its entitlements remain."""
+        ref = self._contacts.document(contact_id)
+        query = self._entitlements.where(filter=FieldFilter("contact_id", "==", contact_id))
+
+        def work(transaction: firestore.Transaction) -> int | None:
+            if not ref.get(transaction=transaction).exists:  # every read before any write
+                return None
+            gone = [s.id for s in query.stream(transaction=transaction)]
+            for eid in gone:
+                transaction.delete(self._entitlements.document(eid))
+            transaction.delete(ref)
+            self._stage_audit(transaction, [audit(len(gone))])
+            return len(gone)
 
         return in_transaction(self._client, work)
 

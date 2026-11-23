@@ -32,3 +32,11 @@ def test_in_memory_store_claims_waiting_records_and_keeps_their_status():
     from tests.entitlements.store_conformance import check_a_claim_keeps_the_stored_status
 
     check_a_claim_keeps_the_stored_status(InMemoryStore())
+
+
+def test_in_memory_store_forgets_a_contact_and_only_its_records():
+    from tests.entitlements.store_conformance import (
+        check_forget_contact_removes_the_contact_and_its_records_only,
+    )
+
+    check_forget_contact_removes_the_contact_and_its_records_only(InMemoryStore())

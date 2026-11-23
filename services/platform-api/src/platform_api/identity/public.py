@@ -22,7 +22,7 @@ from platform_api.identity.models import (
     TermsVersions,
     TermsView,
 )
-from platform_api.identity.provider import InvalidToken
+from platform_api.identity.provider import InvalidToken, ProviderError
 from platform_api.identity.runtime import get_runtime
 from platform_api.identity.store import MemberChange
 from platform_api.shared.events import new_event
@@ -33,16 +33,19 @@ __all__ = [
     "Member",
     "MemberRef",
     "MemberView",
+    "ProviderError",
     "SessionResult",
     "SupportRequest",
     "Unauthenticated",
     "accept_terms",
+    "delete_member",
     "end_sessions",
     "file_support_request",
     "list_support_requests",
     "member_count",
     "member_from_session",
     "member_view",
+    "pending_deletions",
     "request_deletion",
     "resolve_session",
 ]
@@ -320,6 +323,44 @@ def request_deletion(uid: str, now: datetime) -> None:
 
     _merged(uid, delete)
     end_sessions(uid)
+
+
+def pending_deletions() -> list[MemberRef]:
+    """The members who asked to be deleted, oldest request first (one without a time first)."""
+    asked = get_runtime().members.members_with_status("deletion_requested")
+    asked.sort(key=lambda m: (m.deletion_requested_at is not None, m.deletion_requested_at, m.uid))
+    return [
+        MemberRef(uid=m.uid, terms_ok=_terms_ok(m), requested_at=m.deletion_requested_at)
+        for m in asked
+    ]
+
+
+def delete_member(uid: str, actor: str, now: datetime) -> None:
+    """Delete a member who asked to be deleted, and everything that holds their address.
+
+    In this order: each contact the member owns, with its entitlements (`forget_contact`, one
+    `contact.forgotten` entry each); the member's support requests; the sign-in account at the
+    provider; the member record, last. A contact another uid owns, or no one owns, is never
+    touched, even when the member names it. ValueError when the member exists and did not
+    ask. An absent member means the deletion is complete: nothing is done. Audit entries and
+    records that name the member by id stay, to expire.
+
+    The plan lists the provider step last. By the coordinator's ruling on Task 10 the member
+    record goes last instead: in status `deletion_requested` it is the handle for a retry. If
+    the provider step fails, ProviderError propagates, the record stays, and the owner's
+    route or CLI runs the delete again to finish. A deleted account cannot sign in meanwhile.
+    """
+    runtime = get_runtime()
+    member = runtime.members.get(uid)
+    if member is None:
+        return  # deleted already
+    if member.status != "deletion_requested":
+        raise ValueError("this member has not asked to be deleted")
+    for contact_id in entitlements.contact_ids_for_member(uid):
+        entitlements.forget_contact(contact_id, actor, now)
+    runtime.members.delete_support_requests(uid)
+    runtime.provider.delete_user(uid)  # not found counts as deleted, so a retry passes here
+    runtime.members.delete(uid)  # last: the retry handle (coordinator's ruling, Task 10)
 
 
 def member_count() -> int:

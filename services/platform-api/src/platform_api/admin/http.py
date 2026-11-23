@@ -35,6 +35,8 @@ AUDIT_ACTIONS: dict[tuple[str, str], tuple[str, str]] = {
     ("PUT", "/v1/admin/launch"): ("launch", "launch.switched"),
     ("GET", "/v1/admin/launch/report"): ("launch/report", "admin.read"),
     ("GET", "/v1/admin/support-requests"): ("support-requests", "admin.read"),
+    ("GET", "/v1/admin/deletions"): ("deletions", "admin.read"),
+    ("POST", "/v1/admin/members/{uid}/delete"): ("members/delete", "member.deleted"),
 }
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -232,3 +234,36 @@ def support_requests() -> dict[str, Any]:
         for r in identity.list_support_requests()
     ]
     return {"requests": requests}
+
+
+@router.get("/v1/admin/deletions")
+def deletions() -> dict[str, Any]:
+    """The members waiting to be deleted, oldest request first. Uids and times only."""
+    pending = [
+        r.model_dump(mode="json", include={"uid", "requested_at"})
+        for r in identity.pending_deletions()
+    ]
+    return {"pending": pending}
+
+
+@router.post("/v1/admin/members/{uid}/delete")
+def delete_member(request: Request, uid: str, account: Owner) -> dict[str, Any]:
+    """Delete a member who asked to be. 404 when there is no member (deleted already); 503
+    when the provider could not delete the sign-in account, and a second call finishes."""
+    _about(request, uid)
+    try:
+        identity.member_view(uid)
+    except LookupError:
+        raise ApiError(404, "not_found", "There is no such member.") from None
+    try:
+        identity.delete_member(uid, f"owner:{account}", clock.utcnow())
+    except ValueError:
+        raise _invalid("This member has not asked to be deleted.") from None
+    except identity.ProviderError:
+        # The member record stays (it is removed last), so running the delete again finishes.
+        raise ApiError(
+            503,
+            "unavailable",
+            "The sign-in account could not be deleted. Nothing is lost; run the delete again.",
+        ) from None
+    return {}

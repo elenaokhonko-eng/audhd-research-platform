@@ -287,3 +287,17 @@ def test_a_token_the_provider_will_not_turn_into_a_cookie_is_refused(world, idn,
     monkeypatch.setattr(idn.provider, "create_session_cookie", refuse)
     r = sign_in(world, "ana")
     assert r.status_code == 401 and r.json()["error"]["code"] == "unauthenticated"
+
+
+def test_a_member_removed_after_the_session_check_is_unauthenticated(world, idn):
+    from platform_api.identity.models import MemberRef
+
+    world.app.state.member_from_session = lambda cookie: MemberRef(uid="u-gone", terms_ok=True)
+    cookie = {"X-Member-Session": "anything"}
+    for method, path, body in (
+        ("GET", "/v1/me", None),
+        ("POST", "/v1/me/terms-acceptance", {"terms_version": "t1", "privacy_version": "p1"}),
+        ("POST", "/v1/me/deletion-request", None),
+    ):
+        r = world.request(method, path, headers=cookie, json=body)
+        assert r.status_code == 401 and r.json()["error"]["code"] == "unauthenticated"

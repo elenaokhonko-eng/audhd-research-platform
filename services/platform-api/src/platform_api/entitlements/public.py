@@ -42,6 +42,7 @@ __all__ = [
     "announce_tier_change",
     "apply_plan",
     "existing_for",
+    "forget_contact",
     "Source",
     "Guard",
     "plan_reconcile",
@@ -57,6 +58,7 @@ __all__ = [
     "Entitlement",
     "SourceState",
     "contact_id_for",
+    "contact_ids_for_member",
     "entitlement_id",
     "normalise_email",
     "upsert_contact",
@@ -370,6 +372,34 @@ def write_audit(entry: AuditEntry) -> None:
 
 def audit_for(subject: str) -> list[AuditEntry]:
     return get_runtime().store.audit_for(subject)
+
+
+def contact_ids_for_member(uid: str) -> list[str]:
+    """The contacts the member owns: those whose `channels.platform.member_uid` is `uid`."""
+    return get_runtime().store.contact_ids_for_member(uid)
+
+
+def forget_contact(contact_id: str, actor: str, now: datetime) -> None:
+    """Delete the contact and its entitlements, and write one `contact.forgotten` entry.
+
+    The entry's subject is the contact id and its evidence a count, never an address. A
+    contact that does not exist is left alone: nothing is written. Entries about the
+    contact's records stay, to expire with the audit log. Publishes no event.
+    """
+    if contains_email(actor):
+        raise ValueError("an actor is an id, never an address")
+
+    def entry(removed: int) -> AuditEntry:
+        return AuditEntry(
+            at=now,
+            actor=actor,
+            action="contact.forgotten",
+            subject=contact_id,
+            reason=None,
+            evidence={"entitlements_removed": str(removed)},
+        )
+
+    get_runtime().store.forget_contact(contact_id, entry)
 
 
 def list_campaigns() -> list[Campaign]:
