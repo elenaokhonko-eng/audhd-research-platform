@@ -1,7 +1,7 @@
 ---
 title: Privacy notice
-version: 2026-11-23
-effective_from: 2026-11-23
+version: 2026-11-24
+effective_from: 2026-11-24
 ---
 
 # Privacy notice
@@ -68,7 +68,7 @@ We do not sell your data and we do not share it for advertising.
 ## Your choices
 
 - **See or correct** what we hold: write to us.
-- **Delete your account:** use "Delete my account" on your Account page, or write to us. Your sign-in stops working at once. We remove your member record, your contact record and your access records within **30 days**. Deleting your platform account does not cancel a Substack subscription; you do that in your Substack account.
+- **Delete your account:** use "Delete my account" on your Account page, or write to us. Your sign-in stops working at once. We remove your member record, your contact record and your access records within **30 days**. Deleting your platform account does not cancel a Substack subscription; you do that in your Substack account. While a paid Substack subscription continues, the platform learns of it again from the payment records the next time it checks them, and holds a new contact record (your email address, your plan and the paid dates) for as long as the subscription lasts. That record gives no one a sign-in. If you want it removed as well, cancel the subscription on Substack and write to us.
 - **Withdraw your agreement** to this notice: this is done by deleting your account.
 - **Complain:** you may contact the Personal Data Protection Commission of Singapore, or the data protection authority where you live. We would like the chance to put things right first.
 
