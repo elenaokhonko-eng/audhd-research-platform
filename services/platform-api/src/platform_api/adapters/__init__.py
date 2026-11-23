@@ -5,6 +5,7 @@ Only `main.py` and `cli.py` import this package; no feature module and no shared
 each cloud client is made on first use, so importing and `/health` need no credentials.
 """
 
+import logging
 import threading
 from collections.abc import Callable
 from datetime import timedelta
@@ -17,26 +18,66 @@ if TYPE_CHECKING:
     from platform_api.shared.bus import EventBus
 
 T = TypeVar("T")
+_log = logging.getLogger(__name__)
 
 
-def in_transaction(client: "firestore.Client", work: "Callable[[firestore.Transaction], T]") -> T:
+def in_transaction(
+    client: "firestore.Client",
+    work: "Callable[[firestore.Transaction], T]",
+    *,
+    sleep: Callable[[float], None] | None = None,
+    uniform: Callable[[float, float], float] | None = None,
+) -> T:
     """Run `work` in a Firestore transaction, retried on contention; `work` must be pure.
 
-    A transaction that gives up after its retries is a RuntimeError: the library raises it as
-    ValueError, which the routes would answer as a refusal (422) instead of a fault.
+    The library retries a commit that is aborted, at most five times and at once, keeping the
+    transaction's place in line. Two writers on one document can still abort each other on every
+    immediate retry, and an abort at the transaction's first read is not retried at all. So when
+    the library gives up, or `Aborted` comes out of `work`, the whole transaction runs again in a
+    fresh one, after a jittered backoff that doubles from 50 ms (capped at 1 s): four rounds in
+    all. This is safe only because `work` is pure (it reads through the transaction and returns
+    what to write), which every caller keeps to. Each backoff logs a warning that names only the
+    exception type and the round.
+
+    A transaction that gives up on every round is a RuntimeError: the library raises it as
+    ValueError, which the routes would answer as a refusal (422) instead of a fault. Any other
+    exception is raised at once. `sleep` and `uniform` default to `time.sleep` and
+    `random.uniform`, looked up at the call.
     """
+    import random
+    import time
+
+    from google.api_core.exceptions import Aborted
     from google.cloud import firestore
 
-    try:
-        result: T = firestore.transactional(work)(client.transaction())
-    except ValueError as exc:
-        if str(exc).startswith(_GAVE_UP):
-            raise RuntimeError("a Firestore transaction gave up after its retries") from exc
-        raise
-    return result
+    sleep = sleep or time.sleep
+    uniform = uniform or random.uniform
+    for round_ in range(1, _ROUNDS + 1):
+        try:
+            result: T = firestore.transactional(work)(client.transaction())
+            return result
+        except ValueError as exc:
+            if not str(exc).startswith(_GAVE_UP):
+                raise
+            if round_ == _ROUNDS:
+                raise RuntimeError("a Firestore transaction gave up after its retries") from exc
+            contended: BaseException = exc.__cause__ or exc
+        except Aborted as exc:
+            if round_ == _ROUNDS:
+                raise RuntimeError("a Firestore transaction gave up after its retries") from exc
+            contended = exc
+        _log.warning(
+            "a Firestore transaction met %s in round %d; backing off",
+            type(contended).__name__,
+            round_,
+        )
+        sleep(uniform(0, min(_CAP, _BASE * 2 ** (round_ - 1))))
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 _GAVE_UP = "Failed to commit transaction"  # the start of the library's message
+_ROUNDS = 4  # runs of the library's transaction in all, with a backoff between each two
+_BASE, _CAP = 0.05, 1.0  # seconds: the first backoff's bound, and the largest
 
 
 class Lazy:

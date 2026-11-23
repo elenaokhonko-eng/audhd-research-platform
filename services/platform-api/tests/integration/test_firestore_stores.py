@@ -7,6 +7,7 @@ project id, so tests never see each other's documents.
 import os
 import threading
 from datetime import timedelta
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -162,13 +163,18 @@ def _at_once(*calls: Any) -> list[Any]:
     return results
 
 
+# A race won once proves little: each concurrency test runs its race this many times, each
+# round on a fresh project, and asserts the same things after every round. Six, because a race
+# takes about 1.9 s on the emulator (its lock waits): 5 tests x 6 rounds keeps the file near
+# 60 s on CI. Fifteen rounds (75 races, 143 s) were run once and all passed.
+ROUNDS = 6
+
+
 def test_two_writers_create_one_grant() -> None:
     from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
     from platform_api.entitlements.models import AuditEntry
     from tests.fixtures.people import T0, record
 
-    client = _client()
-    first, second = FirestoreEntitlementStore(client), FirestoreEntitlementStore(client)
     grant = record("ana", "launch_grant")
     audit = AuditEntry(
         at=T0,
@@ -178,12 +184,16 @@ def test_two_writers_create_one_grant() -> None:
         reason="launch_grant",
         evidence={"campaign": "founding"},
     )
-    results = _at_once(
-        lambda: first.create_if_absent(grant, audit), lambda: second.create_if_absent(grant, audit)
-    )
-    assert sorted(results) == [False, True]
-    assert len(list(client.collection("entitlements").stream())) == 1
-    assert len(first.audit_for(grant.entitlement_id)) == 1
+    for round_ in range(ROUNDS):
+        client = _client()
+        first, second = FirestoreEntitlementStore(client), FirestoreEntitlementStore(client)
+        results = _at_once(
+            partial(first.create_if_absent, grant, audit),
+            partial(second.create_if_absent, grant, audit),
+        )
+        assert sorted(results) == [False, True], f"round {round_}"
+        assert len(list(client.collection("entitlements").stream())) == 1, f"round {round_}"
+        assert len(first.audit_for(grant.entitlement_id)) == 1, f"round {round_}"
 
 
 def _firestore_runtime(monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -203,19 +213,24 @@ def test_two_upserts_on_different_channels_both_survive(monkeypatch: pytest.Monk
     from platform_api.entitlements.models import ChannelsPatch
     from tests.fixtures.people import EMAIL
 
-    runtime = _firestore_runtime(monkeypatch)
-    cid = ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch())
-    _at_once(
-        lambda: ent_api.upsert_contact(
-            EMAIL["ana"], ChannelsPatch(platform={"member_uid": "u-ana"})
-        ),
-        lambda: ent_api.upsert_contact(
-            EMAIL["ana"], ChannelsPatch(stripe={"has_substack_subscription": True})
-        ),
-    )
-    channels = runtime.store.get_contact(cid).channels
-    assert channels["platform"]["member_uid"] == "u-ana"
-    assert channels["stripe"] == {"has_substack_subscription": True}
+    for round_ in range(ROUNDS):
+        runtime = _firestore_runtime(monkeypatch)
+        cid = ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch())
+        _at_once(
+            partial(
+                ent_api.upsert_contact,
+                EMAIL["ana"],
+                ChannelsPatch(platform={"member_uid": "u-ana"}),
+            ),
+            partial(
+                ent_api.upsert_contact,
+                EMAIL["ana"],
+                ChannelsPatch(stripe={"has_substack_subscription": True}),
+            ),
+        )
+        channels = runtime.store.get_contact(cid).channels
+        assert channels["platform"]["member_uid"] == "u-ana", f"round {round_}"
+        assert channels["stripe"] == {"has_substack_subscription": True}, f"round {round_}"
 
 
 def test_two_members_claiming_one_contact_leave_one_owner(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -223,19 +238,22 @@ def test_two_members_claiming_one_contact_leave_one_owner(monkeypatch: pytest.Mo
     from platform_api.entitlements.models import ChannelsPatch
     from tests.fixtures.people import EMAIL, record
 
-    runtime = _firestore_runtime(monkeypatch)
-    cid = ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch())
-    runtime.store.write(cid, [record("ana", "stripe_year", contact_id=cid)], [])
-    claimed = _at_once(
-        lambda: ent_api.claim_for_member("u-one", cid),
-        lambda: ent_api.claim_for_member("u-two", cid),
-    )
-    owner = runtime.store.get_contact(cid).channels["platform"]["member_uid"]
-    assert owner in ("u-one", "u-two")
-    assert [len(c) for c in claimed] == ([1, 0] if owner == "u-one" else [0, 1])
-    loser = "u-two" if owner == "u-one" else "u-one"
-    assert runtime.store.entitlements_for_member(loser) == []
-    assert runtime.store.contact_ids_for_member(owner) == [cid]
+    for round_ in range(ROUNDS):
+        runtime = _firestore_runtime(monkeypatch)
+        cid = ent_api.upsert_contact(EMAIL["ana"], ChannelsPatch())
+        runtime.store.write(cid, [record("ana", "stripe_year", contact_id=cid)], [])
+        claimed = _at_once(
+            partial(ent_api.claim_for_member, "u-one", cid),
+            partial(ent_api.claim_for_member, "u-two", cid),
+        )
+        owner = runtime.store.get_contact(cid).channels["platform"]["member_uid"]
+        assert owner in ("u-one", "u-two"), f"round {round_}"
+        assert [len(c) for c in claimed] == ([1, 0] if owner == "u-one" else [0, 1]), (
+            f"round {round_}"
+        )
+        loser = "u-two" if owner == "u-one" else "u-one"
+        assert runtime.store.entitlements_for_member(loser) == [], f"round {round_}"
+        assert runtime.store.contact_ids_for_member(owner) == [cid], f"round {round_}"
 
 
 def test_two_first_sign_ins_create_one_member() -> None:
@@ -243,7 +261,6 @@ def test_two_first_sign_ins_create_one_member() -> None:
     from platform_api.identity.models import Member
     from tests.fixtures.people import T0
 
-    store = FirestoreMemberStore(_client())
     member = Member(
         uid="u-ana",
         primary_contact_id="c1",
@@ -256,30 +273,33 @@ def test_two_first_sign_ins_create_one_member() -> None:
         created_at=T0,
         last_seen_at=T0,
     )
-    results = _at_once(
-        lambda: store.create_if_absent(member),
-        lambda: store.create_if_absent(member.model_copy(update={"joined_via": "members"})),
-    )
-    assert sorted(results) == [False, True] and store.count() == 1
+    for round_ in range(ROUNDS):
+        store = FirestoreMemberStore(_client())
+        results = _at_once(
+            partial(store.create_if_absent, member),
+            partial(store.create_if_absent, member.model_copy(update={"joined_via": "members"})),
+        )
+        assert sorted(results) == [False, True] and store.count() == 1, f"round {round_}"
 
 
 def test_a_claim_and_an_end_at_once_leave_the_record_ended() -> None:
     from platform_api.adapters.firestore_entitlements import FirestoreEntitlementStore
     from tests.fixtures.people import T0, record
 
-    client = _client()
-    claimer, runner = FirestoreEntitlementStore(client), FirestoreEntitlementStore(client)
     live = record("bo", "stripe_year", contact_id="c-bo")
-    runner.write("c-bo", [live], [])
     ended = live.model_copy(update={"status": "expired", "updated_by": "run:r2"})
-    _at_once(
-        lambda: claimer.claim_records("c-bo", "u-bo", T0),
-        lambda: runner.write("c-bo", [ended], []),
-    )
-    # Whichever lands first, the end is kept. (A run's whole-document write may blank a claim
-    # that landed just before it; no access is lost, since unclaimed records still count.)
-    held = runner.get_entitlement(live.entitlement_id)
-    assert held is not None and held.status == "expired"
+    for round_ in range(ROUNDS):
+        client = _client()
+        claimer, runner = FirestoreEntitlementStore(client), FirestoreEntitlementStore(client)
+        runner.write("c-bo", [live], [])
+        _at_once(
+            partial(claimer.claim_records, "c-bo", "u-bo", T0),
+            partial(runner.write, "c-bo", [ended], []),
+        )
+        # Whichever lands first, the end is kept. (A run's whole-document write may blank a
+        # claim that landed just before it; no access is lost, since unclaimed records count.)
+        held = runner.get_entitlement(live.entitlement_id)
+        assert held is not None and held.status == "expired", f"round {round_}"
 
 
 def _expiries(client: Any, collection: str) -> list[Any]:
