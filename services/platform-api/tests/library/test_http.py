@@ -110,6 +110,10 @@ def test_every_publish_call_by_the_owner_is_audited(lib, ent, owner_client):
         "/v1/admin/library/publish", json={"staging_prefix": "batch-1", "dry_run": "true"}
     )
     assert lazy.status_code == 422
+    leaky = owner_client.post(
+        "/v1/admin/library/publish", json={"staging_prefix": "ana@example.org", "dry_run": True}
+    )
+    assert leaky.status_code == 422 and "@" not in leaky.text
     audit = [
         (a.actor, a.subject, a.action, a.evidence["outcome"], a.evidence.get("staging_prefix"))
         for a in ent.store.audit_for("admin")
@@ -117,8 +121,10 @@ def test_every_publish_call_by_the_owner_is_audited(lib, ent, owner_client):
     ]
     assert audit == [
         ("owner:acc-1", "admin", "library.dry_run", "200", "batch-1"),
-        ("owner:acc-1", "admin", "library.published", "422", "items/x"),
+        ("owner:acc-1", "admin", "library.published", "422", None),
         ("owner:acc-1", "admin", "library.dry_run", "422", "batch-1"),
         ("owner:acc-1", "admin", "library.published", "422", None),
         ("owner:acc-1", "admin", "library.published", "422", "batch-1"),
+        ("owner:acc-1", "admin", "library.dry_run", "422", None),
     ]
+    assert "@" not in str([a.evidence for a in ent.store.audit_for("admin")])

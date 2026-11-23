@@ -117,7 +117,9 @@ async def publish_items(request: Request, account: Owner) -> PublishReport:
         if isinstance(raw, dict):
             dry_run = raw.get("dry_run") is True
             named = raw.get("staging_prefix")
-            staging_prefix = named if isinstance(named, str) else None
+            # Audited only when valid: the pattern admits no "@", so no address is stored.
+            if isinstance(named, str) and STAGING_PREFIX.fullmatch(named):
+                staging_prefix = named
         try:
             body = PublishBody.model_validate(raw)
         except ValidationError as invalid:
