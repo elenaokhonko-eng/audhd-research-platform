@@ -1,22 +1,31 @@
 import Link from "next/link";
-import { cardAction, KIND_LABEL } from "@/lib/library";
+import { cardActions, KIND_LABEL } from "@/lib/library";
 import type { ItemCard } from "@/lib/platform-api/types";
 import { DownloadButton } from "./DownloadButton";
 
 export function ItemAction({ item }: { item: ItemCard }) {
-  const action = cardAction(item);
-  if (action.kind === "download") return <DownloadButton sku={item.sku} />;
-  if (action.kind === "buy")
-    return (
-      <>
-        <a aria-describedby={`new-tab-note-${item.sku}`} href={action.url} rel="noreferrer" target="_blank">
-          Buy
-        </a>{" "}
-        <span id={`new-tab-note-${item.sku}`}>Opens in a new tab.</span>
-      </>
-    );
-  if (action.kind === "upgrade") return <Link href="/upgrade">Upgrade to open</Link>;
-  return null;
+  const actions = cardActions(item);
+  return (
+    <>
+      {actions.map((action) => {
+        if (action.kind === "download") return <DownloadButton key="download" sku={item.sku} />;
+        if (action.kind === "buy")
+          return (
+            <span key="buy">
+              <a aria-describedby={`new-tab-note-${item.sku}`} href={action.url} rel="noreferrer" target="_blank">
+                Buy
+              </a>{" "}
+              <span id={`new-tab-note-${item.sku}`}>Opens in a new tab.</span>{" "}
+            </span>
+          );
+        return (
+          <Link href="/upgrade" key="upgrade">
+            Upgrade to open
+          </Link>
+        );
+      })}
+    </>
+  );
 }
 
 export function ItemList({ items }: { items: ItemCard[] }) {

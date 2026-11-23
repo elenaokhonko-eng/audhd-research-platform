@@ -2,6 +2,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { SubscribeView } from "@/app/upgrade/UpgradeViews";
 import { CheckAgain } from "@/app/upgrade/CheckAgain";
 import type { Access, UpgradeOptions } from "@/lib/platform-api/types";
 import { pollUntilPaid, upgradeView } from "@/lib/upgrade";
@@ -99,5 +100,13 @@ describe("CheckAgain", () => {
     await vi.waitFor(() => expect(navigate).toHaveBeenCalledWith("/welcome"));
     expect(navigate).toHaveBeenCalledOnce();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SubscribeView without a link", () => {
+  it("points to the newsletter's page and offers no link", () => {
+    render(<SubscribeView view={{ kind: "subscribe", url: null, offer: null }} />);
+    expect(screen.getByText("Subscribe from the newsletter's page on Substack.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Subscribe on Substack" })).toBeNull();
   });
 });

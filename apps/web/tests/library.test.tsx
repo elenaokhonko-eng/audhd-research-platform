@@ -3,20 +3,44 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DownloadButton } from "@/app/member/components/DownloadButton";
 import { ItemList } from "@/app/member/components/ItemList";
-import { cardAction, loadItem, loadView, refusalText, viewOf } from "@/lib/library";
+import { cardActions, libraryCounts, loadItem, loadView, missingItemText, overviewCounts, refusalText, viewOf } from "@/lib/library";
 import { ApiError } from "@/lib/platform-api/errors";
 import type { ItemCard } from "@/lib/platform-api/types";
 
 const card = (over: Partial<ItemCard>): ItemCard => ({ sku: "sample-map", title: "Sample map", kind: "evidence_map", abstract: "An invented item.",
   version: "1.0", pages: 4, access: "paid", can_open: false, buy_url: null, ...over });
 
-describe("cardAction", () => {
+describe("cardActions", () => {
   it.each([
-    [card({ can_open: true }), { kind: "download" }],
-    [card({ buy_url: "https://example.org/buy" }), { kind: "buy", url: "https://example.org/buy" }],
-    [card({}), { kind: "upgrade" }],
-    [card({ access: "purchase_only" }), { kind: "none" }],
-  ])("%#", (item, action) => expect(cardAction(item)).toEqual(action));
+    [card({ can_open: true, buy_url: "https://example.org/buy" }), [{ kind: "download" }]],
+    [card({ buy_url: "https://example.org/buy" }), [{ kind: "buy", url: "https://example.org/buy" }, { kind: "upgrade" }]],
+    [card({}), [{ kind: "upgrade" }]],
+    [card({ access: "purchase_only", buy_url: "https://example.org/buy" }), [{ kind: "buy", url: "https://example.org/buy" }]],
+    [card({ access: "purchase_only" }), []],
+  ])("%#", (item, actions) => expect(cardActions(item)).toEqual(actions));
+});
+
+describe("libraryCounts", () => {
+  it("counts what exists and what this member can open", () =>
+    expect(libraryCounts([card({ can_open: true }), card({}), card({})])).toEqual({ total: 3, open: 1 }));
+});
+
+describe("overviewCounts", () => {
+  it("returns the counts", async () =>
+    expect(await overviewCounts(async () => "s1", async () => [card({ can_open: true }), card({})])).toEqual({ total: 2, open: 1 }));
+  it.each([["not_found", 404], ["terms_required", 409], ["rate_limited", 429], ["unavailable", 503]] as const)("returns null on %s", async (code, status) =>
+    expect(await overviewCounts(async () => "s1", async () => { throw new ApiError(status, code, "x"); })).toBeNull());
+  it("returns null on any other error", async () =>
+    expect(await overviewCounts(async () => "s1", async () => { throw new Error("boom"); })).toBeNull());
+});
+
+describe("missingItemText", () => {
+  it("says the library opens soon when the list is also not found", async () =>
+    expect(await missingItemText(async () => "s1", async () => { throw new ApiError(404, "not_found", "x"); })).toBe("The library opens soon."));
+  it("says the item is no longer available when the library is on", async () => {
+    expect(await missingItemText(async () => "s1", async () => [])).toBe("This item is no longer available.");
+    expect(await missingItemText(async () => "s1", async () => { throw new ApiError(503, "unavailable", "x"); })).toBe("This item is no longer available.");
+  });
 });
 
 describe("viewOf", () => {
@@ -109,7 +133,9 @@ describe("ItemList and DownloadButton", () => {
     expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Buy" })).toHaveAttribute("href", "https://example.org/buy");
     expect(screen.getByRole("link", { name: "Buy" })).toHaveAttribute("rel", "noreferrer");
-    expect(screen.getByRole("link", { name: "Upgrade to open" })).toHaveAttribute("href", "/upgrade");
+    expect(screen.getAllByRole("link", { name: "Upgrade to open" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "Buy" }).compareDocumentPosition(screen.getAllByRole("link", { name: "Upgrade to open" })[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Upgrade to open" })[0]).toHaveAttribute("href", "/upgrade");
     expect(screen.getByRole("link", { name: "A" })).toHaveAttribute("href", "/member/library/a");
   });
   it("goes to the signed link", async () => {
